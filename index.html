@@ -237,7 +237,10 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
 
-function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';localStorage.setItem('autodial_role',window._role);initSync();if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
+function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';localStorage.setItem('autodial_role',window._role);initSync();
+  // Wait for Babel to compile initApp (defined in JSX section)
+  function tryMount(){if(typeof window.initApp==='function'){if(!window._mounted){window._mounted=true;window.initApp()}else{document.getElementById('root').innerHTML='';window.initApp()}}else{setTimeout(tryMount,50)}}
+  tryMount()}
 
 async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}
   _user=s.data.session.user;
@@ -246,7 +249,7 @@ async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.
   try{var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof=Object.assign({},_prof,p.data);if(!p.data.approved&&!isCreator(_user.email)){authShow('pending');return}}}catch(pe){console.warn('[Auth] Profile fetch failed, using session data')}
   var sr=localStorage.getItem('autodial_role');if(sr){window._role=sr;if(isCreator((_prof?.email||_user?.email||'').toLowerCase()))window._role='main';authGrant()}else{if(isCreator(_user.email)){window._role='main';authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
 
-if(_SB){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(function(){if(!window._mounted){window._mounted=true;initApp()}},100)}
+if(_SB){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};function _tryMount(){if(typeof window.initApp==='function'){if(!window._mounted){window._mounted=true;window.initApp()}}else{setTimeout(_tryMount,50)}}setTimeout(_tryMount,100)}
 
 // Bind auth buttons
 document.addEventListener('DOMContentLoaded',function(){
