@@ -2753,7 +2753,7 @@ function App(){
             </datalist>
           </div>
           <button onClick={()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
-            setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:true,bizName:'',payNow:'',timesheetId:''}}));
+            setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:false,bizName:'',payNow:'',timesheetId:''}}));
             setNewAdminEmail('');toast('Added '+em)}} style={{padding:'0 16px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Add</button>
         </div>
         {Object.entries(adminConfigs).map(([em,ac])=><div key={em} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:14,padding:12,marginBottom:8}}>
