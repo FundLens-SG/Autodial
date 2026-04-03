@@ -807,6 +807,26 @@ const cloudSave=(k,v)=>{const bucket=SYNC_MAP[k];if(bucket&&window.CloudSync._us
 const ST={pending:{c:'var(--text3)',l:'Pending',bg:'rgba(72,79,88,.1)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
 const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?'CB→NP×'+np:'NP×'+np;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
 // ═══ MOBILE LEGENDS RANK SYSTEM (monthly) ═══
+const TIER_RANKS=[
+  {key:'bronze',label:'Bronze',emoji:'🥉',color:'#CD7F32',bg:'linear-gradient(135deg,#8B4513,#CD7F32)',glow:'rgba(205,127,50,.3)'},
+  {key:'silver',label:'Silver',emoji:'🥈',color:'#C0C0C0',bg:'linear-gradient(135deg,#808080,#C0C0C0)',glow:'rgba(192,192,192,.3)'},
+  {key:'gold',label:'Gold',emoji:'🥇',color:'#FFD700',bg:'linear-gradient(135deg,#DAA520,#FFD700)',glow:'rgba(255,215,0,.3)'},
+  {key:'platinum',label:'Platinum',emoji:'💎',color:'#4169E1',bg:'linear-gradient(135deg,#2850C8,#4169E1)',glow:'rgba(65,105,225,.3)'},
+  {key:'platRuby',label:'Platinum Ruby',emoji:'💖',color:'#E91E63',bg:'linear-gradient(135deg,#C2185B,#E91E63)',glow:'rgba(233,30,99,.3)'},
+  {key:'platElite',label:'Platinum Elite',emoji:'👑',color:'#FFD700',bg:'linear-gradient(135deg,#FFC107,#FFD700)',glow:'rgba(255,215,0,.4)'}
+];
+function getTierRank(monthlyAppts,tierMins,enabledTiers){
+  var active=TIER_RANKS.filter(function(t,i){return !enabledTiers||enabledTiers[i]!==false});
+  var mins=(tierMins||[0,30,60,100,150,200]).filter(function(m,i){return !enabledTiers||enabledTiers[i]!==false});
+  var idx=0;for(var i=mins.length-1;i>=0;i--){if(monthlyAppts>=mins[i]){idx=i;break}}
+  return{...active[idx],idx:idx,tierIdx:idx,total:active.length,appts:monthlyAppts,threshold:mins[idx]||0}
+}
+function getNextTierRank(monthlyAppts,tierMins,enabledTiers){
+  var mins=(tierMins||[0,30,60,100,150,200]).filter(function(m,i){return !enabledTiers||enabledTiers[i]!==false});
+  var active=TIER_RANKS.filter(function(t,i){return !enabledTiers||enabledTiers[i]!==false});
+  for(var i=0;i<mins.length;i++){if(monthlyAppts<mins[i])return{...active[i],threshold:mins[i]}}
+  return null
+}
 const ML_RANKS=[
   {key:'warrior',label:'Warrior',starsNeeded:5,cumStars:0,emoji:'⚔️',color:'#A0792C',bg:'linear-gradient(135deg,#8B6914,#A0792C)',glow:'rgba(160,121,44,.3)'},
   {key:'elite',label:'Elite',starsNeeded:5,cumStars:5,emoji:'🛡️',color:'#4169E1',bg:'linear-gradient(135deg,#2850C8,#4169E1)',glow:'rgba(65,105,225,.3)'},
@@ -1819,7 +1839,7 @@ function App(){
 
     {/* Row 2: Rank chip + Mode toggle */}
     <div className="hdr-row2">
-      {isCallMode?<div className="rank-chip" style={{background:rank.color+'18',color:rank.color,border:'1px solid '+rank.color+'30'}}>
+      {isCallMode&&_showRank?<div className="rank-chip" style={{background:rank.color+'18',color:rank.color,border:'1px solid '+rank.color+'30'}}>
         <span style={{fontSize:15}}>{rank.emoji}</span>
         <span>{rank.label}</span>
         <span style={{opacity:.6,fontSize:10,fontWeight:600}}>{monthlyAppts} this month</span>
@@ -1883,7 +1903,7 @@ function App(){
             <span>{rank.emoji} → {nextRank.emoji} {nextRank.label}</span>
             <span style={{color:nextRank.color,fontWeight:700}}>{monthlyAppts+session.sets}/{nextRank.cumStars} ⭐</span>
           </div>
-          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,((monthlyAppts+session.sets)/nextRank.cumStars)*100)+'%',background:'linear-gradient(90deg,'+rank.color+','+nextRank.color+')',transition:'width .5s'}}/></div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,((monthlyAppts+session.sets)/nextRank.cumStars)*100)+'%',background:'linear-gradient(90deg,'+displayRank.color+','+displayNext.color+')',transition:'width .5s'}}/></div>
         </div>}
       </div>}
 
@@ -2040,9 +2060,16 @@ function App(){
     {/* Other tabs render here - keeping compact */}
     {/* ═══ RANK TAB (ML-style monthly) ═══ */}
     {tab==='rank'&&isCallMode&&(()=>{
-      const starsInTier=rank.stars;const starsNeeded=rank.starsNeeded;
-      const progressPct=nextRank?Math.min(100,(starsInTier/starsNeeded)*100):100;
-      const starsToNext=nextRank?(nextRank.cumStars-monthlyAppts):0;
+      // Admin uses pay tier ranks, Main uses ML ranks
+      const isAdminRank=role==='admin';
+      const tierRank=isAdminRank?getTierRank(monthlyAppts,myCfg.tierMins,myCfg.enabledTiers):null;
+      const nextTier=isAdminRank?getNextTierRank(monthlyAppts,myCfg.tierMins,myCfg.enabledTiers):null;
+      const displayRank=isAdminRank?tierRank:rank;
+      const displayNext=isAdminRank?nextTier:nextRank;
+      const starsInTier=isAdminRank?(nextTier?monthlyAppts-(tierRank.threshold||0):monthlyAppts):rank.stars;
+      const starsNeeded=isAdminRank?(nextTier?(nextTier.threshold-tierRank.threshold):10):rank.starsNeeded;
+      const progressPct=displayNext?Math.min(100,(starsInTier/Math.max(1,starsNeeded))*100):100;
+      const starsToNext=isAdminRank?(nextTier?nextTier.threshold-monthlyAppts:0):(nextRank?(nextRank.cumStars-monthlyAppts):0);
       // Monthly stats
       const now=new Date(),y=now.getFullYear(),m=now.getMonth();
       const monthSessions=sessionLog.filter(s=>{const d=new Date(s.startTime);return d.getFullYear()===y&&d.getMonth()===m&&(!isManageMode||(s.email||'')!==myEmail)});
@@ -2051,26 +2078,26 @@ function App(){
       const monthNI=monthSessions.reduce((a,s)=>a+(s.ni||0),0);
       return<div className='content-pad'>
       {/* Rank Card */}
-      <div className="card" style={{textAlign:'center',marginBottom:14,background:rank.bg,borderColor:rank.color+'50',padding:'24px 16px',position:'relative',overflow:'hidden',boxShadow:'0 8px 40px '+rank.glow}}>
+      <div className="card" style={{textAlign:'center',marginBottom:14,background:displayRank.bg,borderColor:displayRank.color+'50',padding:'24px 16px',position:'relative',overflow:'hidden',boxShadow:'0 8px 40px '+displayRank.glow}}>
         <div style={{position:'absolute',inset:0,background:'radial-gradient(circle at 50% 30%,rgba(255,255,255,.08),transparent 70%)',pointerEvents:'none'}}/>
-        <p style={{fontSize:64,margin:'0 0 4px',filter:'drop-shadow(0 4px 12px rgba(0,0,0,.3))',position:'relative'}}>{rank.emoji}</p>
-        <h2 style={{fontSize:26,fontWeight:900,color:'#fff',margin:'0 0 6px',textShadow:'0 2px 10px rgba(0,0,0,.3)',position:'relative',letterSpacing:'-.02em'}}>{rank.label}</h2>
-        <StarRow filled={starsInTier} total={starsNeeded>10?10:starsNeeded} color={rank.color}/>
+        <p style={{fontSize:64,margin:'0 0 4px',filter:'drop-shadow(0 4px 12px rgba(0,0,0,.3))',position:'relative'}}>{displayRank.emoji}</p>
+        <h2 style={{fontSize:26,fontWeight:900,color:'#fff',margin:'0 0 6px',textShadow:'0 2px 10px rgba(0,0,0,.3)',position:'relative',letterSpacing:'-.02em'}}>{displayRank.label}</h2>
+        <StarRow filled={starsInTier} total={starsNeeded>10?10:starsNeeded} color={displayRank.color}/>
         <p style={{margin:'8px 0 0',fontSize:11,color:'rgba(255,255,255,.7)',position:'relative'}}>{monthName} · {monthlyAppts} appointments</p>
       </div>
 
       {/* Progress to next rank */}
-      {nextRank&&<div className="card" style={{marginBottom:14,borderColor:nextRank.color+'30'}}>
+      {displayNext&&<div className="card" style={{marginBottom:14,borderColor:displayNext.color+'30'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-          <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {nextRank.emoji} {nextRank.label}</span>
-          <span className="mono" style={{fontSize:12,fontWeight:700,color:nextRank.color}}>{monthlyAppts}/{nextRank.cumStars}</span>
+          <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {displayNext.emoji} {displayNext.label}</span>
+          <span className="mono" style={{fontSize:12,fontWeight:700,color:displayNext.color}}>{monthlyAppts}/{isAdminRank?displayNext.threshold:nextRank.cumStars}</span>
         </div>
         <div style={{height:10,borderRadius:5,background:'var(--bg)',overflow:'hidden',marginBottom:6}}>
-          <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+rank.color+','+nextRank.color+')',transition:'width .5s',boxShadow:'0 0 12px '+nextRank.color+'40'}}/>
+          <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+displayRank.color+','+displayNext.color+')',transition:'width .5s',boxShadow:'0 0 12px '+displayNext.color+'40'}}/>
         </div>
-        <p style={{margin:0,fontSize:11,color:'var(--text3)',textAlign:'center'}}>⭐ {starsToNext} more to {nextRank.label}</p>
+        <p style={{margin:0,fontSize:11,color:'var(--text3)',textAlign:'center'}}>⭐ {starsToNext} more to {displayNext.label}</p>
       </div>}
-      {!nextRank&&<div className="card" style={{textAlign:'center',padding:16,marginBottom:14,borderColor:'rgba(255,68,68,.3)',background:'linear-gradient(135deg,rgba(255,68,68,.06),transparent)'}}>
+      {!displayNext&&<div className="card" style={{textAlign:'center',padding:16,marginBottom:14,borderColor:'rgba(255,68,68,.3)',background:'linear-gradient(135deg,rgba(255,68,68,.06),transparent)'}}>
         <p style={{margin:0,fontSize:16,fontWeight:900,color:'#FF4444',animation:'firePulse 2s infinite'}}>🔱 MYTHIC ACHIEVED!</p>
         <p style={{margin:0,fontSize:11,color:'var(--text3)',marginTop:4}}>You are legendary this month</p>
       </div>}
@@ -2089,7 +2116,8 @@ function App(){
 
       {/* Rank Roadmap */}
       <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginBottom:8}}>🗺️ Rank Roadmap</h3>
-      {ML_RANKS.map((r,i)=>{const isActive=rank.idx===i,isPast=rank.idx>i;
+      {(isAdminRank?TIER_RANKS.filter((t,i)=>!myCfg.enabledTiers||myCfg.enabledTiers[i]!==false):ML_RANKS).map((r,i)=>{const isActive=isAdminRank?(tierRank.idx===i):(rank.idx===i),isPast=isAdminRank?(tierRank.idx>i):(rank.idx>i);
+        const tierMin=isAdminRank?((myCfg.tierMins||[0,30,60,100,150,200]).filter((m,j)=>!myCfg.enabledTiers||myCfg.enabledTiers[j]!==false)[i]||0):null;
         return<div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:isPast?.5:1}}>
           <div style={{width:42,height:42,borderRadius:12,background:isActive?r.bg:'var(--bg3)',border:'2px solid '+(isActive?r.color:isPast?'var(--green)':'var(--border)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0,boxShadow:isActive?'0 0 16px '+r.glow:'none'}}>
             {isPast?'✓':r.emoji}
@@ -2850,7 +2878,7 @@ function App(){
               </div>})}
           </div>
         </div>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+        {role!=='admin'&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div>
             <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
             <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-convert to NI after this many No Picks</p>
@@ -2860,8 +2888,8 @@ function App(){
             <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:24,textAlign:'center'}}>{cfg.npMax||5}</span>
             <button onClick={()=>setCfg(s=>({...s,npMax:Math.min(20,(s.npMax||5)+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
           </div>
-        </div>
-{role==='main'&&        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+        </div>}
+        {role==='main'&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Cost per lead</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI in Analytics</p></div>
           <div style={{display:'flex',alignItems:'center',gap:4}}>
             <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
