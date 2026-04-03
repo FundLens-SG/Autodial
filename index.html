@@ -33,10 +33,7 @@
 // ═══ PWA: Service Worker + Install Prompt ═══
 if('serviceWorker' in navigator && !location.hostname.includes('claude.ai')){
   window.addEventListener('load',()=>{
-    // Generate minimal SW inline via blob
-    var swCode='self.addEventListener("install",e=>self.skipWaiting());self.addEventListener("activate",e=>clients.claim());self.addEventListener("fetch",e=>{});';
-    var blob=new Blob([swCode],{type:'application/javascript'});
-    navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+    navigator.serviceWorker.register('sw.js').then(r=>console.log('[SW] OK:',r.scope)).catch(()=>{});
   });
 }
 
