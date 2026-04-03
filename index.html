@@ -163,7 +163,8 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
     var firstUser=CREATOR.length===0||CREATOR[0]==='admin';
     if(firstUser){window._setupCreator(e)}
     var cr=isCreator(e);
-    if(r.data?.user){await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr||firstUser,role:window._role,autodial_role:window._role}).catch(function(){});
+    if(r.data?.user){
+      try{await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr||firstUser,role:window._role,autodial_role:window._role})}catch(ue){console.warn('Profile:',ue)}
       if(cr||firstUser){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role};authGrant();return}}
     authMsg('Created! Awaiting approval.','i');setTimeout(function(){authShow('pending')},1500)}catch(err){authMsg(err.message)}}
 
@@ -380,6 +381,11 @@ window.DB={
   async getSharedCalendars(email){if(!_SB)return[];try{var r=await _SB.from('autodial_calendar_shares').select('*').eq('shared_with_email',email);return r.data||[]}catch(e){return[]}},
   async getMyShares(uid){if(!_SB)return[];try{var r=await _SB.from('autodial_calendar_shares').select('*').eq('owner_id',uid);return r.data||[]}catch(e){return[]}},
 
+
+  // Config sync — save/load settings to Supabase for cross-device persistence
+  async saveConfig(userId,key,value){if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:userId+'_cfg_'+key,biz_name:JSON.stringify(value)},{onConflict:'admin_email'})}catch(e){}},
+  async loadConfig(userId,key){if(!_SB)return null;try{var r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',userId+'_cfg_'+key).single();return r.data?JSON.parse(r.data.biz_name):null}catch(e){return null}},
+
   // Realtime subscriptions for live dashboard
   subscribeLive(callback){if(!_SB)return null;
     return _SB.channel('live-dashboard').on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_call_log'},p=>{callback('call',p.new)})
@@ -509,7 +515,7 @@ function App(){
   const[calShares,setCalShares]=useState([]);
   const[calList,setCalList]=useState([]);
   const[callLog,setCallLog]=useState([]);     // Current session replay
-  const[apptDuration,setApptDuration]=useState(load('apptDur')||60); // default mins
+  const[apptDuration,setApptDuration]=useState(()=>{const v=load('apptDur');return(v&&v>=15&&v<=480)?v:60}); // default mins
   const[showWA,setShowWA]=useState(null);     // WhatsApp template modal
   const[newWA,setNewWA]=useState({name:'',template:'',category:'appointment'});
   const[showReplay,setShowReplay]=useState(null); // Session replay modal
