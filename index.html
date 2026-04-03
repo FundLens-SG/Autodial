@@ -488,12 +488,15 @@ window.gTimesheet={_id:null,
     var endRound=round30(endDate);
     // If Appts Bar cleared → use full session hours (start + sessionDur)
     var hoursCredit;
-    if(s.fullSession){
-      hoursCredit=cfg.sessionDur;
-      endRound=new Date(startRound.getTime()+cfg.sessionDur*3600000);
+    if(s.creditHours){
+      hoursCredit=s.creditHours;
+    }else if(s.fullSession){
+      hoursCredit=+cfg.sessionDur||5;
     }else{
       hoursCredit=s.elapsed/3600;
     }
+    // Cap end time to match credited hours
+    endRound=new Date(startRound.getTime()+hoursCredit*3600000);
     var dayName=DAYS[startDate.getDay()];
     var bonusMult=s.bonusMult||1.5;
     var row=[
@@ -506,7 +509,7 @@ window.gTimesheet={_id:null,
       s.tier||'',s.hourlyRate||0,
       s.bonus?bonusMult+'x':'1x',
       '$'+(s.pay||0).toFixed(2),
-      'Unpaid'
+      s.tsNote?'Unpaid — '+s.tsNote:'Unpaid'
     ];
     var tabName=customSheetId?'Sheet1':'Timesheet';
     try{await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(tabName)+'!A:P:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
@@ -1238,6 +1241,8 @@ function App(){
   const[rawSheet,setRawSheet]=useState(null); // {headers,rows} for re-analysis
   const[showColPicker,setShowColPicker]=useState(null); // {headers, onPick} for status column selection
   const[aiAnalyzing,setAiAnalyzing]=useState(false);
+  const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||'');
+  useEffect(()=>{if(geminiKeyVal)cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal})},[geminiKeyVal]);
   // ═══ DESKTOP SCRIPT PANEL ═══
   const[scriptOpen,setScriptOpen]=useState(load('scriptOpen')??true);
   const[scriptContent,setScriptContent]=useState(cfg.callingScript||'');
@@ -1271,6 +1276,8 @@ function App(){
 
   const myEmail=(window._prof?.email||'').toLowerCase();
   const myCfg=role==='admin'&&adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg;
+  // Safe numeric accessor — config values may be '' (empty string) while user is typing
+  const n=(v,def)=>v===''||v===null||v===undefined||isNaN(+v)?def:+v;
 
   useEffect(()=>{save('data',{leads,cfg});cloudSave('data',{leads,cfg})},[leads,cfg]);
   // Auto re-fetch if cached leads are stale (no notes)
@@ -1338,7 +1345,8 @@ function App(){
             const us=cloud.userState;
             if(us.ts&&!totalSets)setTotalSets(us.ts);
             if(us.promo?.length&&!promotionLog.length)setPromotionLog(us.promo);
-            if(us.learned&&!Object.keys(learnedPatterns).length){setLearnedPatterns(us.learned);window._learnedPatterns=us.learned}
+            if(us.learned&&!Object.keys(learnedPatterns).length){setLearnedPatterns(us.learned);window._learnedPatterns=us.learned;
+              if(us.learned._geminiKey&&!geminiKeyVal){setGeminiKeyVal(us.learned._geminiKey);localStorage.setItem('autodial_gemini',us.learned._geminiKey)}}
             if(us.invitees?.length&&!savedInvitees.length)setSavedInvitees(us.invitees);
             if(us.starget)setSessionTarget(us.starget);
             if(us.mainMode)setMainMode(us.mainMode);
@@ -1455,12 +1463,12 @@ function App(){
 
   const dncCheck=useCallback(()=>{
     const h=new Date().getHours();
-    const dncStart=cfg.dncStart??21,dncEnd=cfg.dncEnd??9;
+    const dncStart=n(cfg.dncStart,21),dncEnd=n(cfg.dncEnd,9);
     if(h>=dncStart||h<dncEnd){toast('⛔ DNC hours ('+dncEnd+'am–'+dncStart+'h). Auto-paused.','err');setRunning(false);setPhase('idle');return true}
     return false},[cfg.dncStart,cfg.dncEnd]);
   const dial=useCallback(ph=>{
     // DNC hours check
-    const h=new Date().getHours();const dncStart=cfg.dncStart??21,dncEnd=cfg.dncEnd??9;
+    const h=new Date().getHours();const dncStart=n(cfg.dncStart,21),dncEnd=n(cfg.dncEnd,9);
     if(h>=dncStart||h<dncEnd){toast('⛔ DNC hours active ('+dncEnd+'am–'+dncStart+'h)','err');return}
     if(isMob){window.location.href='tel:'+ph.replace(/[^+\d]/g,'')}
     else{toast('📱 Dial sent → open AutoDial on phone','info')}
@@ -1490,9 +1498,28 @@ function App(){
   const startSession=()=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false});setElapsed(0);toast('Session started! 🔥')};
   const endSession=()=>{if(!session)return;const s={...session,ended:true,endTime:Date.now(),elapsed};
     s.rank=rank.label;s.monthlyAppts=monthlyAppts;
-    const full=s.sets>=myCfg.mThresh,bonus=s.sets>=myCfg.nThresh;
-    s.pay=(full?myCfg.sessionDur:elapsed/3600)*hourlyRate*(bonus?(myCfg.bonusMult||1.5):1);
-    s.fullSession=full;s.bonus=bonus;s.bonusMult=myCfg.bonusMult||1.5;s.hourlyRate=hourlyRate;s.tier=tier.label;
+    const sessionDurH=n(myCfg.sessionDur,5);const mThresh=n(myCfg.mThresh,2);const nThresh=n(myCfg.nThresh,4);
+    const actualH=elapsed/3600;const full=s.sets>=mThresh;const bonus=s.sets>=nThresh;
+    // ═══ SMART PAY LOGIC ═══
+    // If admin didn't meet appts bar AND called less than session duration → pay actual hours only
+    // If admin met appts bar → pay full session duration (reward)
+    // If admin called MORE than session duration (+20min tolerance) → flag for Main override
+    let creditH;let tsNote='';
+    if(full){
+      creditH=sessionDurH; // Met appts bar → full session credit
+    }else{
+      creditH=Math.min(actualH,sessionDurH); // Didn't meet bar → actual hours (capped at session)
+    }
+    // Overtime detection: if called >20min beyond session
+    if(actualH>sessionDurH+0.33){
+      const nextSlot=Math.ceil(actualH);
+      tsNote='⚠ OVERTIME: Called '+actualH.toFixed(1)+'h (session='+sessionDurH+'h). Main: override to '+nextSlot+'h? Adjust appts/bonus bars accordingly.';
+      s.overtime=true;s.overtimeHours=actualH;s.suggestedHours=nextSlot;
+      if(!full)creditH=actualH; // If didn't meet bar but went overtime, still pay actual
+    }
+    s.pay=creditH*hourlyRate*(bonus?n(myCfg.bonusMult,1.5):1);
+    s.creditHours=creditH;s.tsNote=tsNote;
+    s.fullSession=full;s.bonus=bonus;s.bonusMult=n(myCfg.bonusMult,1.5);s.hourlyRate=hourlyRate;s.tier=tier.label;
     setSession(s);setSessionLog(p=>[{...s,callLog:[...callLog]},...p]);setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);
     DB.saveSess(s,_user?.id,myEmail);
     DB.notify(null,'session_end','Session ended: '+myEmail,s.sets+' appts | '+rank.label,{email:myEmail,sets:s.sets,rank:rank.label});
@@ -1504,7 +1531,7 @@ function App(){
 
   const applyOutcome=useCallback((status,extra={})=>{const idx=curIdx;
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
-      if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=(myCfg.npMax||5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
+      if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=n(myCfg.npMax,5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
       else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
       else if(status==='set'){u.status='set';syncSheet(u,'set');
         // Auto-create appointment entry
@@ -1560,7 +1587,7 @@ function App(){
     setShowPostCall(null);
     // Now show next lead preview
     setTimeout(()=>{
-      const nextIdx=getNextDialable(leads,showPostCall?.leadIdx??curIdx,{...filters,npMax:myCfg.npMax||5,queuePriority:cfg.queuePriority});
+      const nextIdx=getNextDialable(leads,showPostCall?.leadIdx??curIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
       if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info');return}
       setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')
     },100)
@@ -1569,7 +1596,7 @@ function App(){
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}},[phase,countdown,running,cur,dial]);
 
-  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,{...filters,npMax:myCfg.npMax||5,queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads','err');return}
+  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads','err');return}
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
   const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
@@ -1706,7 +1733,7 @@ function App(){
           <span className="mono" style={{fontSize:22,fontWeight:800,color:'var(--accent2)'}}>{fmtTime(elapsed)}</span>
           <div style={{display:'flex',alignItems:'center',gap:6}}>
             <span style={{fontSize:14,fontWeight:700,color:rank.color}}>{rank.emoji} {rank.label}</span>
-            <button onClick={endSession} style={{padding:'6px 14px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:11,fontWeight:700}}>End</button>
+            <button onClick={()=>{if(confirm('End session?'))endSession()}} style={{padding:'5px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600}}>End</button>
           </div>
         </div>
         <div style={{display:'flex',gap:6,marginBottom:8}}>
@@ -1818,7 +1845,7 @@ function App(){
           <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>📞 Dial</button>
           <button onClick={()=>{
             // Skip this lead, find the one after
-            const skipIdx=getNextDialable(leads,nextPreviewIdx,{...filters,npMax:myCfg.npMax||5,queuePriority:cfg.queuePriority});
+            const skipIdx=getNextDialable(leads,nextPreviewIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
             if(skipIdx===-1){toast('No more leads','info');setShowNextPreview(false);setRunning(false);setPhase('idle');return}
             setNextPreviewIdx(skipIdx)
           }} style={{flex:1,padding:'12px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Skip →</button>
@@ -1858,9 +1885,19 @@ function App(){
         </div>
       </div>}
 
-      {!showNextPreview&&<button onClick={running?pauseDial:startDial} disabled={!pending.length} style={{width:'100%',padding:'14px',background:running?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:15,fontWeight:800,opacity:pending.length?1:.4,marginBottom:10,boxShadow:running?'0 6px 24px rgba(220,38,38,.3)':'0 6px 24px rgba(99,102,241,.3)'}}>
-        {running?'⏸ Pause':'▶ Start ('+pending.length+')'}
-      </button>}
+      {!showNextPreview&&<div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:10}}>
+        {!running?<button onClick={startDial} disabled={!pending.length} style={{width:'100%',padding:'16px',background:'linear-gradient(135deg,#22c55e,#16a34a)',color:'#fff',fontSize:16,fontWeight:800,borderRadius:14,opacity:pending.length?1:.4,boxShadow:'0 6px 24px rgba(34,197,94,.3)'}}>
+          ▶ Start ({pending.length})
+        </button>
+        :<>
+          <button onClick={pauseDial} style={{width:'100%',padding:'14px',background:'linear-gradient(135deg,#f59e0b,#d97706)',color:'#fff',fontSize:15,fontWeight:800,borderRadius:14,boxShadow:'0 6px 24px rgba(245,158,11,.3)'}}>
+            ⏸ Pause
+          </button>
+          <button onClick={()=>{if(confirm('End this session?'))endSession()}} style={{width:'100%',padding:'16px',background:'linear-gradient(135deg,#dc2626,#b91c1c)',color:'#fff',fontSize:16,fontWeight:800,borderRadius:14,boxShadow:'0 6px 24px rgba(220,38,38,.4)',border:'2px solid rgba(248,81,73,.3)'}}>
+            ⏹ End Session
+          </button>
+        </>}
+      </div>}
       <div style={{height:80}}/>
     </div>}
 
@@ -1983,11 +2020,11 @@ function App(){
                 // This ensures it lands in the current billing cycle even if appt was months ago
                 if(k==='met'){
                   setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:'met',
-                    amount:myCfg.metIncentive||10,
+                    amount:n(myCfg.metIncentive,10),
                     date:now, // CURRENT date = this billing cycle
                     apptOriginalDate:a.createdAt, // when appt was originally set
                     paid:false}]);
-                  toast(`+$${myCfg.metIncentive||10} incentive for meeting ${a.name} (added to current billing cycle)`)}
+                  toast(`+$${n(myCfg.metIncentive,10)} incentive for meeting ${a.name} (added to current billing cycle)`)}
                 if(k==='flykite')toast(a.name+' — fly kite 🪁');
                 // Closed → tip also uses CURRENT date for billing
                 if(k==='closed'){const isMain=role==='main';const promptLabel=isMain?'EFYC (Est. First Year Commission)':'Tip amount';
@@ -2222,6 +2259,8 @@ function App(){
           </div>
           <div style={{display:'flex',gap:5,fontSize:10,color:'var(--text3)',marginTop:4,alignItems:'center'}}>
             <span>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span>NP:{s.np}</span><span>{s.tier}</span>
+            {s.overtime&&<span style={{color:'var(--amber)'}}>⚠OT</span>}
+            {s.creditHours&&<span style={{color:'var(--text3)'}}>{Number(s.creditHours).toFixed(1)}h</span>}
             {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>📹 Replay</button>}
           </div>
           {role==='main'&&!s.paid&&<button onClick={()=>setSessionLog(p=>p.map((x,j)=>j===i?{...x,paid:true,paidDate:new Date().toISOString()}:x))} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
@@ -2567,20 +2606,20 @@ function App(){
             <p style={{margin:0,fontSize:18}}>{t.emoji}</p>
             <p style={{margin:'2px 0',fontSize:10,fontWeight:700,color:enabled?t.color:'var(--text3)'}}>{t.label}</p>
             <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>$/hr</label>
-            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0)v=0;const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=v;setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px',marginBottom:4}} disabled={!enabled}/>
+            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':Math.max(0,+e.target.value);setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px',marginBottom:4}} disabled={!enabled}/>
             <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Min appts</label>
-            <input type="number" min="0" value={(cfg.tierMins||DEF_TIER_MINS)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0)v=0;const m=[...(cfg.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=v;
+            <input type="number" min="0" value={(cfg.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(cfg.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':Math.max(0,+e.target.value);
               setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0||!enabled}/>
           </div>})}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Session(h)</label><input type="number" min="0" value={cfg.sessionDur} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,sessionDur:v||5}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Appts Bar</label><input type="number" min="1" value={cfg.mThresh} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,mThresh:v||2}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Bonus Bar</label><input type="number" min="1" value={cfg.nThresh} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,nThresh:v||4}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult||1.5} onChange={e=>{const v=parseFloat(e.target.value);if(v<1)v=1;setCfg(s=>({...s,bonusMult:v}))}} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Session(h)</label><input type="number" min="0" value={cfg.sessionDur??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,sessionDur:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Appts Bar</label><input type="number" min="1" value={cfg.mThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,mThresh:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Bonus Bar</label><input type="number" min="1" value={cfg.nThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,nThresh:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult??''} onChange={e=>setCfg(s=>({...s,bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}))} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
-          <div><label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" min="0" value={cfg.metIncentive||10} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,metIncentive:v}))}} style={{textAlign:'center',borderColor:'rgba(63,185,80,.3)'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" min="0" value={cfg.metIncentive??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,metIncentive:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center',borderColor:'rgba(63,185,80,.3)'}}/></div>
           <div style={{display:'flex',alignItems:'flex-end'}}><p style={{fontSize:9,color:'var(--text3)',lineHeight:1.4}}>Paid when admin marks a lead as "Met". Uses current date for billing, even if the appointment was set months ago.</p></div>
         </div>
         <div style={{marginTop:10}}>
@@ -2620,22 +2659,22 @@ function App(){
               {TIER_META.map((t,i)=><div key={i} style={{background:'var(--bg)',border:'1px solid '+t.color+'20',borderRadius:8,padding:'4px',textAlign:'center'}}>
                 <span style={{fontSize:12}}>{t.emoji}</span>
                 <p style={{margin:0,fontSize:8,fontWeight:700,color:t.color}}>{t.label}</p>
-                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]||0} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=+e.target.value||0;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} placeholder="$/hr" style={{fontSize:10,textAlign:'center',padding:'4px',marginTop:2}}/>
-                <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]||0} onChange={e=>{const v=+e.target.value;const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=v;
+                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':+e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} placeholder="$/hr" style={{fontSize:10,textAlign:'center',padding:'4px',marginTop:2}}/>
+                <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':+e.target.value;
                   setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} placeholder="Min" style={{fontSize:9,textAlign:'center',padding:'3px',marginTop:2}} disabled={i===0}/>
               </div>)}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
               <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Session(h)</label>
-                <input type="number" value={ac.sessionDur} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sessionDur:+e.target.value||5}}))} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+                <input type="number" value={ac.sessionDur??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sessionDur:e.target.value===''?'':+e.target.value}}))} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
               <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Appts Bar</label>
-                <input type="number" min="1" value={ac.mThresh} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setAdminConfigs(p=>({...p,[em]:{...p[em],mThresh:v||2}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+                <input type="number" min="1" value={ac.mThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setAdminConfigs(p=>({...p,[em]:{...p[em],mThresh:e.target.value===''?'':Math.max(0,+e.target.value)}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
               <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Bonus Bar</label>
-                <input type="number" min="1" value={ac.nThresh} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setAdminConfigs(p=>({...p,[em]:{...p[em],nThresh:v||4}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+                <input type="number" min="1" value={ac.nThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setAdminConfigs(p=>({...p,[em]:{...p[em],nThresh:e.target.value===''?'':Math.max(0,+e.target.value)}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
               <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:2}}>Bonus ×</label>
-                <input type="number" min="1" step="0.1" value={ac.bonusMult||1.5} onChange={e=>{const v=parseFloat(e.target.value);if(v<1)v=1;setAdminConfigs(p=>({...p,[em]:{...p[em],bonusMult:v}}))}} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
+                <input type="number" min="1" step="0.1" value={ac.bonusMult??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
               <div><label style={{fontSize:9,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:2}}>Timesheet Sheet ID</label>
                 <input value={ac.timesheetId||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:e.target.value.trim()}}))} placeholder="Google Sheet ID" style={{fontSize:11,padding:'8px'}}/></div>
             </div>
@@ -2660,9 +2699,9 @@ function App(){
             <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-pause outside allowed hours</p>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:4}}>
-            <input type="number" min="0" max="23" value={cfg.dncEnd??9} onChange={e=>setCfg(s=>({...s,dncEnd:+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
+            <input type="number" min="0" max="23" value={cfg.dncEnd??''} onChange={e=>setCfg(s=>({...s,dncEnd:e.target.value===''?'':+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
             <span style={{fontSize:10,color:'var(--text3)'}}>to</span>
-            <input type="number" min="0" max="23" value={cfg.dncStart??21} onChange={e=>setCfg(s=>({...s,dncStart:+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
+            <input type="number" min="0" max="23" value={cfg.dncStart??''} onChange={e=>setCfg(s=>({...s,dncStart:e.target.value===''?'':+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
           </div>
         </div>
         {/* Queue Priority */}
@@ -2695,7 +2734,7 @@ function App(){
           <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Cost per lead</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI in Analytics</p></div>
           <div style={{display:'flex',alignItems:'center',gap:4}}>
             <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
-            <input type="number" min="0" step="0.01" value={cfg.cpl||0} onChange={e=>setCfg(s=>({...s,cpl:parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
+            <input type="number" min="0" step="0.01" value={cfg.cpl??''} onChange={e=>setCfg(s=>({...s,cpl:e.target.value===''?'':parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
           </div>
         </div>}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
@@ -2727,7 +2766,7 @@ function App(){
 
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'#4285f4'}}>🔵 Gemini AI</h3>
-        <input value={localStorage.getItem('autodial_gemini')||''} onChange={e=>localStorage.setItem('autodial_gemini',e.target.value.trim())} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:8}}/>
+        <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:8}}/>
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
             else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
@@ -2742,7 +2781,7 @@ function App(){
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Calendar Sharing</h3>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Share your Google Calendars with admins so they can see your availability.</p>
         <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
-          <input type="number" min="15" step="15" value={apptDuration} onChange={e=>{const v=+e.target.value;if(v>=15)setApptDuration(v)}} style={{textAlign:'center',width:120}}/></div>
+          <input type="number" min="15" step="15" value={apptDuration} onChange={e=>setApptDuration(e.target.value===''?'':+e.target.value)} style={{textAlign:'center',width:120}}/></div>
         {gOk&&<>
           <button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:600,marginBottom:8}}>Load My Calendars</button>
           {calList.length>0&&<div style={{marginBottom:10}}>
@@ -2846,7 +2885,7 @@ function App(){
         <p style={{margin:'0 0 10px',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>Hint: Receptiveness, industry, tone, objections (questions ≠ objections), and any observations that could help your specialist</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
           <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
-            <input type="number" value={apptDuration} onChange={ev=>{const v=+ev.target.value;if(v>0)setApptDuration(v)}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+            <input type="number" value={apptDuration} onChange={ev=>setApptDuration(ev.target.value===''?'':+ev.target.value)} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
         </div>
         <div style={{display:'flex',gap:8}}>
           <button onClick={async()=>{if(!apptDate||!apptTime)return toast('Set date & time','err');
