@@ -107,8 +107,8 @@ button{font-family:inherit;cursor:pointer;border:none;transition:all .15s}
     <div style="margin-bottom:14px" id="role-section">
       <label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">I am a…</label>
       <div style="display:flex;gap:8px" id="role-pick">
-        <button id="btn-admin" onclick="pickRole('admin')" style="flex:1;padding:12px;border-radius:10px;background:var(--adim);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--accent);cursor:pointer">📞 Admin<br><span style="font-size:10px;color:var(--text3);font-weight:400">Telemarketer</span></button>
-        <button id="btn-main" onclick="pickRole('main')" style="flex:1;padding:12px;border-radius:10px;background:var(--bg3);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--border2);cursor:pointer">👔 Main<br><span style="font-size:10px;color:var(--text3);font-weight:400">Manager</span></button>
+        <button id="btn-admin" onclick="pickRole('admin')" style="flex:1;padding:12px;border-radius:10px;background:var(--adim);color:#f1f5f9;font-size:13px;font-weight:600;border:2px solid var(--accent);cursor:pointer">📞 Admin<br><span style="font-size:10px;font-weight:400;color:var(--accent2)">Telemarketer</span></button>
+        <button id="btn-main" onclick="pickRole('main')" style="flex:1;padding:12px;border-radius:10px;background:transparent;color:var(--text3);font-size:13px;font-weight:600;border:2px solid transparent;cursor:pointer">👔 Main<br><span style="font-size:10px;font-weight:400;color:var(--text3)">Manager</span></button>
       </div>
       <p style="font-size:10px;color:var(--text3);margin-top:6px;text-align:center">All new accounts require Creator approval</p>
     </div>
@@ -136,10 +136,15 @@ function isCreator(email){return CREATOR_EMAILS.indexOf((email||'').toLowerCase(
 function pickRole(r){
   window._role=r;
   var ba=document.getElementById('btn-admin'),bm=document.getElementById('btn-main');
-  ba.style.background=r==='admin'?'var(--adim)':'var(--bg3)';
-  ba.style.borderColor=r==='admin'?'var(--accent)':'var(--border2)';
-  bm.style.background=r==='main'?'var(--adim)':'var(--bg3)';
-  bm.style.borderColor=r==='main'?'var(--accent)':'var(--border2)';
+  // Selected: accent bg + border + white text. Unselected: transparent + dim
+  ba.style.background=r==='admin'?'var(--adim)':'transparent';
+  ba.style.borderColor=r==='admin'?'var(--accent)':'transparent';
+  ba.style.color=r==='admin'?'#f1f5f9':'var(--text3)';
+  ba.querySelector('span').style.color=r==='admin'?'var(--accent2)':'var(--text3)';
+  bm.style.background=r==='main'?'var(--adim)':'transparent';
+  bm.style.borderColor=r==='main'?'var(--accent)':'transparent';
+  bm.style.color=r==='main'?'#f1f5f9':'var(--text3)';
+  bm.querySelector('span').style.color=r==='main'?'var(--accent2)':'var(--text3)';
   authClear();
 }
 
