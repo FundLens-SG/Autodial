@@ -484,6 +484,7 @@ function App(){
   const[countdown,setCountdown]=useState(0);
   const[phase,setPhase]=useState('idle');
   const[tab,setTab]=useState(role==='admin'?'dial':'leads');
+  const[mainMode,setMainMode]=useState(load('mainMode')||'manage'); // 'call' or 'manage' (Main only)
   const[search,setSearch]=useState('');
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);const[cbDate,setCbDate]=useState('');const[cbTime,setCbTime]=useState('');
@@ -544,6 +545,7 @@ function App(){
   useEffect(()=>{save('appts',appointments)},[appointments]);
   useEffect(()=>{save('incv',incentives)},[incentives]);
   useEffect(()=>{save('apptDur',apptDuration)},[apptDuration]);
+  useEffect(()=>{save('mainMode',mainMode)},[mainMode]);
 
   // Initialize new features on mount
   useEffect(()=>{
@@ -695,9 +697,11 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const adminTabs=[['dial','📞 Dial'],['stats','🏆 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['history','📊'],['leads','📋'],['settings','⚙️']];
-  const mainTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊'],['settings','⚙️']];
-  const tabs=role==='admin'?adminTabs:mainTabs;
+  const callTabs=[['dial','📞 Dial'],['stats','🏆 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['history','📊'],['leads','📋'],['settings','⚙️']];
+  const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊'],['settings','⚙️']];
+  const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
+  const isManageMode=role==='main'&&mainMode==='manage';
+  const tabs=isCallMode?callTabs:manageTabs;
 
   // This is getting very long - rendering the core UI
   return(
@@ -713,15 +717,18 @@ function App(){
       <div style={{flex:1}}>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <h1 style={{fontSize:18,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>AutoDial</h1>
-          <span className="pill" style={{background:role==='admin'?'var(--amdim)':'var(--adim)',color:role==='admin'?'var(--amber)':'var(--accent2)',fontSize:9}}>{role.toUpperCase()}</span>
+          <span className="pill" style={{background:isCallMode?'rgba(220,38,38,.15)':'var(--adim)',color:isCallMode?'#ef4444':'var(--accent2)',fontSize:9}}>{role==='admin'?'ADMIN':mainMode==='call'?'CALLING':'MAIN'}</span>
           {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:9}}>● LIVE {fmtTime(elapsed)}</span>}
         </div>
         <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{userName} {isMob?'📱':'💻'}</p>
       </div>
-      {role==='admin'&&<div style={{textAlign:'right'}}>
+      {isCallMode&&<div style={{textAlign:'right'}}>
         <p style={{margin:0,fontSize:12,fontWeight:800,color:tier.color}}>{tier.emoji+' '+tier.label}</p>
         <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>${hourlyRate}/hr</p>
       </div>}
+      {role==='main'&&<button onClick={()=>{const m=mainMode==='call'?'manage':'call';setMainMode(m);setTab(m==='call'?'dial':'live')}} style={{padding:'6px 12px',borderRadius:10,background:mainMode==='call'?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:9,fontWeight:800,letterSpacing:'.03em',boxShadow:mainMode==='call'?'0 2px 12px rgba(220,38,38,.3)':'0 2px 12px rgba(99,102,241,.3)'}}>
+        {mainMode==='call'?'📞 CALLING':'👔 MANAGE'}
+      </button>}
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600}}>Out</button>
     </div>
     <div style={{margin:'0 16px 6px',height:3,borderRadius:2,background:'var(--border)',overflow:'hidden'}}><div style={{height:'100%',width:progress+'%',background:'linear-gradient(90deg,var(--accent),#a78bfa)',transition:'width .4s'}}/></div>
@@ -732,7 +739,7 @@ function App(){
     </div>
 
     {/* Content area - simplified for space */}
-    {tab==='dial'&&role==='admin'&&<div style={{padding:'0 16px'}}>
+    {tab==='dial'&&isCallMode&&<div style={{padding:'0 16px'}}>
       {/* Session bar */}
       {session&&!session.ended&&<div className="card glow-border" style={{marginBottom:10}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
@@ -788,7 +795,7 @@ function App(){
     </div>}
 
     {/* Other tabs render here - keeping compact */}
-    {tab==='stats'&&role==='admin'&&(()=>{
+    {tab==='stats'&&isCallMode&&(()=>{
       const tiers=buildTiers(myCfg.tierMins);
       const nextT=getNextTier(totalSets,myCfg.tierMins);
       const prevMin=tiers[tier.idx]?.min||0;
@@ -937,13 +944,13 @@ function App(){
 
     {tab==='timesheet'&&<div style={{padding:'0 16px',paddingBottom:100}}>
       <div className="card" style={{marginBottom:12,textAlign:'center',background:'linear-gradient(135deg,rgba(240,180,41,.06),rgba(210,153,34,.03))',borderColor:'rgba(240,180,41,.2)'}}>
-        <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em'}}>{role==='admin'?'My Earnings':'Admin Payroll'}</p>
-        <p className="mono" style={{margin:'6px 0 2px',fontSize:36,fontWeight:900,color:unpaidEarnings>0?'var(--gold)':'var(--green)'}}>${role==='admin'?totalEarnings.toFixed(2):Object.values(adminSessions).flat().reduce((a,s)=>a+(s.paid?0:(s.pay||0)),0).toFixed(2)}</p>
+        <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em'}}>{isCallMode?'My Earnings':'Admin Payroll'}</p>
+        <p className="mono" style={{margin:'6px 0 2px',fontSize:36,fontWeight:900,color:unpaidEarnings>0?'var(--gold)':'var(--green)'}}>${isCallMode?totalEarnings.toFixed(2):Object.values(adminSessions).flat().reduce((a,s)=>a+(s.paid?0:(s.pay||0)),0).toFixed(2)}</p>
         <p style={{margin:0,fontSize:11,color:'var(--text3)'}}>{sessionLog.length} sessions · {tier.emoji+' '+tier.label} · ${hourlyRate}/hr</p>
       </div>
 
-      {/* Main: Aggregate admin view */}
-      {role==='main'&&<>
+      {/* Main: Aggregate admin view (Management Mode only) */}
+      {isManageMode&&<>
         <div style={{display:'flex',gap:6,marginBottom:10}}>
           <button onClick={async()=>{
             if(!gOk){toast('Connect Google first','err');return}
@@ -1176,7 +1183,7 @@ function App(){
       <div style={{height:80}}/>
     </div>}
 
-    {tab==='history'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+    {tab==='history'&&isCallMode&&<div style={{padding:'0 16px',paddingBottom:100}}>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" style={{marginBottom:8}}/>
       <button onClick={exportCSV} style={{width:'100%',padding:'10px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginBottom:10}}>⬇ Export CSV</button>
       {leads.filter(l=>l.status!=='pending').filter(l=>!search||l.name.toLowerCase().includes(search.toLowerCase())||l.phone.includes(search)).map(l=>
@@ -1189,7 +1196,7 @@ function App(){
     </div>}
 
     {/* ═══ LIVE DASHBOARD (Main only) ═══ */}
-    {tab==='live'&&role==='main'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+    {tab==='live'&&isManageMode&&<div style={{padding:'0 16px',paddingBottom:100}}>
       <h3 style={{fontSize:16,fontWeight:800,color:'#f1f5f9',marginBottom:12}}>⚡ Live Activity</h3>
       {liveFeed.length===0&&<div className="card" style={{textAlign:'center',padding:24}}>
         <p style={{fontSize:32,marginBottom:8}}>📡</p>
@@ -1279,7 +1286,7 @@ function App(){
         </>})()}
     </div>}
 
-    {tab==='tracking'&&role==='main'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+    {tab==='tracking'&&isManageMode&&<div style={{padding:'0 16px',paddingBottom:100}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:14}}>
         {[['NP','var(--amber)','var(--amdim)','np'],['CB','var(--blue)','var(--bdim)','cb'],['NI','var(--red)','var(--rdim)','ni'],['Set','var(--green)','var(--gdim)','set']].map(([l,c,bg,k])=>
           <div key={k} style={{textAlign:'center',padding:'10px 0',borderRadius:12,background:bg}}>
