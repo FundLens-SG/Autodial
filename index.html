@@ -234,11 +234,11 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
 
-function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;localStorage.setItem('autodial_role',window._role);initSync();if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
+function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';localStorage.setItem('autodial_role',window._role);initSync();if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
 
 async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}
   _user=s.data.session.user;var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data)_prof=p.data;
-  var sr=localStorage.getItem('autodial_role');if(sr){window._role=sr;authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}catch(e){document.getElementById('auth-gate').style.display='flex'}}
+  var sr=localStorage.getItem('autodial_role');if(sr){window._role=sr;if(isCreator((_prof?.email||_user?.email||'').toLowerCase()))window._role='main';authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}catch(e){document.getElementById('auth-gate').style.display='flex'}}
 
 if(_SB)authCheck();else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(function(){if(!window._mounted){window._mounted=true;initApp()}},100)}
 
@@ -616,11 +616,14 @@ window.DB={
 
   // Realtime subscriptions for live dashboard
   subscribeLive(callback){if(!_SB)return null;
+    try{
+    // Remove existing channel if any to prevent duplicate subscribe error
+    try{_SB.removeChannel(_SB.channel('live-dashboard'))}catch(e){}
     return _SB.channel('live-dashboard').on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_call_log'},p=>{callback('call',p.new)})
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_appointments'},p=>{callback('appt',p.new)})
       .on('postgres_changes',{event:'*',schema:'public',table:'autodial_sessions'},p=>{callback('session',p.new)})
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_notifications'},p=>{callback('notif',p.new)})
-      .subscribe()}
+      .subscribe()}catch(e){console.warn('[Realtime]',e.message);return null}}
 };
 
 // ══════ WHATSAPP DEEP LINK ══════
@@ -1445,7 +1448,7 @@ function App(){
     if(_user?.id)DB.getNotifs(_user.id).then(setNotifications);
     // Main: subscribe to live feed
     if(role==='main'){
-      const sub=DB.subscribeLive((type,data)=>{
+      let sub=null;try{sub=DB.subscribeLive((type,data)=>{
         setLiveFeed(p=>[{type,data,ts:Date.now()},...p].slice(0,50));
         // Also update CB queue and notifications
         if(type==='appt')DB.getCBQueue().then(setCbQueue);
@@ -1453,7 +1456,8 @@ function App(){
       // Load calendars for sharing
       if(gOk)gCalShare.listCalendars().then(setCalList);
       DB.getMyShares(_user?.id).then(setCalShares);
-      return()=>{if(sub)_SB.removeChannel(sub)};
+      }catch(e){console.warn('[LiveSub]',e.message)}
+      return()=>{try{if(sub)_SB.removeChannel(sub)}catch(e){}};
     }
     // Admin: load shared calendars
     if(role==='admin')DB.getSharedCalendars(myEmail).then(setCalShares);
@@ -1496,6 +1500,7 @@ function App(){
   const unpaidEarnings=sessionLog.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0)+incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const unpaidIncentiveTotal=incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const isCreatorUser=isCreator(myEmail);
+  useEffect(()=>{if(isCreatorUser)console.log('[AutoDial] Creator detected:',myEmail,'badge should show')},[]);
   const fmtTime=s=>`${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
   const dncCheck=useCallback(()=>{
