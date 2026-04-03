@@ -428,13 +428,28 @@ const save=(k,v)=>{try{localStorage.setItem(LS(k),JSON.stringify(v))}catch{}};
 // Status config
 const ST={pending:{c:'var(--text3)',l:'Pending',bg:'rgba(72,79,88,.1)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
 const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?'CB→NP×'+np:'NP×'+np;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
+// ═══ MOBILE LEGENDS RANK SYSTEM (monthly) ═══
+const ML_RANKS=[
+  {key:'warrior',label:'Warrior',starsNeeded:5,cumStars:0,emoji:'⚔️',color:'#A0792C',bg:'linear-gradient(135deg,#8B6914,#A0792C)',glow:'rgba(160,121,44,.3)'},
+  {key:'elite',label:'Elite',starsNeeded:5,cumStars:5,emoji:'🛡️',color:'#4169E1',bg:'linear-gradient(135deg,#2850C8,#4169E1)',glow:'rgba(65,105,225,.3)'},
+  {key:'master',label:'Master',starsNeeded:5,cumStars:10,emoji:'⚜️',color:'#9B59B6',bg:'linear-gradient(135deg,#7D3C98,#9B59B6)',glow:'rgba(155,89,182,.3)'},
+  {key:'grandmaster',label:'Grandmaster',starsNeeded:10,cumStars:15,emoji:'💎',color:'#E67E22',bg:'linear-gradient(135deg,#D35400,#E67E22)',glow:'rgba(230,126,34,.3)'},
+  {key:'epic',label:'Epic',starsNeeded:10,cumStars:25,emoji:'🌟',color:'#E91E63',bg:'linear-gradient(135deg,#C2185B,#E91E63)',glow:'rgba(233,30,99,.3)'},
+  {key:'legend',label:'Legend',starsNeeded:15,cumStars:35,emoji:'👑',color:'#FFD700',bg:'linear-gradient(135deg,#FFC107,#FFD700)',glow:'rgba(255,215,0,.4)'},
+  {key:'mythic',label:'Mythic',starsNeeded:999,cumStars:50,emoji:'🔱',color:'#FF4444',bg:'linear-gradient(135deg,#D50000,#FF4444)',glow:'rgba(255,68,68,.4)'}
+];
+function getRank(monthlyAppts){for(let i=ML_RANKS.length-1;i>=0;i--)if(monthlyAppts>=ML_RANKS[i].cumStars){const stars=monthlyAppts-ML_RANKS[i].cumStars;return{...ML_RANKS[i],idx:i,stars:Math.min(stars,ML_RANKS[i].starsNeeded),total:monthlyAppts}}return{...ML_RANKS[0],idx:0,stars:monthlyAppts,total:monthlyAppts}}
+function getNextRank(monthlyAppts){for(let i=0;i<ML_RANKS.length;i++)if(monthlyAppts<ML_RANKS[i].cumStars)return{...ML_RANKS[i],idx:i};return null}
+function getMonthlyAppts(appointments,email){const now=new Date(),y=now.getFullYear(),m=now.getMonth();return appointments.filter(a=>{const d=new Date(a.createdAt);return d.getFullYear()===y&&d.getMonth()===m&&(!email||(a.admin||'').toLowerCase()===email.toLowerCase())}).length}
+const StarRow=({filled,total,color})=><div style={{display:'flex',gap:3,justifyContent:'center'}}>{Array.from({length:Math.min(total,10)}).map((_,i)=><span key={i} style={{fontSize:16,filter:i<filled?'none':'grayscale(1) opacity(.3)',transition:'all .3s'}}>{i<filled?'⭐':'☆'}</span>)}</div>;
+// Keep old tier functions for manage mode pay config compatibility
 const TIER_META=[
   {key:'bronze',label:'Bronze',emoji:'🥉',color:'#cd7f32'},
   {key:'silver',label:'Silver',emoji:'🥈',color:'#c0c0c0'},
   {key:'gold',label:'Gold',emoji:'🥇',color:'#f0b429'},
   {key:'plat',label:'Platinum',emoji:'💎',color:'#00d4ff'},
   {key:'ruby',label:'Platinum Ruby',emoji:'❤️‍🔥',color:'#e11d48'},
-  {key:'elite',label:'Platinum Elite',emoji:'👑',color:'#a855f7'}
+  {key:'elite2',label:'Platinum Elite',emoji:'👑',color:'#a855f7'}
 ];
 const DEF_TIER_MINS=[0,30,60,100,150,200];
 const DEF_PAY_RATES=[8,10,12,16,20,25];
@@ -488,7 +503,7 @@ function App(){
   const[search,setSearch]=useState('');
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);const[cbDate,setCbDate]=useState('');const[cbTime,setCbTime]=useState('');
-  const[showAppt,setShowAppt]=useState(false);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
+  const[showAppt,setShowAppt]=useState(false);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);const[newF,setNewF]=useState({name:'',phone:''});
   const[showFilters,setShowFilters]=useState(false);
@@ -549,6 +564,49 @@ function App(){
 
   // Initialize new features on mount
   useEffect(()=>{
+    // ═══ SUPABASE HARD SYNC — pull persistent data on startup ═══
+    (async()=>{
+      try{
+        // Sync session log from Supabase (merge with localStorage, dedup by startTime)
+        const dbSessions=await DB.getSessions(myEmail);
+        if(dbSessions.length){
+          setSessionLog(prev=>{
+            const existing=new Set(prev.map(s=>s.startTime));
+            const merged=[...prev];
+            dbSessions.forEach(s=>{
+              const st=new Date(s.start_time).getTime();
+              if(!existing.has(st))merged.push({
+                startTime:st,endTime:s.end_time?new Date(s.end_time).getTime():null,
+                elapsed:s.elapsed||0,dialed:s.dialed||0,np:s.np||0,cb:s.cb||0,ni:s.ni||0,sets:s.sets||0,
+                tier:s.tier||'',hourlyRate:s.hourly_rate||0,bonusMult:s.bonus_mult||1.5,
+                fullSession:!!s.is_full_session,bonus:!!s.is_bonus,pay:s.pay||0,
+                paid:!!s.paid,paidDate:s.paid_date||null,ended:true
+              })});
+            merged.sort((a,b)=>(b.startTime||0)-(a.startTime||0));
+            return merged});
+        }
+        // Sync appointments from Supabase (merge, dedup by phone+createdAt)
+        const dbAppts=role==='main'?await DB.getAllAppts():await DB.getAppts(myEmail);
+        if(dbAppts.length){
+          setAppointments(prev=>{
+            const existing=new Set(prev.map(a=>(a.phone||'')+'_'+(a.createdAt||'')));
+            const merged=[...prev];
+            dbAppts.forEach(a=>{
+              const key=(a.lead_phone||'')+'_'+(a.created_at||'');
+              if(!existing.has(key))merged.push({
+                id:a.id||Date.now()+Math.random(),name:a.lead_name||'',phone:a.lead_phone||'',
+                apptDate:a.appt_date||'',apptTime:a.appt_time||'',
+                calEventId:a.calendar_event_id||'',admin:a.admin_email||'',
+                followUp:a.follow_up||'pending',tip:a.tip||0,
+                createdAt:a.created_at||new Date().toISOString(),
+                followUpDate:a.follow_up_date||null,
+                location:'',industry:'',remarks:'',gender:'',age:''
+              })});
+            return merged});
+        }
+      }catch(e){console.warn('[HardSync]',e.message)}
+    })();
+
     // Load CB queue
     DB.getCBQueue(role==='admin'?myEmail:null).then(setCbQueue);
     // Load WA templates
@@ -595,6 +653,15 @@ function App(){
   const progress=leads.length?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
   const tier=getTier(totalSets,myCfg.tierMins);const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
   const userName=window._prof?.full_name||myEmail||'User';
+  // ═══ ML RANK (monthly) ═══
+  const monthlyAppts=getMonthlyAppts(appointments,role==='admin'?myEmail:null);
+  const rank=getRank(monthlyAppts);
+  const nextRank=getNextRank(monthlyAppts);
+  const monthName=new Date().toLocaleDateString('en-SG',{month:'long',year:'numeric'});
+  // Next lead preview
+  const[showNextPreview,setShowNextPreview]=useState(false);
+  const[nextPreviewIdx,setNextPreviewIdx]=useState(-1);
+  const nextPreviewLead=nextPreviewIdx>=0&&nextPreviewIdx<leads.length?leads[nextPreviewIdx]:null;
   const totalEarnings=sessionLog.reduce((a,s)=>a+(s.pay||0),0)+incentives.reduce((a,x)=>a+(x.amount||0),0);
   const unpaidEarnings=sessionLog.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0)+incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const unpaidIncentiveTotal=incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
@@ -608,27 +675,17 @@ function App(){
 
   const startSession=()=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false});setElapsed(0);toast('Session started! 🔥')};
   const endSession=()=>{if(!session)return;const s={...session,ended:true,endTime:Date.now(),elapsed};
+    s.rank=rank.label;s.monthlyAppts=monthlyAppts;
     const full=s.sets>=myCfg.mThresh,bonus=s.sets>=myCfg.nThresh;
-    // PROSPECTIVE PAY: hourlyRate is the CURRENT tier rate at this moment.
-    // This rate is LOCKED into this session. Previous sessions keep their own stored rates.
-    // If admin got promoted today, only today's session (and future) uses the new rate.
-    // Sessions from before the promotion are unaffected — they already have their old rate stored.
     s.pay=(full?myCfg.sessionDur:elapsed/3600)*hourlyRate*(bonus?(myCfg.bonusMult||1.5):1);
-    s.fullSession=full;s.bonus=bonus;s.bonusMult=myCfg.bonusMult||1.5;
-    s.hourlyRate=hourlyRate; // locked at session end — never retroactively changed
-    s.tier=tier.label;s.promotionDate=promotionLog[0]?.date||null;
-    setSession(s);setSessionLog(p=>[{...s,callLog:[...callLog]},...p]);setRunning(false);setPhase('idle');clearTimeout(cdRef.current);
-    // Save to Supabase DB (persistent sync)
+    s.fullSession=full;s.bonus=bonus;s.bonusMult=myCfg.bonusMult||1.5;s.hourlyRate=hourlyRate;s.tier=tier.label;
+    setSession(s);setSessionLog(p=>[{...s,callLog:[...callLog]},...p]);setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);
     DB.saveSess(s,_user?.id,myEmail);
-    // Notify Main
-    DB.notify(null,'session_end',`⏱ ${myEmail} ended session`,`${s.sets} appts · $${(s.pay||0).toFixed(2)}`,{email:myEmail,sets:s.sets,pay:s.pay});
-    setCallLog([]); // reset for next session
-    syncSend('end',{session:s});
-    // Broadcast to Main for aggregate view
-    syncSend('adminSession',{session:s,email:myEmail});
-    if(localStorage.getItem('ad_gt')){
-      const tsId=adminConfigs[myEmail]?.timesheetId||'';
+    DB.notify(null,'session_end','Session ended: '+myEmail,s.sets+' appts | '+rank.label,{email:myEmail,sets:s.sets,rank:rank.label});
+    setCallLog([]);syncSend('end',{session:s});syncSend('adminSession',{session:s,email:myEmail});
+    if(localStorage.getItem('ad_gt')){const tsId=adminConfigs[myEmail]?.timesheetId||'';
       gTimesheet.append(s,userName,myCfg,tsId||undefined).catch(()=>{})}};
+
 
   const applyOutcome=useCallback((status,extra={})=>{const idx=curIdx;
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
@@ -648,38 +705,41 @@ function App(){
     if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};
       if(status==='np')s.np++;if(status==='ni')s.ni++;if(status==='cb')s.cb++;
       if(status==='set'){s.sets++;const nt=totalSets+1;setTotalSets(nt);
-        if(s.sets===myCfg.mThresh){setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'APPTS BAR CLEARED!',sub:`${myCfg.mThresh} appointments!\nFull ${myCfg.sessionDur}hr session logged.\nPush for ${myCfg.nThresh} to unlock ${myCfg.bonusMult||1.5}× BONUS!`,emoji:'🏆'})}
-        else if(s.sets===myCfg.nThresh){setConfetti(true);setTimeout(()=>setConfetti(false),4000);setMilestone({title:'BONUS BAR CLEARED!',sub:`${myCfg.nThresh} appointments!\nYour entire session pay is ${myCfg.bonusMult||1.5}× multiplied!`,emoji:'🔥'})}
-        // Tier promotion check — log the date so pay rate only applies FROM this date forward
-        const tiers=buildTiers(myCfg.tierMins);const matchedTier=tiers.find(t=>t.min===nt&&t.min>0);
-        if(matchedTier){
-          const oldTier=getTier(nt-1,myCfg.tierMins);const newTier=getTier(nt,myCfg.tierMins);
-          const promoDate=new Date().toISOString();
-          // Log promotion: from this date forward, the new rate applies. Previous sessions keep their stored rate.
-          setPromotionLog(p=>[{
-            date:promoDate,
-            fromTier:oldTier.label,toTier:newTier.label,
-            fromRate:myCfg.payRates[oldTier.idx]||0,
-            newRate:myCfg.payRates[newTier.idx]||0,
-            atSets:nt
-          },...p]);
-          setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION! 🚀',sub:`${newTier.label}\n$${myCfg.payRates[oldTier.idx]}/hr → $${myCfg.payRates[newTier.idx]}/hr\n\nNew rate applies from today onwards.\nPrevious sessions keep their original rate.`,emoji:'⭐'})},1500)}
+        // ═══ RANK-UP CHECK (ML-style) ═══
+        const newMonthly=monthlyAppts+1; // +1 for this new set
+        const oldRank=getRank(monthlyAppts);const newRank=getRank(newMonthly);
+        if(newRank.idx>oldRank.idx){
+          // RANK UP! 🎉
+          setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),4000);
+            setMilestone({title:'RANK UP!',sub:`${oldRank.label} → ${newRank.label}\n\n${newMonthly} appointments this month!\nKeep pushing to ${getNextRank(newMonthly)?.label||'glory'}!`,emoji:newRank.emoji})},300)}
+        else if(s.sets===3){setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'ON FIRE! 🔥',sub:`${s.sets} appointments this session!\nYou're crushing it!`,emoji:'🔥'})}
+        else if(s.sets===5){setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'UNSTOPPABLE!',sub:`${s.sets} appointments in ONE session!\nLegendary performance!`,emoji:'⚡'})}
       }
-      return s})},[curIdx,session,totalSets,myCfg,syncSheet]);
+      return s})},[curIdx,session,totalSets,myCfg,syncSheet,monthlyAppts]);
 
   const moveNext=useCallback(()=>{setLeads(p=>{const n=getNextDialable(p,curIdx,filters);
     if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return p}setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);return p})},[curIdx,cfg.delay,filters]);
 
+  const proceedToLead=useCallback((idx)=>{
+    if(idx===-1||idx>=leads.length){setRunning(false);setPhase('idle');setCurIdx(-1);setShowNextPreview(false);return}
+    setCurIdx(idx);setPhase('waiting');setCountdown(cfg.delay);setShowNextPreview(false)},[cfg.delay,leads]);
+
   const handleOutcome=useCallback((status,extra={})=>{
-    if(status==='set'){applyOutcome(status,extra);setShowAppt(true);setTimeout(moveNext,150);return}
-    applyOutcome(status,extra);setTimeout(moveNext,150)},[applyOutcome,moveNext]);
+    if(status==='set'){const lead=curIdx>=0&&curIdx<leads.length?{...leads[curIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
+    else{applyOutcome(status,extra)}
+    // Show next lead preview after brief delay
+    setTimeout(()=>{
+      const nextIdx=getNextDialable(leads,curIdx,filters);
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done! 🎉','info');return}
+      setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')
+    },200)},[applyOutcome,curIdx,leads,filters]);
 
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}},[phase,countdown,running,cur,dial]);
 
   const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,filters);if(f===-1){toast('No eligible leads','err');return}
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
-  const pauseDial=()=>{setRunning(false);setPhase('idle');clearTimeout(cdRef.current);syncSend('pause',{})};
+  const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
   const connectG=()=>gConnect(()=>setGOk(true));
   const fetchTabs=async id=>{const sid=id||cfg.sheetId;const m=sid?.match(/\/d\/([a-zA-Z0-9_-]+)/)||sid?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m)return toast('Bad URL','err');setCfg(s=>({...s,sheetId:m[1]}));setSLoad(true);try{setSTabs(await gSheets.meta(m[1]))}catch(e){toast(e.message,'err')}setSLoad(false)};
@@ -697,7 +757,7 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const callTabs=[['dial','📞 Dial'],['stats','🏆 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['history','📊'],['leads','📋'],['settings','⚙️']];
+  const callTabs=[['dial','📞 Dial'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['history','📊'],['leads','📋'],['settings','⚙️']];
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊'],['settings','⚙️']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
@@ -723,11 +783,12 @@ function App(){
         <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{userName} {isMob?'📱':'💻'}</p>
       </div>
       {isCallMode&&<div style={{textAlign:'right'}}>
-        <p style={{margin:0,fontSize:12,fontWeight:800,color:tier.color}}>{tier.emoji+' '+tier.label}</p>
-        <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>${hourlyRate}/hr</p>
+        <p style={{margin:0,fontSize:12,fontWeight:800,color:rank.color}}>{rank.emoji+' '+rank.label}</p>
+        <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{monthlyAppts} this month</p>
       </div>}
-      {role==='main'&&<button onClick={()=>{const m=mainMode==='call'?'manage':'call';setMainMode(m);setTab(m==='call'?'dial':'live')}} style={{padding:'6px 12px',borderRadius:10,background:mainMode==='call'?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:9,fontWeight:800,letterSpacing:'.03em',boxShadow:mainMode==='call'?'0 2px 12px rgba(220,38,38,.3)':'0 2px 12px rgba(99,102,241,.3)'}}>
-        {mainMode==='call'?'📞 CALLING':'👔 MANAGE'}
+      {role==='main'&&<button onClick={()=>{const m=mainMode==='call'?'manage':'call';setMainMode(m);setTab(m==='call'?'dial':'live')}} style={{padding:'8px 14px',borderRadius:12,background:mainMode==='call'?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:10,fontWeight:800,letterSpacing:'.02em',boxShadow:mainMode==='call'?'0 2px 12px rgba(220,38,38,.3)':'0 2px 12px rgba(99,102,241,.3)',display:'flex',alignItems:'center',gap:5}}>
+        {mainMode==='call'?<><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72"/></svg>CALL</>
+        :<><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>MANAGE</>}
       </button>}
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600}}>Out</button>
     </div>
@@ -744,113 +805,144 @@ function App(){
       {session&&!session.ended&&<div className="card glow-border" style={{marginBottom:10}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <span className="mono" style={{fontSize:22,fontWeight:800,color:'var(--accent2)'}}>{fmtTime(elapsed)}</span>
-          <button onClick={endSession} style={{padding:'6px 14px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:11,fontWeight:700}}>End Session</button>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:14,fontWeight:700,color:rank.color}}>{rank.emoji} {rank.label}</span>
+            <button onClick={endSession} style={{padding:'6px 14px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:11,fontWeight:700}}>End</button>
+          </div>
         </div>
         <div style={{display:'flex',gap:6,marginBottom:8}}>
           {[['D',session.dialed,'var(--text2)'],['Set',session.sets,'var(--green)'],['NP',session.np,'var(--amber)'],['CB',session.cb,'var(--blue)'],['NI',session.ni,'var(--red)']].map(([l,v,c])=>
             <div key={l} style={{flex:1,textAlign:'center',padding:'6px 0',borderRadius:8,background:'var(--bg)'}}>
               <p style={{margin:0,fontSize:16,fontWeight:800,color:c}}>{v}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{l}</p></div>)}
         </div>
-        <div style={{marginBottom:4}}>
+        {/* Rank progress */}
+        {nextRank&&<div>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
-            <span>Appts bar: {session.sets}/{myCfg.mThresh}</span>
-            {session.sets>=myCfg.mThresh&&<span style={{color:'var(--green)',fontWeight:700}}>✓ CLEARED</span>}
+            <span>{rank.emoji} → {nextRank.emoji} {nextRank.label}</span>
+            <span style={{color:nextRank.color,fontWeight:700}}>{monthlyAppts+session.sets}/{nextRank.cumStars} ⭐</span>
           </div>
-          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,(session.sets/myCfg.mThresh)*100)+'%',background:session.sets>=myCfg.mThresh?'var(--green)':'var(--accent)',transition:'width .5s'}}/></div>
-        </div>
-        <div>
-          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
-            <span>Bonus bar: {session.sets}/{myCfg.nThresh}</span>
-            {session.sets>=myCfg.nThresh&&<span style={{color:'var(--gold)',fontWeight:700,animation:'firePulse 2s infinite'}}>{'🔥 '+(myCfg.bonusMult||1.5)+'×'}</span>}
-          </div>
-          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,(session.sets/myCfg.nThresh)*100)+'%',background:session.sets>=myCfg.nThresh?'var(--gold)':'var(--amber)',transition:'width .5s'}}/></div>
-        </div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,((monthlyAppts+session.sets)/nextRank.cumStars)*100)+'%',background:'linear-gradient(90deg,'+rank.color+','+nextRank.color+')',transition:'width .5s'}}/></div>
+        </div>}
       </div>}
 
       {/* Call card */}
       <div className="card" style={{textAlign:'center',marginBottom:10,minHeight:140,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
-        {cur&&running?(
+        {cur&&running&&phase!=='preview'?(
           <>
             {phase==='calling'?<div style={{width:64,height:64,borderRadius:'50%',border:'2px solid rgba(99,102,241,.4)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12,animation:'pulse 2s infinite'}}><div style={{width:46,height:46,borderRadius:'50%',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:19,fontWeight:800,color:'#fff'}}>{cur.name.charAt(0)}</div></div>
             :<div style={{width:64,height:64,borderRadius:'50%',background:'var(--bg3)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12,fontSize:24,fontWeight:800,color:'var(--accent2)'}}>{countdown}</div>}
             <p style={{margin:0,fontSize:10,fontWeight:800,textTransform:'uppercase',letterSpacing:'.15em',color:'var(--accent)'}}>{phase==='calling'?'Calling':'Next in'}</p>
             <h2 style={{margin:'2px 0',fontSize:20,fontWeight:800,color:'#f1f5f9'}}>{cur.name}</h2>
             <p className="mono" style={{margin:0,fontSize:14,color:'var(--text2)'}}>{cur.phone}</p>
+            {cur.age&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{cur.age} {cur.race?'· '+cur.race:''}</p>}
             {cur.npCount>0&&<p style={{margin:'4px 0 0',fontSize:10,color:'var(--amber)'}}>NP ×{cur.npCount}</p>}
             {phase==='calling'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,marginTop:14,width:'100%'}}>
               <button onClick={()=>handleOutcome('np')} style={{padding:'12px 0',background:'var(--amdim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP</button>
               <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
               <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
               <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set ✓</button>
-              <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip →</button>
             </div>}
           </>
-        ):(<p style={{color:'var(--text3)',fontSize:13}}>{pending.length?'Ready':'Upload leads'}</p>)}
+        ):(!showNextPreview&&<p style={{color:'var(--text3)',fontSize:13}}>{pending.length?'Ready':'Upload leads'}</p>)}
       </div>
 
-      <button onClick={running?pauseDial:startDial} disabled={!pending.length} style={{width:'100%',padding:'14px',background:running?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:15,fontWeight:800,opacity:pending.length?1:.4,marginBottom:10,boxShadow:running?'0 6px 24px rgba(220,38,38,.3)':'0 6px 24px rgba(99,102,241,.3)'}}>
+      {/* ═══ NEXT LEAD PREVIEW ═══ */}
+      {showNextPreview&&nextPreviewLead&&running&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.3)',background:'linear-gradient(135deg,rgba(99,102,241,.04),transparent)'}}>
+        <p style={{margin:'0 0 8px',fontSize:10,fontWeight:800,textTransform:'uppercase',letterSpacing:'.15em',color:'var(--accent)'}}>⏭ Next Lead</p>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+          <div style={{width:48,height:48,borderRadius:14,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:800,color:'#fff',flexShrink:0}}>{nextPreviewLead.name.charAt(0)}</div>
+          <div style={{flex:1}}>
+            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'#f1f5f9'}}>{nextPreviewLead.name}</h3>
+            <p className="mono" style={{margin:'2px 0 0',fontSize:13,color:'var(--text2)'}}>{nextPreviewLead.phone}</p>
+            <div style={{display:'flex',gap:6,marginTop:4}}>
+              {nextPreviewLead.age&&<span style={{fontSize:10,color:'var(--text3)'}}>{nextPreviewLead.age}</span>}
+              {nextPreviewLead.race&&<span style={{fontSize:10,color:'var(--text3)'}}>· {nextPreviewLead.race}</span>}
+              {nextPreviewLead.gender&&<span style={{fontSize:10,color:'var(--text3)'}}>· {nextPreviewLead.gender}</span>}
+              <Badge s={nextPreviewLead.status} np={nextPreviewLead.npCount} cbh={nextPreviewLead.cbHistory}/>
+            </div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>📞 Dial</button>
+          <button onClick={()=>{
+            // Skip this lead, find the one after
+            const skipIdx=getNextDialable(leads,nextPreviewIdx,filters);
+            if(skipIdx===-1){toast('No more leads','info');setShowNextPreview(false);setRunning(false);setPhase('idle');return}
+            setNextPreviewIdx(skipIdx)
+          }} style={{flex:1,padding:'12px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Skip →</button>
+        </div>
+      </div>}
+
+      {!showNextPreview&&<button onClick={running?pauseDial:startDial} disabled={!pending.length} style={{width:'100%',padding:'14px',background:running?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:15,fontWeight:800,opacity:pending.length?1:.4,marginBottom:10,boxShadow:running?'0 6px 24px rgba(220,38,38,.3)':'0 6px 24px rgba(99,102,241,.3)'}}>
         {running?'⏸ Pause':'▶ Start ('+pending.length+')'}
-      </button>
+      </button>}
       <div style={{height:80}}/>
     </div>}
 
     {/* Other tabs render here - keeping compact */}
-    {tab==='stats'&&isCallMode&&(()=>{
-      const tiers=buildTiers(myCfg.tierMins);
-      const nextT=getNextTier(totalSets,myCfg.tierMins);
-      const prevMin=tiers[tier.idx]?.min||0;
-      const nextMin=nextT?.min||(prevMin+1);
-      const progressPct=nextT?Math.min(100,((totalSets-prevMin)/(nextMin-prevMin))*100):100;
+    {/* ═══ RANK TAB (ML-style monthly) ═══ */}
+    {tab==='rank'&&isCallMode&&(()=>{
+      const starsInTier=rank.stars;const starsNeeded=rank.starsNeeded;
+      const progressPct=nextRank?Math.min(100,(starsInTier/starsNeeded)*100):100;
+      const starsToNext=nextRank?(nextRank.cumStars-monthlyAppts):0;
+      // Monthly stats
+      const now=new Date(),y=now.getFullYear(),m=now.getMonth();
+      const monthSessions=sessionLog.filter(s=>{const d=new Date(s.startTime);return d.getFullYear()===y&&d.getMonth()===m});
+      const monthDialed=monthSessions.reduce((a,s)=>a+(s.dialed||0),0);
+      const monthNP=monthSessions.reduce((a,s)=>a+(s.np||0),0);
+      const monthNI=monthSessions.reduce((a,s)=>a+(s.ni||0),0);
       return<div style={{padding:'0 16px',paddingBottom:100}}>
-      <div className="card glow-border" style={{textAlign:'center',marginBottom:14,background:'linear-gradient(135deg,'+tier.color+'08,transparent)',borderColor:tier.color+'30'}}>
-        <p style={{fontSize:56,margin:'0 0 4px'}}>{tier.emoji}</p>
-        <h2 style={{fontSize:24,fontWeight:900,color:tier.color,margin:'0 0 4px'}}>{tier.label}</h2>
-        <p className="mono" style={{fontSize:32,fontWeight:900,color:'#f1f5f9'}}>{totalSets}</p>
-        <p style={{fontSize:12,color:'var(--text3)'}}>Appointments Set · ${hourlyRate}/hr</p>
+      {/* Rank Card */}
+      <div className="card" style={{textAlign:'center',marginBottom:14,background:rank.bg,borderColor:rank.color+'50',padding:'24px 16px',position:'relative',overflow:'hidden',boxShadow:'0 8px 40px '+rank.glow}}>
+        <div style={{position:'absolute',inset:0,background:'radial-gradient(circle at 50% 30%,rgba(255,255,255,.08),transparent 70%)',pointerEvents:'none'}}/>
+        <p style={{fontSize:64,margin:'0 0 4px',filter:'drop-shadow(0 4px 12px rgba(0,0,0,.3))',position:'relative'}}>{rank.emoji}</p>
+        <h2 style={{fontSize:26,fontWeight:900,color:'#fff',margin:'0 0 6px',textShadow:'0 2px 10px rgba(0,0,0,.3)',position:'relative',letterSpacing:'-.02em'}}>{rank.label}</h2>
+        <StarRow filled={starsInTier} total={starsNeeded>10?10:starsNeeded} color={rank.color}/>
+        <p style={{margin:'8px 0 0',fontSize:11,color:'rgba(255,255,255,.7)',position:'relative'}}>{monthName} · {monthlyAppts} appointments</p>
       </div>
-      {nextT&&<div className="card" style={{marginBottom:14}}>
+
+      {/* Progress to next rank */}
+      {nextRank&&<div className="card" style={{marginBottom:14,borderColor:nextRank.color+'30'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-          <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {nextT.emoji} {nextT.label}</span>
-          <span className="mono" style={{fontSize:12,fontWeight:700,color:nextT.color}}>{totalSets}/{nextT.min}</span>
+          <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {nextRank.emoji} {nextRank.label}</span>
+          <span className="mono" style={{fontSize:12,fontWeight:700,color:nextRank.color}}>{monthlyAppts}/{nextRank.cumStars}</span>
         </div>
         <div style={{height:10,borderRadius:5,background:'var(--bg)',overflow:'hidden',marginBottom:6}}>
-          <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+tier.color+','+nextT.color+')',transition:'width .5s',boxShadow:'0 0 12px '+nextT.color+'40'}}/>
+          <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+rank.color+','+nextRank.color+')',transition:'width .5s',boxShadow:'0 0 12px '+nextRank.color+'40'}}/>
         </div>
-        <p style={{margin:0,fontSize:11,color:'var(--text3)',textAlign:'center'}}>{nextT.min-totalSets} more appts to {nextT.label}</p>
+        <p style={{margin:0,fontSize:11,color:'var(--text3)',textAlign:'center'}}>⭐ {starsToNext} more to {nextRank.label}</p>
       </div>}
-      {!nextT&&<div className="card" style={{textAlign:'center',padding:16,marginBottom:14,borderColor:'rgba(168,85,247,.2)'}}>
-        <p style={{margin:0,fontSize:14,fontWeight:800,color:'#a855f7'}}>👑 MAX TIER!</p>
+      {!nextRank&&<div className="card" style={{textAlign:'center',padding:16,marginBottom:14,borderColor:'rgba(255,68,68,.3)',background:'linear-gradient(135deg,rgba(255,68,68,.06),transparent)'}}>
+        <p style={{margin:0,fontSize:16,fontWeight:900,color:'#FF4444',animation:'firePulse 2s infinite'}}>🔱 MYTHIC ACHIEVED!</p>
+        <p style={{margin:0,fontSize:11,color:'var(--text3)',marginTop:4}}>You are legendary this month</p>
       </div>}
-      <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginBottom:8}}>Tier Roadmap</h3>
-      {tiers.map((t,i)=>{const isActive=tier.idx===i,isPast=tier.idx>i,rate=(myCfg.payRates||DEF_PAY_RATES)[i]||0;
+
+      {/* Monthly Stats */}
+      <div className="card" style={{marginBottom:14}}>
+        <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginBottom:10}}>📊 {monthName} Stats</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6}}>
+          {[['Dialed',monthDialed,'var(--text2)'],['Appts',monthlyAppts,'var(--green)'],['NP',monthNP,'var(--amber)'],['NI',monthNI,'var(--red)']].map(([l,v,c])=>
+            <div key={l} style={{textAlign:'center',padding:'10px 0',borderRadius:10,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:18,fontWeight:800,color:c}}>{v}</p>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>{l}</p></div>)}
+        </div>
+        <p style={{margin:'10px 0 0',fontSize:10,color:'var(--text3)',textAlign:'center'}}>{monthSessions.length} sessions this month · {totalSets} all-time appts</p>
+      </div>
+
+      {/* Rank Roadmap */}
+      <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginBottom:8}}>🗺️ Rank Roadmap</h3>
+      {ML_RANKS.map((r,i)=>{const isActive=rank.idx===i,isPast=rank.idx>i;
         return<div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:isPast?.5:1}}>
-          <div style={{width:40,height:40,borderRadius:12,background:isActive?t.color+'20':'var(--bg3)',border:'2px solid '+(isActive?t.color:isPast?'var(--green)':'var(--border)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,flexShrink:0}}>
-            {isPast?'✓':t.emoji}
+          <div style={{width:42,height:42,borderRadius:12,background:isActive?r.bg:'var(--bg3)',border:'2px solid '+(isActive?r.color:isPast?'var(--green)':'var(--border)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0,boxShadow:isActive?'0 0 16px '+r.glow:'none'}}>
+            {isPast?'✓':r.emoji}
           </div>
           <div style={{flex:1}}>
-            <p style={{margin:0,fontSize:13,fontWeight:isActive?800:600,color:isActive?t.color:'var(--text2)'}}>{t.label}</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{t.min>0?'≥'+t.min+' appts':'Start'} · ${rate}/hr</p>
+            <p style={{margin:0,fontSize:13,fontWeight:isActive?800:600,color:isActive?r.color:'var(--text2)'}}>{r.label}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{r.cumStars>0?'≥'+r.cumStars+' appts/month':'Start'} · {r.starsNeeded<999?r.starsNeeded+' ⭐ to next':'∞ glory'}</p>
           </div>
-          {isActive&&<span className="pill" style={{background:t.color+'20',color:t.color}}>NOW</span>}
+          {isActive&&<span className="pill" style={{background:r.color+'20',color:r.color}}>NOW</span>}
           {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
         </div>})}
-      
-      {/* Promotion History — shows when each rate change took effect */}
-      {promotionLog.length>0&&<>
-        <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginTop:16,marginBottom:8}}>📈 Promotion History</h3>
-        <p style={{fontSize:10,color:'var(--text3)',marginBottom:8}}>New rates apply from the promotion date onwards. Previous sessions keep their original rate.</p>
-        {promotionLog.map((p,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
-          <div style={{width:36,height:36,borderRadius:10,background:'var(--adim)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>⭐</div>
-          <div style={{flex:1}}>
-            <p style={{margin:0,fontSize:12,fontWeight:700,color:'#f1f5f9'}}>{p.fromTier} → {p.toTier}</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{new Date(p.date).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'})} · {p.atSets} total appts</p>
-          </div>
-          <div style={{textAlign:'right'}}>
-            <p className="mono" style={{margin:0,fontSize:13,fontWeight:700,color:'var(--green)'}}>${p.fromRate} → ${p.newRate}</p>
-            <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>per hour</p>
-          </div>
-        </div>)}
-      </>}
     </div>})()}
 
     {/* ═══ APPOINTMENTS TAB ═══ */}
@@ -956,14 +1048,20 @@ function App(){
             if(!gOk){toast('Connect Google first','err');return}
             toast('Loading timesheet…','info');
             try{const id=await gTimesheet.ensure();if(!id){toast('No timesheet','err');return}
-              const vals=await gSheets.vals(id,'Sessions!A:O');if(vals.length<2){toast('Empty timesheet','err');return}
-              const grouped={};vals.slice(1).forEach(r=>{const email=(r[1]||'').toLowerCase();if(!email)return;
-                if(!grouped[email])grouped[email]=[];
-                grouped[email].push({startTime:new Date(r[0]+' '+r[2]).getTime(),endTime:new Date(r[0]+' '+r[3]).getTime(),
-                  elapsed:parseInt(r[4])||0,dialed:+r[5]||0,np:+r[6]||0,cb:+r[7]||0,ni:+r[8]||0,sets:+r[9]||0,
-                  tier:r[10]||'',hourlyRate:+r[11]||0,
-                  fullSession:parseFloat(r[12])>=myCfg.sessionDur,bonus:r[13]==='1.5x',
-                  pay:parseFloat((r[14]||'0').replace('$',''))||0,paid:false})});
+              // Try 'Timesheet' tab first (default), fall back to 'Sheet1'
+              let vals;
+              try{vals=await gSheets.vals(id,'Timesheet!A:P')}catch(e){vals=await gSheets.vals(id,'Sheet1!A:P')}
+              if(!vals||vals.length<2){toast('Empty timesheet','err');return}
+              // Cols: 0=Date,1=Day,2=Admin,3=Start,4=End,5=Hours,6=Dialed,7=NP,8=CB,9=NI,10=Sets,11=Tier,12=$/hr,13=Bonus,14=Pay,15=Status
+              const grouped={};vals.slice(1).forEach(r=>{const admin=(r[2]||'').trim();if(!admin)return;
+                // Use admin name as key (timesheet stores name, not email)
+                const key=admin.toLowerCase();
+                if(!grouped[key])grouped[key]=[];
+                grouped[key].push({startTime:new Date(r[0]+' '+r[3]).getTime(),endTime:new Date(r[0]+' '+r[4]).getTime(),
+                  elapsed:parseFloat(r[5]||0)*3600,dialed:+r[6]||0,np:+r[7]||0,cb:+r[8]||0,ni:+r[9]||0,sets:+r[10]||0,
+                  tier:r[11]||'',hourlyRate:+r[12]||0,
+                  fullSession:parseFloat(r[5]||0)>=myCfg.sessionDur,bonus:(r[13]||'').includes('1'),
+                  pay:parseFloat((r[14]||'0').replace('$',''))||0,paid:(r[15]||'').toLowerCase()==='paid'})});
               setAdminSessions(grouped);toast('Loaded '+Object.keys(grouped).length+' admins')}
             catch(e){toast(e.message,'err')}
           }} style={{flex:1,padding:'10px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:700}}>📊 Load from Google Sheet</button>
@@ -1501,21 +1599,24 @@ function App(){
     {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
       <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
         <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'var(--green)'}}>✓ Appointment Set!</h3>
+        <p style={{margin:'0 0 4px',fontSize:14,fontWeight:700,color:'#f1f5f9'}}>{apptLead?.name||'Lead'}</p>
         <p style={{margin:'0 0 14px',fontSize:12,color:'var(--text3)'}}>Add to Google Calendar?</p>
         <input type="date" value={apptDate} onChange={e=>setApptDate(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
         <input type="time" value={apptTime} onChange={e=>setApptTime(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
         <input value={apptInvite} onChange={e=>setApptInvite(e.target.value)} placeholder="Invite emails (comma sep)" style={{marginBottom:14}}/>
         <div style={{display:'flex',gap:8}}>
           <button onClick={async()=>{if(!apptDate||!apptTime)return;
-            const dur=apptDuration||60;
+            const dur=apptDuration||60;const lead=apptLead;
             try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
-              const evt=await gCal.create('Appt: '+(cur?.name||''),cur?.phone||'',s.toISOString(),end.toISOString(),apptInvite?apptInvite.split(',').map(s=>s.trim()):[]);
+              const evt=await gCal.create('Appt: '+(lead?.name||''),lead?.phone||'',s.toISOString(),end.toISOString(),apptInvite?apptInvite.split(',').map(s=>s.trim()):[]);
               // Save to DB
-              DB.saveAppt({admin:myEmail,name:cur?.name,phone:cur?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite},_user?.id);
+              DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite},_user?.id);
               // Notify Main
-              DB.notify(null,'appt_set',`📅 ${myEmail} set appointment`,`${cur?.name} on ${apptDate} at ${apptTime} (${dur}min)`,{leadName:cur?.name,apptDate,apptTime});
+              DB.notify(null,'appt_set',`📅 ${myEmail} set appointment`,`${lead?.name} on ${apptDate} at ${apptTime} (${dur}min)`,{leadName:lead?.name,apptDate,apptTime});
+              // Also update the local appointment entry with date/time
+              if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||''}:a));
               // Offer WhatsApp
-              setShowWA({name:cur?.name,phone:cur?.phone,date:apptDate,time:apptTime});
+              setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
               toast('Event created!')}catch(e){toast(e.message,'err')}setShowAppt(false)}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
           <button onClick={()=>setShowAppt(false)} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
         </div>
