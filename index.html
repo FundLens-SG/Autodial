@@ -5,8 +5,21 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AutoDial">
 <meta name="theme-color" content="#0b0f1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="AutoDial">
 <title>AutoDial</title>
+
+<!-- App Icon (SVG) -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='108' fill='url(%23g)'/%3E%3Cpath d='M352 310.7v47.6a16 16 0 01-17.4 16 158.3 158.3 0 01-69-24.6 156 156 0 01-48-48 158.3 158.3 0 01-24.5-69.3A16 16 0 01209 216h24a16 16 0 0116 13.8c1 7.7 2.9 15.2 5.6 22.5a16 16 0 01-3.6 16.9l-10.2 10.2a128 128 0 0048 48l10.2-10.2a16 16 0 0116.9-3.6c7.3 2.7 14.8 4.6 22.5 5.6A16 16 0 01352 335.7z' fill='none' stroke='white' stroke-width='20' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='340' cy='180' r='8' fill='%2334d399'/%3E%3Ccircle cx='340' cy='180' r='16' fill='none' stroke='%2334d399' stroke-width='4' opacity='.5'/%3E%3Ccircle cx='340' cy='180' r='26' fill='none' stroke='%2334d399' stroke-width='3' opacity='.25'/%3E%3C/svg%3E">
+
+<!-- Apple Touch Icon (generated via canvas on load) -->
+<link rel="apple-touch-icon" id="apple-icon">
+
+<!-- PWA Manifest -->
+<link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%22%2C%22short_name%22%3A%22AutoDial%22%2C%22description%22%3A%22Smart%20auto-dialer%20for%20cold-calling%20teams%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22orientation%22%3A%22portrait%22%2C%22background_color%22%3A%22%230b0f1a%22%2C%22theme_color%22%3A%22%236366f1%22%2C%22categories%22%3A%5B%22business%22%2C%22productivity%22%5D%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%253Csvg%2520xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%2520viewBox%3D'0%25200%2520512%2520512'%253E%253Cdefs%253E%253ClinearGradient%2520id%3D'g'%2520x1%3D'0%2525'%2520y1%3D'0%2525'%2520x2%3D'100%2525'%2520y2%3D'100%2525'%253E%253Cstop%2520offset%3D'0%2525'%2520stop-color%3D'%25236366f1'%2F%253E%253Cstop%2520offset%3D'100%2525'%2520stop-color%3D'%25238b5cf6'%2F%253E%253C%2FlinearGradient%253E%253C%2Fdefs%253E%253Crect%2520width%3D'512'%2520height%3D'512'%2520rx%3D'108'%2520fill%3D'url(%2523g)'%2F%253E%253Cpath%2520d%3D'M352%2520310.7v47.6a16%252016%25200%252001-17.4%252016%2520158.3%2520158.3%25200%252001-69-24.6%2520156%2520156%25200%252001-48-48%2520158.3%2520158.3%25200%252001-24.5-69.3A16%252016%25200%252001209%2520216h24a16%252016%25200%25200116%252013.8c1%25207.7%25202.9%252015.2%25205.6%252022.5a16%252016%25200%252001-3.6%252016.9l-10.2%252010.2a128%2520128%25200%25200048%252048l10.2-10.2a16%252016%25200%25200116.9-3.6c7.3%25202.7%252014.8%25204.6%252022.5%25205.6A16%252016%25200%252001352%2520335.7z'%2520fill%3D'none'%2520stroke%3D'white'%2520stroke-width%3D'20'%2520stroke-linecap%3D'round'%2F%253E%253C%2Fsvg%253E%22%2C%22sizes%22%3A%22512x512%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%2C%22purpose%22%3A%22any%20maskable%22%7D%5D%7D">
+
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -15,7 +28,41 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script>if(!navigator.locks)navigator.locks={request:(n,o,c)=>{if(typeof o==='function')c=o;return Promise.resolve(c({name:n}))}};
+
+<script>
+// ═══ PWA: Service Worker + Install Prompt ═══
+if('serviceWorker' in navigator && !location.hostname.includes('claude.ai')){
+  window.addEventListener('load',()=>{
+    // Generate minimal SW inline via blob
+    var swCode='self.addEventListener("install",e=>self.skipWaiting());self.addEventListener("activate",e=>clients.claim());self.addEventListener("fetch",e=>{});';
+    var blob=new Blob([swCode],{type:'application/javascript'});
+    navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+  });
+}
+
+// Install prompt capture
+var _installPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();_installPrompt=e;
+  // Show install banner after 3s
+  setTimeout(()=>{var b=document.getElementById('install-banner');if(b)b.style.display='flex'},3000);
+});
+
+// Generate Apple Touch Icon via canvas
+window.addEventListener('load',()=>{
+  try{
+    var c=document.createElement('canvas');c.width=180;c.height=180;var x=c.getContext('2d');
+    var g=x.createLinearGradient(0,0,180,180);g.addColorStop(0,'#6366f1');g.addColorStop(1,'#8b5cf6');
+    x.fillStyle=g;x.beginPath();x.roundRect(0,0,180,180,38);x.fill();
+    x.strokeStyle='#fff';x.lineWidth=7;x.lineCap='round';x.lineJoin='round';
+    x.beginPath();x.moveTo(124,109);x.lineTo(124,126);x.quadraticCurveTo(124,131.5,118.8,131.5);
+    x.moveTo(62,76);x.lineTo(70.5,76);x.quadraticCurveTo(76,76,76,81);
+    x.stroke();
+    x.font='bold 48px system-ui';x.fillStyle='#fff';x.textAlign='center';x.fillText('📞',90,105);
+    var link=document.getElementById('apple-icon');if(link)link.href=c.toDataURL('image/png');
+  }catch(e){}
+});
+
+if(!navigator.locks)navigator.locks={request:(n,o,c)=>{if(typeof o==='function')c=o;return Promise.resolve(c({name:n}))}};
 (function(){var w=console.warn;console.warn=function(){if(typeof arguments[0]==='string'&&(arguments[0].includes('gotrue')||arguments[0].includes('lock:')))return;w.apply(console,arguments)}})();</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -92,19 +139,78 @@ function toast(m,t){var e=document.createElement('div');e.className='toast t-'+(
 window.toast=toast;
 async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;if(!e||!p)return authMsg('Enter email and password');if(!window._role)return authMsg('Select Admin or Main');authMsg('Signing in…','i');try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);_SB.auth.getSession().then(s=>{_user=s?.data?.session?.user||{email:e}});_prof={email:e,role:window._role};authGrant()}catch(err){authMsg(err.message)}}
 async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;if(!n||!e||!p)return authMsg('Fill all fields');authMsg('Creating…','i');try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);authMsg('Created! Sign in now.','i');setTimeout(()=>authShow('login'),1500)}catch(err){authMsg(err.message)}}
-async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
+async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
-function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(!window._mounted){window._mounted=true;initApp()}}
-async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}_user=s.data.session.user;var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data)_prof=p.data;var savedRole=localStorage.getItem('autodial_role');if(savedRole){window._role=savedRole;authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}catch(e){document.getElementById('auth-gate').style.display='flex'}}
+function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;localStorage.setItem('autodial_role',window._role);if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
+async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}_user=s.data.session.user;var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data)_prof=p.data;var savedRole=localStorage.getItem('autodial_role');if(savedRole){window._role=savedRole;authGrant()}else{document.getElementById('auth-gate').style.display='flex';var emailEl=document.getElementById('auth-email');if(emailEl&&_user.email)emailEl.value=_user.email}}catch(e){document.getElementById('auth-gate').style.display='flex'}}
 if(_SB)authCheck();else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(()=>{if(!window._mounted){window._mounted=true;initApp()}},100)}
 
 // Google API
-var GAPI_SCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events';
+var GAPI_SCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly';
 var _gToken=null,GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com';
 window.gConnect=function(cb){try{var c=google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GAPI_SCOPES,callback:r=>{if(r.error){toast('Google error','err');return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(cb)cb()}});c.requestAccessToken()}catch(e){toast(e.message,'err')}};
 window.gF=async(url,opts)=>{var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google first');var r=await fetch(url,{...opts,headers:{...opts?.headers,Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
 window.gSheets={async meta(id){var r=await gF(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);return(await r.json()).sheets?.map(s=>({id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}))||[]},async vals(id,range){var r=await gF(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}`);return(await r.json()).values||[]},async put(id,range,val){await gF(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
 window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(e=>({email:e}));return await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json()},async events(min,max){return(await(await gF(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${min}&timeMax=${max}&singleEvents=true&orderBy=startTime&maxResults=50`)).json()).items||[]}};
+
+// ═══ Google Drive — Search Sheets ═══
+window.gDrive={async search(query){
+  var q="mimeType='application/vnd.google-apps.spreadsheet'";
+  if(query)q+=" and name contains '"+query.replace(/'/g,"\\'")+"'";
+  var r=await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)+'&fields=files(id,name,modifiedTime,owners)&orderBy=modifiedTime desc&pageSize=20');
+  var d=await r.json();return d.files||[];
+}};
+
+// ═══ Timesheet — Auto-create & append to Google Sheet ═══
+window.gTimesheet={
+  _id:null,
+  async ensureSheet(){
+    // Check if we have a saved timesheet sheet ID
+    var id=localStorage.getItem('ad_timesheet_id');
+    if(id){this._id=id;return id}
+    // Search for existing
+    try{
+      var files=await gDrive.search('AutoDial Timesheet');
+      if(files.length>0){this._id=files[0].id;localStorage.setItem('ad_timesheet_id',this._id);return this._id}
+    }catch(e){}
+    // Create new spreadsheet
+    try{
+      var r=await gF('https://sheets.googleapis.com/v4/spreadsheets',{method:'POST',body:JSON.stringify({
+        properties:{title:'AutoDial Timesheet'},
+        sheets:[{properties:{title:'Sessions'},data:[{startRow:0,startColumn:0,rowData:[{values:[
+          {userEnteredValue:{stringValue:'Date'}},{userEnteredValue:{stringValue:'Admin'}},{userEnteredValue:{stringValue:'Start'}},
+          {userEnteredValue:{stringValue:'End'}},{userEnteredValue:{stringValue:'Duration'}},{userEnteredValue:{stringValue:'Dialed'}},
+          {userEnteredValue:{stringValue:'NP'}},{userEnteredValue:{stringValue:'CB'}},{userEnteredValue:{stringValue:'NI'}},
+          {userEnteredValue:{stringValue:'Set'}},{userEnteredValue:{stringValue:'Tier'}},{userEnteredValue:{stringValue:'$/hr'}},
+          {userEnteredValue:{stringValue:'Hours Credited'}},{userEnteredValue:{stringValue:'Bonus'}},{userEnteredValue:{stringValue:'Total Pay'}}
+        ]}]}]}]
+      })});
+      var d=await r.json();this._id=d.spreadsheetId;localStorage.setItem('ad_timesheet_id',this._id);
+      return this._id;
+    }catch(e){console.warn('[Timesheet]',e.message);return null}
+  },
+  async appendSession(session,userName,cfg){
+    var id=await this.ensureSheet();if(!id)return;
+    var date=new Date(session.startTime);
+    var endDate=session.endTime?new Date(session.endTime):new Date();
+    var hoursCredit=session.fullSession?cfg.sessionDur:(session.elapsed/3600);
+    var row=[
+      date.toLocaleDateString(),userName,
+      date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
+      endDate.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
+      Math.floor(session.elapsed/60)+' min',
+      session.dialed,session.np,session.cb,session.ni,session.sets,
+      session.tier||'',session.hourlyRate||0,
+      hoursCredit.toFixed(1),session.bonus?'1.5×':'1×',
+      '$'+(session.pay||0).toFixed(2)
+    ];
+    try{
+      await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/Sessions!A:O:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',{
+        method:'POST',body:JSON.stringify({values:[row]})
+      });
+    }catch(e){console.warn('[Timesheet]',e.message)}
+  }
+};
 
 // ═══ GEMINI AI — 1 call per sheet import ═══
 window.geminiKey=function(){return localStorage.getItem('autodial_gemini')||localStorage.getItem('geminiKey')||''};
@@ -162,8 +268,10 @@ function parseSheet(rows,headers){
   return{leads,error:null,count:leads.length}
 }
 
-const ST={pending:{c:'#94a3b8',l:'Pending',bg:'rgba(148,163,184,.08)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
-const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?`CB→NP×${np}`:`NP×${np}`;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
+const ST={pending:{c:'#94a3b8',l:'Pending',bg:'rgba(148,163,184,.08)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'},postpone:{c:'var(--amber)',l:'Postpone',bg:'var(--amdim)'},met:{c:'#10b981',l:'Met ✓',bg:'rgba(16,185,129,.12)'},mia:{c:'#ef4444',l:'MIA',bg:'var(--rdim)'},closed:{c:'var(--gold)',l:'Closed',bg:'var(--golddim)'}};
+const Badge=({s,np,cbh,fu})=>{
+  if(fu&&ST[fu])return<span className="pill"style={{background:ST[fu].bg,color:ST[fu].c}}>{ST[fu].l}</span>;
+  const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?`CB→NP×${np}`:`NP×${np}`;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
 
 // ═══ PAY TIERS ═══
 const TIERS=[{min:0,label:'Bronze 🥉',color:'#cd7f32'},{min:30,label:'Silver 🥈',color:'#c0c0c0'},{min:60,label:'Gold 🥇',color:'#fbbf24'}];
@@ -197,10 +305,9 @@ function MilestonePopup({show,title,sub,emoji,onClose}){
 // ══════════════════════════════════════════
 function App(){
   const role=window._role||'admin';
-  localStorage.setItem('autodial_role',role);
   const stored=load('data')||{};
   const[leads,setLeads]=useState(stored.leads||[]);
-  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,12,18],sessionDur:5,mThresh:2,nThresh:4});
+  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,12,18],sessionDur:5,mThresh:2,nThresh:4,billingDays:14,metIncentive:10});
   const[running,setRunning]=useState(false);
   const[curIdx,setCurIdx]=useState(-1);
   const[countdown,setCountdown]=useState(0);
@@ -218,18 +325,26 @@ function App(){
   const[gOk,setGOk]=useState(!!localStorage.getItem('ad_gt'));
   const[sTabs,setSTabs]=useState([]);
   const[sLoad,setSLoad]=useState(false);
+  const[sheetQ,setSheetQ]=useState('');
+  const[sheetResults,setSheetResults]=useState([]);
+  const[sheetSearching,setSheetSearching]=useState(false);
   // Session tracking (Admin)
   const[session,setSession]=useState(null); // {startTime,dialed,np,ni,cb,sets,ended}
   const[totalSets,setTotalSets]=useState(load('totalSets')||0);
   const[milestone,setMilestone]=useState(null);
   const[confetti,setConfetti]=useState(false);
   const[sessionLog,setSessionLog]=useState(load('sessions')||[]);
+  const[incentives,setIncentives]=useState(load('incentives')||[]);
+  const[showFollowUp,setShowFollowUp]=useState(null);
+  const[tipAmount,setTipAmount]=useState('');
+  const[showInvoice,setShowInvoice]=useState(null);
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
 
   useEffect(()=>{save('data',{leads,cfg})},[leads,cfg]);
   useEffect(()=>{save('totalSets',totalSets)},[totalSets]);
   useEffect(()=>{save('sessions',sessionLog)},[sessionLog]);
+  useEffect(()=>{save('incentives',incentives)},[incentives]);
 
   // Session timer
   useEffect(()=>{
@@ -259,7 +374,6 @@ function App(){
   const endSession=()=>{
     if(!session)return;
     const s={...session,ended:true,endTime:Date.now(),elapsed};
-    // Check if full session earned
     const fullSessionEarned=s.sets>=cfg.mThresh;
     const bonusEarned=s.sets>=cfg.nThresh;
     const hours=fullSessionEarned?cfg.sessionDur:(elapsed/3600);
@@ -268,6 +382,10 @@ function App(){
     setSession(s);
     setSessionLog(p=>[s,...p]);
     setRunning(false);setPhase('idle');clearTimeout(cdRef.current);
+    // Auto-write to Google Sheets timesheet
+    if(localStorage.getItem('ad_gt')){
+      gTimesheet.appendSession(s,userName,cfg).then(()=>toast('Timesheet updated ✓')).catch(()=>{});
+    }
   };
 
   // ─── Outcome ───
@@ -326,7 +444,9 @@ function App(){
   const pauseDial=()=>{setRunning(false);setPhase('idle');clearTimeout(cdRef.current)};
 
   const connectG=()=>gConnect(()=>setGOk(true));
-  const fetchTabs=async()=>{const m=cfg.sheetId?.match(/\/d\/([a-zA-Z0-9_-]+)/)||cfg.sheetId?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m){toast('Bad URL','err');return}const id=m[1];setCfg(s=>({...s,sheetId:id}));setSLoad(true);try{setSTabs(await gSheets.meta(id));toast('Tabs loaded')}catch(e){toast(e.message,'err')}setSLoad(false)};
+  const fetchTabs=async(id)=>{const sid=id||cfg.sheetId;const m=sid?.match(/\/d\/([a-zA-Z0-9_-]+)/)||sid?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m){toast('Bad URL','err');return}const fid=m[1];setCfg(s=>({...s,sheetId:fid}));setSLoad(true);try{setSTabs(await gSheets.meta(fid));toast('Tabs loaded')}catch(e){toast(e.message,'err')}setSLoad(false)};
+  const searchSheets=async()=>{if(!gOk){toast('Connect Google first','err');return}setSheetSearching(true);try{const files=await gDrive.search(sheetQ);setSheetResults(files);if(!files.length)toast('No sheets found','err')}catch(e){toast(e.message,'err')}setSheetSearching(false)};
+  const pickSheet=async(file)=>{setCfg(s=>({...s,sheetId:file.id,sheetTab:''}));setSheetResults([]);setSheetQ('');setSLoad(true);try{setSTabs(await gSheets.meta(file.id));toast(`"${file.name}" loaded`)}catch(e){toast(e.message,'err')}setSLoad(false)};
   const fetchLeads=async()=>{if(!cfg.sheetId||!cfg.sheetTab)return;setSLoad(true);try{const v=await gSheets.vals(cfg.sheetId,cfg.sheetTab);if(v.length<2){toast('Empty','err');setSLoad(false);return}
     const headers=v[0].map(String);const rows=v.slice(1);
     // Try AI analysis first (1 API call)
@@ -346,9 +466,10 @@ function App(){
   const detailLead=leads.find(l=>l.id===detailId);
 
   // Admin tabs
-  const adminTabs=[['dial','📞'],['stats','🏆'],['history','📊'],['leads','📋'],['settings','⚙️']];
-  const mainTabs=[['leads','📋'],['tracking','📊'],['settings','⚙️']];
+  const adminTabs=[['dial','📞'],['stats','🏆'],['timesheet','💰'],['history','📊'],['leads','📋'],['settings','⚙️']];
+  const mainTabs=[['leads','📋'],['timesheet','💰'],['tracking','📊'],['settings','⚙️']];
   const tabs=role==='admin'?adminTabs:mainTabs;
+  const totalEarnings=sessionLog.reduce((s,x)=>s+(x.pay||0),0);
 
   return(
   <div style={{minHeight:'100vh',background:'var(--bg)',maxWidth:520,margin:'0 auto'}}>
@@ -371,6 +492,16 @@ function App(){
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600,border:'1px solid var(--border)'}}>Out</button>
     </div>
     <div style={{margin:'0 16px 4px',height:3,borderRadius:2,background:'var(--border)',overflow:'hidden'}}><div style={{height:'100%',width:`${progress}%`,background:'linear-gradient(90deg,var(--accent),#a78bfa)',transition:'width .4s'}}/></div>
+
+    {/* Install Banner */}
+    <div id="install-banner" style={{display:'none',margin:'0 16px 8px',padding:'10px 14px',borderRadius:10,background:'linear-gradient(135deg,rgba(99,102,241,.15),rgba(139,92,246,.1))',border:'1px solid rgba(99,102,241,.25)',alignItems:'center',gap:10}}>
+      <div style={{flex:1}}>
+        <p style={{margin:0,fontSize:12,fontWeight:600,color:'var(--accent2)'}}>📲 Install AutoDial</p>
+        <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Add to home screen for full-screen experience</p>
+      </div>
+      <button onClick={()=>{if(window._installPrompt){window._installPrompt.prompt();window._installPrompt.userChoice.then(()=>{window._installPrompt=null;document.getElementById('install-banner').style.display='none'})}}} style={{padding:'7px 14px',borderRadius:8,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:11,fontWeight:700,whiteSpace:'nowrap'}}>Install</button>
+      <button onClick={()=>{document.getElementById('install-banner').style.display='none'}} style={{background:'none',color:'var(--text3)',fontSize:16,padding:'0 4px'}}>×</button>
+    </div>
 
     {/* Tabs */}
     <div style={{display:'flex',padding:'0 12px',gap:2,marginBottom:8}}>
@@ -499,6 +630,69 @@ function App(){
       {sessionLog.length===0&&<p style={{fontSize:12,color:'var(--text3)',textAlign:'center',padding:20}}>Complete sessions to see history</p>}
     </div>}
 
+    {/* ═══ TIMESHEET (both roles) ═══ */}
+    {tab==='timesheet'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      {/* Total earnings banner */}
+      <div className="card" style={{marginBottom:12,textAlign:'center',background:'linear-gradient(135deg,rgba(251,191,36,.08),rgba(245,158,11,.04))',borderColor:'rgba(251,191,36,.2)'}}>
+        <p style={{margin:0,fontSize:11,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.1em'}}>Total Earnings</p>
+        <p className="mono" style={{margin:'4px 0 2px',fontSize:36,fontWeight:800,color:'var(--gold)'}}>${totalEarnings.toFixed(2)}</p>
+        <p style={{margin:0,fontSize:12,color:'var(--text3)'}}>{sessionLog.length} sessions · {totalSets} appointments · {tier.label}</p>
+      </div>
+
+      {/* Pay scheme (read-only for Admin) */}
+      <div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:13,fontWeight:600,marginBottom:8,color:'var(--text2)'}}>💰 Pay Scheme</h3>
+        <div style={{display:'flex',gap:6,marginBottom:8}}>
+          {TIERS.map((t,i)=><div key={i} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:8,background:tier.idx===i?`${t.color}18`:'var(--bg3)',border:`1px solid ${tier.idx===i?t.color+'40':'var(--border)'}`,transition:'all .3s'}}>
+            <p style={{margin:0,fontSize:16}}>{i===0?'🥉':i===1?'🥈':'🥇'}</p>
+            <p style={{margin:'2px 0 0',fontSize:11,fontWeight:700,color:t.color}}>{t.label.split(' ')[0]}</p>
+            <p className="mono" style={{margin:'2px 0 0',fontSize:13,fontWeight:800,color:tier.idx===i?'#f1f5f9':'var(--text3)'}}>${cfg.payRates[i]}/hr</p>
+            <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)'}}>≥{t.min} appts</p>
+          </div>)}
+        </div>
+        <div style={{display:'flex',gap:8,fontSize:11,color:'var(--text3)'}}>
+          <span>Session: <b style={{color:'var(--text2)'}}>{cfg.sessionDur}hr</b></span>
+          <span>Full @ <b style={{color:'var(--green)'}}>{cfg.mThresh} appts</b></span>
+          <span>1.5× @ <b style={{color:'var(--gold)'}}>{cfg.nThresh} appts</b></span>
+        </div>
+      </div>
+
+      {/* Session log */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <h3 style={{fontSize:14,fontWeight:700,color:'#f1f5f9'}}>Session Log</h3>
+        {sessionLog.length>0&&<button onClick={exportCSV} style={{padding:'5px 12px',borderRadius:7,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>⬇ Export</button>}
+      </div>
+
+      {sessionLog.map((s,i)=>{
+        const d=new Date(s.startTime);const ed=s.endTime?new Date(s.endTime):null;
+        const hoursCredit=s.fullSession?cfg.sessionDur:(s.elapsed/3600);
+        return<div key={i} className="card" style={{marginBottom:8,borderColor:s.bonus?'rgba(251,191,36,.2)':s.fullSession?'rgba(52,211,153,.15)':'var(--border)',background:s.bonus?'rgba(251,191,36,.03)':'var(--bg2)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+            <div>
+              <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'})}</p>
+              <p className="mono" style={{margin:0,fontSize:11,color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} → {ed?ed.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—'}</p>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <p className="mono" style={{margin:0,fontSize:18,fontWeight:800,color:s.bonus?'var(--gold)':s.fullSession?'var(--green)':'var(--text)'}}>${(s.pay||0).toFixed(2)}</p>
+              {s.bonus&&<span className="pill" style={{background:'var(--golddim)',color:'var(--gold)'}}>🔥 1.5×</span>}
+              {s.fullSession&&!s.bonus&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓ Full</span>}
+            </div>
+          </div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {[['Dialed',s.dialed,'var(--text2)'],['Set',s.sets,'var(--green)'],['NP',s.np,'var(--amber)'],['CB',s.cb,'var(--blue)'],['NI',s.ni,'var(--red)']].map(([l,v,c])=>
+              <span key={l} style={{fontSize:10,color:c,fontWeight:600}}>{l}:{v}</span>
+            )}
+            <span style={{fontSize:10,color:'var(--text3)'}}>·</span>
+            <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{Math.floor(s.elapsed/60)}min</span>
+            <span style={{fontSize:10,color:'var(--text3)'}}>·</span>
+            <span style={{fontSize:10,color:s.tier?.includes('Gold')?'var(--gold)':s.tier?.includes('Silver')?'#c0c0c0':'#cd7f32',fontWeight:600}}>{s.tier}</span>
+            <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>${s.hourlyRate}/hr × {hoursCredit.toFixed(1)}h</span>
+          </div>
+        </div>
+      })}
+      {sessionLog.length===0&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{fontSize:24,marginBottom:8}}>📋</p><p style={{color:'var(--text3)',fontSize:13}}>Complete a calling session to see your timesheet</p></div>}
+    </div>}
+
     {/* ═══ HISTORY (both roles) ═══ */}
     {tab==='history'&&<div style={{padding:'0 16px',paddingBottom:100}}>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" style={{marginBottom:8}}/>
@@ -525,8 +719,29 @@ function App(){
           :<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Connected</span>}
         </div>
         {gOk&&<>
+          {/* Search sheets */}
+          <div style={{display:'flex',gap:6,marginBottom:8}}>
+            <input value={sheetQ} onChange={e=>setSheetQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')searchSheets()}} placeholder="🔍 Search your Google Sheets…" style={{flex:1,fontSize:13}}/>
+            <button onClick={searchSheets} disabled={sheetSearching} style={{padding:'0 14px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600,flexShrink:0,whiteSpace:'nowrap'}}>{sheetSearching?'…':'Search'}</button>
+          </div>
+          {/* Search results */}
+          {sheetResults.length>0&&<div style={{marginBottom:8,maxHeight:200,overflowY:'auto',borderRadius:8,border:'1px solid var(--border)'}}>
+            {sheetResults.map(f=><div key={f.id} onClick={()=>pickSheet(f)} style={{padding:'10px 12px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',alignItems:'center',gap:8,background:'var(--bg3)'}}>
+              <span style={{fontSize:16}}>📊</span>
+              <div style={{flex:1,minWidth:0}}>
+                <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name}</p>
+                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{f.modifiedTime?new Date(f.modifiedTime).toLocaleDateString():''}</p>
+              </div>
+            </div>)}
+          </div>}
+          {/* Or paste URL */}
+          <div style={{display:'flex',gap:6,marginBottom:8,alignItems:'center'}}>
+            <div style={{height:1,flex:1,background:'var(--border)'}}/>
+            <span style={{fontSize:10,color:'var(--text3)',flexShrink:0}}>or paste URL</span>
+            <div style={{height:1,flex:1,background:'var(--border)'}}/>
+          </div>
           <input value={cfg.sheetId||''} onChange={e=>setCfg(s=>({...s,sheetId:e.target.value}))} placeholder="Paste Google Sheet URL" style={{marginBottom:8,fontSize:13}}/>
-          <button onClick={fetchTabs} disabled={sLoad} style={{width:'100%',padding:'9px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:12,fontWeight:600,border:'1px solid var(--border)',marginBottom:8}}>Load Tabs</button>
+          <button onClick={()=>fetchTabs()} disabled={sLoad} style={{width:'100%',padding:'9px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:12,fontWeight:600,border:'1px solid var(--border)',marginBottom:8}}>Load Tabs</button>
           {sTabs.length>0&&<>
             <select value={cfg.sheetTab||''} onChange={e=>setCfg(s=>({...s,sheetTab:e.target.value}))} style={{marginBottom:8}}>
               <option value="">Select tab…</option>{sTabs.map(t=><option key={t.id} value={t.title}>{t.title} ({t.rows} rows)</option>)}
