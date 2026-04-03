@@ -204,12 +204,7 @@ window._setupCreator=function(email){localStorage.setItem('autodial_creator',ema
 function pickRole(r){window._role=r;var a=document.getElementById('btn-admin'),m=document.getElementById('btn-main');
   a.style.background=r==='admin'?'var(--adim)':'transparent';a.style.borderColor=r==='admin'?'var(--accent)':'transparent';a.style.color=r==='admin'?'#f1f5f9':'var(--text3)';
   m.style.background=r==='main'?'var(--adim)':'transparent';m.style.borderColor=r==='main'?'var(--accent)':'transparent';m.style.color=r==='main'?'#f1f5f9':'var(--text3)'}
-// Supabase init is deferred - only created when first needed
-function getSB(){
-  if(_SB)return _SB;
-  try{if(window.supabase){_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'},realtime:{params:{eventsPerSecond:2}}});}}catch(e){}
-  return _SB;
-}
+try{if(window.supabase)_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'}})}catch(e){}
 
 function authMsg(t,type){var e=document.getElementById('auth-message');e.style.display='block';e.style.background=type==='i'?'var(--gdim)':'var(--rdim)';e.style.color=type==='i'?'var(--green)':'var(--red)';e.style.border='1px solid '+(type==='i'?'rgba(63,185,80,.2)':'rgba(248,81,73,.2)');e.textContent=t}
 function authClear(){document.getElementById('auth-message').style.display='none'}
@@ -217,7 +212,7 @@ function authShow(v){authClear();['login','signup','pending'].forEach(function(s
 function toast(m,t){var e=document.createElement('div');e.className='toast t-'+(t||'ok');e.textContent=m;document.getElementById('toast-area').appendChild(e);setTimeout(function(){e.style.opacity='0';e.style.transition='opacity .3s';setTimeout(function(){e.remove()},300)},3000)}
 window.toast=toast;
 
-async function authLogin(){getSB();authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
+async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
   if(!e||!p)return authMsg('Enter email and password');if(!window._role)return authMsg('Select a role');
   authMsg('Signing in…','i');
   try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);
@@ -226,7 +221,7 @@ async function authLogin(){getSB();authClear();var e=document.getElementById('au
     try{var sess=await _SB.auth.getSession();if(sess.data?.session?.user){var pr=await _SB.from('profiles').select('approved').eq('id',sess.data.session.user.id).single();if(pr.data&&!pr.data.approved){authShow('pending');return}}}catch(pe){}
     authGrant()}catch(err){authMsg(err.message)}}
 
-async function authSignup(){getSB();authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
+async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
   if(!n||!e||!p)return authMsg('Fill all fields');if(p.length<6)return authMsg('6+ chars');
   authMsg('Creating…','i');
   try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);
@@ -251,7 +246,7 @@ async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.
   try{var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof=Object.assign({},_prof,p.data);if(!p.data.approved&&!isCreator(_user.email)){authShow('pending');return}}}catch(pe){console.warn('[Auth] Profile fetch failed, using session data')}
   var sr=localStorage.getItem('autodial_role');if(sr){window._role=sr;if(isCreator((_prof?.email||_user?.email||'').toLowerCase()))window._role='main';authGrant()}else{if(isCreator(_user.email)){window._role='main';authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
 
-if(getSB()){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(function(){if(!window._mounted){window._mounted=true;initApp()}},100)}
+if(_SB){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(function(){if(!window._mounted){window._mounted=true;initApp()}},100)}
 
 // Bind auth buttons
 document.addEventListener('DOMContentLoaded',function(){
@@ -269,8 +264,6 @@ document.addEventListener('DOMContentLoaded',function(){
       b.style.background='var(--adim)';b.style.borderColor='var(--accent)';b.style.color='#f1f5f9';
     });
   });
-  // Clear console after load (removes harmless CDN cross-origin errors)
-  setTimeout(function(){try{console.clear()}catch(e){}},500);
   document.getElementById('btn-pendout')?.addEventListener('click',function(){authLogout()});
   document.getElementById('auth-pass')?.addEventListener('keydown',function(e){if(e.key==='Enter')authLogin()});
 });
@@ -3359,7 +3352,7 @@ function initApp(){
     root.render(<App/>);
   }catch(e){
     console.error('[AutoDial] Render error:',e);
-    document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center;color:#f87171"><h2>AutoDial Error</h2><p>'+e.message+'</p><button onclick="localStorage.clear();location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#6366f1;color:white;border:none;border-radius:10px;cursor:pointer">Clear Data & Retry</button><button onclick="location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:10px;cursor:pointer">Reload</button></div>';
+    document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center;color:#f87171"><h2>⚠️ AutoDial Error</h2><p style="color:#8b949e">'+e.message+'</p><button onclick="localStorage.clear();location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#6366f1;color:white;border:none;border-radius:10px;cursor:pointer;font-size:14px">Clear Data & Retry</button><button onclick="location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:10px;cursor:pointer;font-size:14px">Reload</button></div>';
   }
 }
 window.initApp=initApp;
