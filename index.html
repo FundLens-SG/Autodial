@@ -247,14 +247,23 @@ window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)r
     '- "Residential Status" = race\n'+
     '- If a column has dates like "12/05/1990" or "1990-05-12", it may be birthday. Convert to age using today ('+today+')\n'+
     '- If age column has values AND birthday column exists, prefer computing age from birthday for accuracy\n'+
-    '- The REMARKS/NOTES column often contains status info mixed with free text. Parse it:\n'+
-    '  * Contains "NI" or "not interested" → status=ni\n'+
-    '  * Contains "NP" or "no pick" or just "NP" → status=np, count occurrences for np_count\n'+
-    '  * Contains "CB" or "callback" or a future date/time → status=cb, extract cb_date and cb_time\n'+
-    '  * Contains "appt" or "set" or "appointment" → status=set\n'+
-    '  * Contains "call in" or specific time reference → status=cb\n'+
-    '  * Empty or just "NI"/"NP" with no other info → notes="" \n'+
-    '  * Has extra text beyond status → preserve in notes field\n'+
+    '- The REMARKS/NOTES column often contains status info mixed with free text. Parse it CAREFULLY:\n'+
+    '  * "NI" or "not interested" → status=ni\n'+
+    '  * "NP" or "no pick" or "NPx2" → status=np, extract count for np_count\n'+
+    '  * "CB" or "callback" or "call again" or "call in [time]" → status=cb\n'+
+    '  * "appt set" or "appointment" → status=set\n'+
+    '  * CRITICAL: A date + time + location means APPOINTMENT SET, e.g.:\n'+
+    '    "3pm 28th Feb Kinex Mall Starbucks" → status=set\n'+
+    '    "6.45pm 23rd March Hougang Starbucks" → status=set\n'+
+    '    "1pm 3rd April raffles place starbucks" → status=set\n'+
+    '    "7.15pm 20th March Raffles City" → status=set\n'+
+    '    "11th May 5.30pm Singhealth tower" → status=set\n'+
+    '    "19th April 12pm MapleTree Business City" → status=set\n'+
+    '  * "Callback done on 7th August, to call again" → status=cb (has callback language)\n'+
+    '  * "Callback again very..." → status=cb\n'+
+    '  * "texted" or "contacted" → status=pending (unclear outcome)\n'+
+    '  * Empty → status=pending\n'+
+    '  * If genuinely UNSURE, set status="review" and put full text in notes\n'+
     '- If status is ambiguous or you are unsure, set status="pending" and put the full text in notes for user review\n'+
     '- Return statuses for ALL '+rows.length+' data rows, not just the sample\n'+
     '- For rows beyond the sample, set status="pending" and notes="" unless you can infer from the pattern';
@@ -504,7 +513,7 @@ function getNextTier(n,mins){const tiers=buildTiers(mins);for(let i=0;i<tiers.le
 
 // Column detection + AI parsing
 const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
-function parseSheet(rows,h){const c={};for(const[k,r]of Object.entries(RE))c[k]=h.findIndex(x=>r.test(x.trim()));
+function parseSheet(rows,h){window._learnedPatterns=window._learnedPatterns||{};const c={};for(const[k,r]of Object.entries(RE))c[k]=h.findIndex(x=>r.test(x.trim()));
   if(c.phone===-1)for(let i=0;i<h.length;i++){if(rows.slice(0,15).filter(r=>r[i]&&/^\d{7,15}$/.test(String(r[i]).replace(/[\s\-().+]/g,''))).length>=3){c.phone=i;break}}
   if(c.phone===-1)return{leads:[],error:'No phone column'};
   if(c.name===-1&&c.first===-1)for(let i=0;i<h.length;i++){if(Object.values(c).includes(i))continue;if(rows.slice(0,10).filter(r=>r[i]&&/[a-zA-Z]/.test(String(r[i]))).length>=3){c.name=i;break}}
@@ -515,12 +524,31 @@ function parseSheet(rows,h){const c={};for(const[k,r]of Object.entries(RE))c[k]=
     if(!age&&c.birthday!==-1){try{const bd=new Date(String(r[c.birthday]||''));if(!isNaN(bd.getTime())){age=String(Math.floor((Date.now()-bd.getTime())/31557600000))}}catch(e){}}
     // Get remarks
     const rmk=c.remarks!==-1?String(r[c.remarks]||'').trim():'';
-    // Basic status detection from remarks
-    let status='pending',npCount=0,cbDate='',cbTime='';
-    if(rmk){const rl=rmk.toLowerCase();if(/\bni\b|not interested/i.test(rl))status='ni';else if(/\bnp\b|no pick/i.test(rl)){status='np';npCount=1}else if(/\bappt|appointment|\bset\b/i.test(rl))status='set';else if(/\bcb\b|callback|call back|call in/i.test(rl))status='cb'}
+    // Smart status detection from remarks (with learned patterns)
+    let status='pending',npCount=0,cbDate='',cbTime='',needsReview=false;
+    if(rmk){const rl=rmk.toLowerCase().trim();
+      // Check learned patterns first (user corrections)
+      const _lp=window._learnedPatterns||{};if(_lp[rl]){status=_lp[rl]}
+      else
+      // Exact "NI" or contains "not interested"
+      if(/^ni$/i.test(rmk.trim())||/\bnot interested\b/i.test(rl))status='ni';
+      // NP with optional count: "NP", "NPx2", "NP x 3", "NPx2" (no word boundary needed)
+      else if(/np\s*x?\s*\d*/i.test(rl)&&/np/i.test(rl)&&rl.length<10){status='np';const m=rl.match(/np\s*x?\s*(\d+)/i);npCount=m?parseInt(m[1]):1}
+      // Explicit appointment keywords
+      else if(/\bappt\b|\bappointment\b|appt set/i.test(rl))status='set';
+      // Callback patterns — check BEFORE date+time to avoid "Callback on 7th Aug" being SET
+      else if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))status='cb';
+      else if(/\bcall in\b|\bcall at\b|\bcb\b/i.test(rl))status='cb';
+      // Date+Time pattern = SET (e.g. "3pm 28th Feb Kinex", "6.45pm 23rd March Starbucks")
+      else if((/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl))&&/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl))status='set';
+      // Date+ordinal+month without explicit time but with location words = likely SET
+      else if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)status='set';
+      // Non-empty unknown remark → flag for review
+      else if(rl.length>3)needsReview=true
+    }
     // Also check status column if separate
     if(c.status!==-1&&c.status!==c.remarks){const sv=String(r[c.status]||'').trim().toLowerCase();if(/^ni$/i.test(sv))status='ni';else if(/^np$/i.test(sv))status='np';else if(/^set|^appt/i.test(sv))status='set';else if(/^cb$/i.test(sv))status='cb'}
-    leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age,race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status,npCount,cbDate,cbTime,cbHistory:[],calledAt:null,notes:rmk,sheetRow:ri+2,statusCol:c.remarks!==-1?c.remarks:(c.status!==-1?c.status:-1)})}
+    leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age,race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status,npCount,cbDate,cbTime,cbHistory:[],calledAt:null,notes:rmk,needsReview,sheetRow:ri+2,statusCol:c.remarks!==-1?c.remarks:(c.status!==-1?c.status:-1)})}
   return{leads,error:null,count:leads.length}}
 
 async function aiParse(rows,h){const ai=await aiAnalyzeSheet(h,rows);if(!ai?.columns||ai.columns.phone===-1)return null;
@@ -568,6 +596,9 @@ function App(){
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);const[cbDate,setCbDate]=useState('');const[cbTime,setCbTime]=useState('');
   const[showAppt,setShowAppt]=useState(false);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
+  const[apptLocation,setApptLocation]=useState('');const[apptObs,setApptObs]=useState('');
+  const[savedInvitees,setSavedInvitees]=useState(load('invitees')||[]);
+  useEffect(()=>{save('invitees',savedInvitees)},[savedInvitees]);
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);const[newF,setNewF]=useState({name:'',phone:''});
   const[showFilters,setShowFilters]=useState(false);
@@ -602,6 +633,9 @@ function App(){
   const[rawSheet,setRawSheet]=useState(null); // {headers,rows} for re-analysis
   const[showColPicker,setShowColPicker]=useState(null); // {headers, onPick} for status column selection
   const[aiAnalyzing,setAiAnalyzing]=useState(false);
+  const[learnedPatterns,setLearnedPatterns]=useState(load('learned')||{}); // {remarkText: status}
+  useEffect(()=>{save('learned',learnedPatterns);window._learnedPatterns=learnedPatterns},[learnedPatterns]);
+  const learnStatus=(remark,status)=>{if(!remark||remark.length<2)return;const key=remark.toLowerCase().trim();setLearnedPatterns(p=>({...p,[key]:status}));toast('Learned: "'+remark.slice(0,30)+'…" = '+status.toUpperCase())};
   // Appointments tracking
   const[appointments,setAppointments]=useState(load('appts')||[]);
   const[incentives,setIncentives]=useState(load('incv')||[]); // {id,admin,leadName,type:'met'|'closed',amount,date(current!),apptDate(original),paid}
@@ -952,9 +986,16 @@ function App(){
               {cur.email&&<span className="pill" style={{background:'var(--bg)',color:'var(--blue)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{cur.email}</span>}
             </div>
             {/* Remarks */}
-            {cur.notes&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:10,border:'1px solid var(--border)'}}>
-              <p style={{margin:0,fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:2}}>REMARKS</p>
-              <p style={{margin:0,fontSize:12,color:'var(--text2)',lineHeight:1.4}}>{cur.notes}</p>
+            {(cur.notes||cur.needsReview)&&<div style={{padding:'8px 10px',borderRadius:10,background:cur.needsReview?'rgba(210,153,34,.06)':'var(--bg)',marginBottom:10,border:'1px solid '+(cur.needsReview?'rgba(210,153,34,.2)':'var(--border)')}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
+                <p style={{margin:0,fontSize:10,fontWeight:700,color:cur.needsReview?'var(--amber)':'var(--text3)'}}>
+                  {cur.needsReview?'⚠ UNRECOGNIZED — what is this?':'REMARKS'}</p>
+              </div>
+              {cur.notes&&<p style={{margin:'0 0 6px',fontSize:12,color:'var(--text2)',lineHeight:1.4}}>{cur.notes}</p>}
+              {cur.needsReview&&<div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                {[['ni','NI','var(--red)','var(--rdim)'],['np','NP','var(--amber)','var(--amdim)'],['cb','CB','var(--blue)','var(--bdim)'],['set','Set','var(--green)','var(--gdim)'],['pending','Skip','var(--text3)','var(--bg3)']].map(([s,l,cl,bg])=>
+                  <button key={s} onClick={()=>{setLeads(p=>p.map((x,j)=>j===curIdx?{...x,status:s,needsReview:false}:x));learnStatus(cur.notes,s);toast(cur.name+' marked as '+l)}} style={{padding:'5px 12px',borderRadius:8,background:bg,color:cl,fontSize:10,fontWeight:700}}>{l}</button>)}
+              </div>}
             </div>}
             {phase==='calling'&&<>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,width:'100%'}}>
@@ -963,16 +1004,24 @@ function App(){
                 <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
                 <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set</button>
               </div>
-              {/* Adjustable delay timer */}
-              <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10,marginTop:10}}>
+              {/* Adjustable delay timer ±1s */}
+              <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,marginTop:10}}>
                 <span style={{fontSize:10,color:'var(--text3)'}}>Delay:</span>
-                <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-5)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>-</button>
-                <span className="mono" style={{fontSize:14,fontWeight:700,color:'var(--accent2)',minWidth:32,textAlign:'center'}}>{cfg.delay}s</span>
-                <button onClick={()=>setCfg(s=>({...s,delay:s.delay+5}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+                <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
+                <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:36,textAlign:'center'}}>{cfg.delay}s</span>
+                <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
               </div>
             </>}
           </>
-        ):(!showNextPreview&&<div style={{textAlign:'center',padding:'24px 0'}}><p style={{color:'var(--text3)',fontSize:13}}>{pending.length?'Ready - '+pending.length+' leads':'Upload leads to start'}</p></div>)}
+        ):(!showNextPreview&&<div style={{textAlign:'center',padding:'20px 0'}}>
+            <p style={{color:'var(--text3)',fontSize:13,marginBottom:10}}>{pending.length?'Ready — '+pending.length+' leads':'Upload leads to start'}</p>
+            {pending.length>0&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+              <span style={{fontSize:10,color:'var(--text3)'}}>Call delay:</span>
+              <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
+              <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:36,textAlign:'center'}}>{cfg.delay}s</span>
+              <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+            </div>}
+          </div>)}
       </div>
 
       {/* ═══ NEXT LEAD PREVIEW ═══ */}
@@ -1738,35 +1787,60 @@ function App(){
 
     {/* Appt Modal */}
     {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
-      <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
+      <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,maxHeight:'85vh',overflowY:'auto',borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
         <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'var(--green)'}}>✓ Appointment Set!</h3>
-        <p style={{margin:'0 0 4px',fontSize:14,fontWeight:700,color:'#f1f5f9'}}>{apptLead?.name||'Lead'}</p>
-        <p style={{margin:'0 0 14px',fontSize:12,color:'var(--text3)'}}>Add to Google Calendar?</p>
-        <input type="date" value={apptDate} onChange={e=>setApptDate(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
-        <input type="time" value={apptTime} onChange={e=>setApptTime(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
-        <input value={apptInvite} onChange={e=>setApptInvite(e.target.value)} placeholder="Invite emails (comma sep)" style={{marginBottom:14}}/>
-        <div style={{display:'flex',gap:8}}>
-          <button onClick={async()=>{if(!apptDate||!apptTime)return;
-            const dur=apptDuration||60;const lead=apptLead;
-            try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
-              const evt=await gCal.create('Appt: '+(lead?.name||''),lead?.phone||'',s.toISOString(),end.toISOString(),apptInvite?apptInvite.split(',').map(s=>s.trim()):[]);
-              // Save to DB
-              DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite},_user?.id);
-              // Notify Main
-              DB.notify(null,'appt_set',`📅 ${myEmail} set appointment`,`${lead?.name} on ${apptDate} at ${apptTime} (${dur}min)`,{leadName:lead?.name,apptDate,apptTime});
-              // Also update the local appointment entry with date/time
-              if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||''}:a));
-              // Offer WhatsApp
-              setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
-              toast('Event created!')}catch(e){toast(e.message,'err')}setShowAppt(false)}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
-          <button onClick={()=>setShowAppt(false)} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
+        {/* Auto-filled client info */}
+        <div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:12,border:'1px solid var(--border)'}}>
+          <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{apptLead?.name||'Lead'}</p>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
+            <span className="mono" style={{fontSize:11,color:'var(--text2)'}}>{apptLead?.phone}</span>
+            {apptLead?.age&&<span style={{fontSize:10,color:'var(--text3)'}}>· {apptLead.age} yrs</span>}
+            {apptLead?.email&&<span style={{fontSize:10,color:'var(--blue)',overflow:'hidden',textOverflow:'ellipsis',maxWidth:180}}>· {apptLead.email}</span>}
+            {apptLead?.gender&&<span style={{fontSize:10,color:'var(--text3)'}}>· {apptLead.gender}</span>}
+            {apptLead?.race&&<span style={{fontSize:10,color:'var(--text3)'}}>· {apptLead.race}</span>}
+          </div>
+          {apptLead?.notes&&<p style={{margin:'4px 0 0',fontSize:10,color:'var(--amber)'}}>📝 {apptLead.notes}</p>}
         </div>
-        <div style={{marginTop:10}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
-          <input type="number" value={apptDuration} onChange={e=>{const v=+e.target.value;if(v>0)setApptDuration(v)}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+        <p style={{margin:'0 0 10px',fontSize:12,color:'var(--text3)'}}>Add to Google Calendar</p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+          <input type="date" value={apptDate} onChange={ev=>setApptDate(ev.target.value)} style={{colorScheme:'dark'}}/>
+          <input type="time" value={apptTime} onChange={ev=>setApptTime(ev.target.value)} style={{colorScheme:'dark'}}/>
+        </div>
+        <input value={apptLocation} onChange={ev=>setApptLocation(ev.target.value)} placeholder="📍 Location (e.g. Starbucks Raffles Place)" style={{marginBottom:8}}/>
+        {/* Invitees with memory */}
+        <input value={apptInvite} onChange={ev=>setApptInvite(ev.target.value)} placeholder="Invite emails (comma sep)" style={{marginBottom:4}}/>
+        {savedInvitees.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8}}>
+          {savedInvitees.slice(0,6).map(em=><button key={em} onClick={()=>setApptInvite(p=>p?(p+','+em):em)} style={{padding:'3px 8px',borderRadius:6,background:'var(--bg)',color:'var(--accent2)',fontSize:9,fontWeight:600,border:'1px solid var(--border)'}}>{em}</button>)}
+        </div>}
+        {/* FC Observations */}
+        <textarea value={apptObs} onChange={ev=>setApptObs(ev.target.value)} rows={3} placeholder="Observations for specialist…" style={{width:'100%',marginBottom:4,background:'var(--bg2)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:12,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
+        <p style={{margin:'0 0 10px',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>Hint: Receptiveness, industry, tone, objections (questions ≠ objections), and any observations that could help your specialist</p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
+            <input type="number" value={apptDuration} onChange={ev=>{const v=+ev.target.value;if(v>0)setApptDuration(v)}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={async()=>{if(!apptDate||!apptTime)return toast('Set date & time','err');
+            const dur=apptDuration||60;const lead=apptLead;
+            // Build rich description with client info
+            const desc=['Client: '+(lead?.name||''),'Phone: '+(lead?.phone||''),lead?.age?'Age: '+lead.age:'',lead?.email?'Email: '+lead.email:'',lead?.race?'Background: '+lead.race:'',apptObs?'\nFC Notes:\n'+apptObs:'',lead?.notes?'\nSheet Remarks: '+lead.notes:''].filter(Boolean).join('\n');
+            try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
+              const invites=apptInvite?apptInvite.split(',').map(s=>s.trim()).filter(Boolean):[];
+              const evt=await gCal.create('Appt: '+(lead?.name||'')+(apptLocation?' @ '+apptLocation:''),desc,s.toISOString(),end.toISOString(),invites);
+              // Remember new invitees
+              if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
+              DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation},_user?.id);
+              DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
+              if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs}:a));
+              setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
+              toast('Event created!')}catch(ev){toast(ev.message,'err')}
+            setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
+          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
+        </div>
       </div>
     </div>}
 
-    {/* ═══ WhatsApp Template Modal ═══ */}
+    {/* ═══ WhatsApp Template Modal ═══ */}    {/* ═══ WhatsApp Template Modal ═══ */}
     {showWA&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowWA(null)}>
       <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
         <h3 style={{margin:'0 0 8px',fontSize:17,fontWeight:800,color:'#25d366'}}>💬 Send WhatsApp</h3>
@@ -1804,11 +1878,14 @@ function App(){
               const rowIdx=i;if(rowIdx>=r.length)return l;
               const rmk=String(r[rowIdx][col.idx]||'').trim();
               let status='pending',npCount=l.npCount;
-              const rl=rmk.toLowerCase();
-              if(/\bni\b|not interested/i.test(rl))status='ni';
-              else if(/\bnp\b|no pick/i.test(rl)){status='np';npCount=Math.max(1,npCount)}
-              else if(/\bappt|appointment|\bset\b/i.test(rl))status='set';
-              else if(/\bcb\b|callback|call back|call in/i.test(rl))status='cb';
+              const rl=rmk.toLowerCase().trim();
+              if(/^ni$/i.test(rmk.trim())||/\bnot interested\b/i.test(rl))status='ni';
+              else if(/np/i.test(rl)&&rl.length<10){status='np';const m=rl.match(/np\s*x?\s*(\d+)/i);npCount=m?parseInt(m[1]):Math.max(1,npCount)}
+              else if(/\bappt\b|\bappointment\b|appt set/i.test(rl))status='set';
+              else if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))status='cb';
+              else if(/\bcall in\b|\bcall at\b|\bcb\b/i.test(rl))status='cb';
+              else if((/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl))&&/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl))status='set';
+              else if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)status='set';
               return{...l,status,npCount,notes:rmk,statusCol:col.idx}});
             setLeads(reLeads);
             const detected=reLeads.filter(x=>x.status!=='pending').length;
