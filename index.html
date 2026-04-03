@@ -307,7 +307,7 @@ window.parseAgeRange=function(a){if(!a)return null;var s=String(a).trim(),d=pars
 window.getNextDialable=function(leads,after,f){f=f||{};var now=new Date();for(var i=(after>=0?after+1:0);i<leads.length;i++){var l=leads[i];
   if(l.status==='ni'||l.status==='set')continue;
   // Safety net: re-check remarks for obvious NI/SET even if status is wrong
-  if(l.notes){var _rl=l.notes.toLowerCase().trim();if(/^ni$/i.test(l.notes.trim()))continue;if(/not interested/i.test(_rl))continue}if(l.status==='np'&&l.npCount>=5)continue;if(f.skipAllNP&&l.status==='np')continue;
+  if(l.notes){var _rl=l.notes.toLowerCase().trim();if(/^ni$/i.test(l.notes.trim()))continue;if(/not interested/i.test(_rl))continue}if(l.status==='np'&&l.npCount>=(f.npMax||5))continue;if(f.skipAllNP&&l.status==='np')continue;
   if(l.status==='cb'){if(f.includeCB){/* don't skip — include all CB */}else{if(!l.cbDate||!l.cbTime)continue;try{var diff=(new Date(l.cbDate+'T'+l.cbTime)-now)/6e4;if(diff>15||diff<-5)continue}catch(e){continue}}}
   if(f.genderFilter&&f.genderFilter!=='all'){var g=detectGender(l);if(g&&g!==f.genderFilter)continue}
   if(f.ageFilter&&f.ageMin){var ar=parseAgeRange(l.age);if(ar&&(ar.max<(+f.ageMin)||ar.min>(+f.ageMax||999)))continue}
@@ -587,28 +587,28 @@ function validateStatuses(leads,rawRows,remarksIdx){
     // Learned patterns first
     if(lp[rl])return Object.assign({},l,{status:lp[rl],_validated:true});
     // Hard rules — these are CERTAIN
-    if(/^ni$/i.test(rmk))return Object.assign({},l,{status:'ni',_validated:true});
-    if(/\bnot interested\b/i.test(rl))return Object.assign({},l,{status:'ni',_validated:true});
+    if(/^ni$/i.test(rmk))return Object.assign({},l,{status:'ni',_validated:true,notes:rmk||l.notes});
+    if(/\bnot interested\b/i.test(rl))return Object.assign({},l,{status:'ni',_validated:true,notes:rmk||l.notes});
     // NP with count
     if(/^np\s*x?\s*\d*$/i.test(rmk)){var m=rl.match(/np\s*x?\s*(\d+)/i);return Object.assign({},l,{status:'np',npCount:m?parseInt(m[1]):1,_validated:true})}
     // Contains NI as standalone word (e.g. "5328 NI")
-    if(/\bni\b/i.test(rl)&&rl.length<20&&!/callback|call|appt|set/i.test(rl))return Object.assign({},l,{status:'ni',_validated:true});
+    if(/\bni\b/i.test(rl)&&rl.length<20&&!/callback|call|appt|set/i.test(rl))return Object.assign({},l,{status:'ni',_validated:true,notes:rmk||l.notes});
     // Explicit appointment keywords
-    if(/\bappt set\b|\bappointment set\b/i.test(rl))return Object.assign({},l,{status:'set',_validated:true});
-    if(/\bappt\b|\bappointment\b/i.test(rl)&&!/cancel/i.test(rl))return Object.assign({},l,{status:'set',_validated:true});
+    if(/\bappt set\b|\bappointment set\b/i.test(rl))return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
+    if(/\bappt\b|\bappointment\b/i.test(rl)&&!/cancel/i.test(rl))return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
     // Callback keywords — check BEFORE date patterns
-    if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true});
-    if(/\bcall in\b|\bcall at\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true});
+    if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes});
+    if(/\bcall in\b|\bcall at\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes});
     // Date+Time = SET (e.g. "3pm 28th Feb Kinex")
     var hasTime=/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl);
     var hasMonth=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl);
-    if(hasTime&&hasMonth)return Object.assign({},l,{status:'set',_validated:true});
+    if(hasTime&&hasMonth)return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
     // Date+ordinal+month with location text
-    if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)return Object.assign({},l,{status:'set',_validated:true});
+    if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
     // NP anywhere (but not in longer words)
-    if(/\bnp\b/i.test(rl)&&rl.length<15)return Object.assign({},l,{status:'np',npCount:1,_validated:true});
+    if(/\bnp\b/i.test(rl)&&rl.length<15)return Object.assign({},l,{status:'np',npCount:1,_validated:true,notes:rmk||l.notes});
     // Unknown non-empty remark
-    if(rl.length>3)return Object.assign({},l,{needsReview:true});
+    if(rl.length>3)return Object.assign({},l,{needsReview:true,notes:rmk});
     return l;
   });
 }
@@ -639,7 +639,7 @@ function App(){
     if(changed>0)console.log('[AutoDial] Fixed '+changed+' stale lead statuses from cache');
     return fixed;
   });
-  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10});
+  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
   const[running,setRunning]=useState(false);
   const[curIdx,setCurIdx]=useState(-1);
@@ -702,6 +702,10 @@ function App(){
   const[usersList,setUsersList]=useState([]);
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
+  const[showPostCall,setShowPostCall]=useState(null);
+  const[postCallNote,setPostCallNote]=useState('');
+  const[sessionTarget,setSessionTarget]=useState(load('starget')||{type:'dials',count:50});
+  useEffect(()=>{save('starget',sessionTarget)},[sessionTarget]);
 
   const myEmail=(window._prof?.email||'').toLowerCase();
   const myCfg=role==='admin'&&adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg;
@@ -857,7 +861,7 @@ function App(){
 
   const applyOutcome=useCallback((status,extra={})=>{const idx=curIdx;
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
-      if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=5?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
+      if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=(myCfg.npMax||5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
       else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
       else if(status==='set'){u.status='set';syncSheet(u,'set');
         // Auto-create appointment entry
@@ -895,17 +899,34 @@ function App(){
   const handleOutcome=useCallback((status,extra={})=>{
     if(status==='set'){const lead=curIdx>=0&&curIdx<leads.length?{...leads[curIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
     else{applyOutcome(status,extra)}
-    // Show next lead preview after brief delay
+    // Show post-call remarks input
+    setShowPostCall({leadIdx:curIdx,status});setPostCallNote('');
+    },[applyOutcome,curIdx,leads,filters]);
+
+  const finishPostCall=useCallback(()=>{
+    if(postCallNote.trim()&&showPostCall){
+      const idx=showPostCall.leadIdx;
+      setLeads(p=>p.map((l,i)=>i===idx?{...l,notes:(l.notes?l.notes+' | ':'')+postCallNote.trim()}:l));
+      // Write back to Google Sheet
+      if(cfg.sheetId&&leads[idx]?.statusCol>=0&&leads[idx]?.sheetRow){
+        const lead=leads[idx];const col=String.fromCharCode(65+lead.statusCol);
+        const val=(lead.notes?lead.notes+' | ':'')+postCallNote.trim();
+        if(localStorage.getItem('ad_gt'))gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,val).catch(()=>{})
+      }
+    }
+    setShowPostCall(null);
+    // Now show next lead preview
     setTimeout(()=>{
-      const nextIdx=getNextDialable(leads,curIdx,filters);
-      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done! 🎉','info');return}
+      const nextIdx=getNextDialable(leads,showPostCall?.leadIdx??curIdx,{...filters,npMax:myCfg.npMax||5});
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info');return}
       setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')
-    },200)},[applyOutcome,curIdx,leads,filters]);
+    },100)
+  },[postCallNote,showPostCall,leads,curIdx,filters,cfg,myCfg]);
 
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}},[phase,countdown,running,cur,dial]);
 
-  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,filters);if(f===-1){toast('No eligible leads','err');return}
+  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,{...filters,npMax:myCfg.npMax||5});if(f===-1){toast('No eligible leads','err');return}
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
   const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
@@ -964,8 +985,8 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const callTabs=[['dial','📞 Dial'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['history','📊'],['leads','📋'],['settings','⚙️']];
-  const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊'],['settings','⚙️']];
+  const callTabs=[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
   const tabs=isCallMode?callTabs:manageTabs;
@@ -1082,6 +1103,7 @@ function App(){
                 <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
                 <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
                 <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set</button>
+                <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip → (don't mark)</button>
               </div>
               {/* Adjustable delay timer ±1s */}
               <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,marginTop:10}}>
@@ -1102,6 +1124,15 @@ function App(){
             </div>}
           </div>)}
       </div>
+
+      {/* ═══ POST-CALL REMARKS ═══ */}
+      {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.2)'}}>
+        <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent)',textTransform:'uppercase',letterSpacing:'.1em'}}>Quick note (optional)</p>
+        <input value={postCallNote} onChange={e=>setPostCallNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')finishPostCall()}} placeholder="Receptiveness, tone, objections..." style={{marginBottom:8,fontSize:12}} autoFocus/>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={finishPostCall} style={{flex:1,padding:'10px',background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700}}>{postCallNote.trim()?'Save & Next':'Skip to Next'}</button>
+        </div>
+      </div>}
 
       {/* ═══ NEXT LEAD PREVIEW ═══ */}
       {showNextPreview&&nextPreviewLead&&running&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.3)',background:'linear-gradient(135deg,rgba(99,102,241,.04),transparent)'}}>
@@ -1127,7 +1158,7 @@ function App(){
           <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>📞 Dial</button>
           <button onClick={()=>{
             // Skip this lead, find the one after
-            const skipIdx=getNextDialable(leads,nextPreviewIdx,filters);
+            const skipIdx=getNextDialable(leads,nextPreviewIdx,{...filters,npMax:myCfg.npMax||5});
             if(skipIdx===-1){toast('No more leads','info');setShowNextPreview(false);setRunning(false);setPhase('idle');return}
             setNextPreviewIdx(skipIdx)
           }} style={{flex:1,padding:'12px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Skip →</button>
@@ -1286,7 +1317,7 @@ function App(){
                   toast(`+$${myCfg.metIncentive||10} incentive for meeting ${a.name} (added to current billing cycle)`)}
                 if(k==='flykite')toast(a.name+' — fly kite 🪁');
                 // Closed → tip also uses CURRENT date for billing
-                if(k==='closed'){const tip=prompt('Tip amount for '+a.name+' ($):');const t=parseFloat(tip)||0;
+                if(k==='closed'){const tip=prompt((role==='main'?'EFYC (Est. First Year Commission)':'Tip amount')+' for '+a.name+' ($):');const t=parseFloat(tip)||0;
                   setAppointments(p=>p.map(x=>x.id===a.id?{...x,tip:t,followUp:'closed',followUpDate:now}:x));
                   if(t>0){
                     setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:'closed',
@@ -1301,7 +1332,7 @@ function App(){
           
           {/* Closed: show tip and paid status */}
           {a.followUp==='closed'&&<div style={{display:'flex',alignItems:'center',gap:8,marginTop:6}}>
-            <span style={{fontSize:12,color:'var(--gold)'}}>💰 Tip: ${a.tip||0}</span>
+            <span style={{fontSize:12,color:'var(--gold)'}}>💰 {role==='main'?'EFYC':'Tip'}: ${a.tip||0}</span>
             {a.tipPaid?<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Paid</span>
             :isMain&&<button onClick={()=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,tipPaid:true}:x))} style={{padding:'4px 10px',borderRadius:6,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Tip Paid</button>}
           </div>}
@@ -1577,17 +1608,154 @@ function App(){
       <div style={{height:80}}/>
     </div>}
 
-    {tab==='history'&&isCallMode&&<div className='content-pad'>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" style={{marginBottom:8}}/>
-      <button onClick={exportCSV} style={{width:'100%',padding:'10px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginBottom:10}}>⬇ Export CSV</button>
-      {leads.filter(l=>l.status!=='pending').filter(l=>!search||l.name.toLowerCase().includes(search.toLowerCase())||l.phone.includes(search)).map(l=>
-        <div key={l.id} className="card" style={{marginBottom:5,padding:'10px 12px'}}>
-          <div style={{display:'flex',alignItems:'center',gap:8}}>
-            <div style={{width:28,height:28,borderRadius:8,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,color:ST[l.status]?.c}}>{l.name.charAt(0)}</div>
-            <div style={{flex:1}}><span style={{fontSize:12,fontWeight:600,color:'#cbd5e1'}}>{l.name}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div>
+    {tab==='analytics'&&isCallMode&&<div className='content-pad'>
+      {/* Session Target */}
+      <div className="card" style={{marginBottom:10}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',margin:0}}>Session Target</h3>
+          {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>{Math.round(((sessionTarget.type==='dials'?session.dialed:sessionTarget.type==='connected'?(session.dialed-(session.np||0)):session.sets)/(sessionTarget.count||1))*100)}%</span>}
+        </div>
+        <div style={{display:'flex',gap:4,marginBottom:8}}>
+          {[['dials','Dials'],['connected','Connected'],['sets','Appts']].map(([k,l])=>
+            <button key={k} onClick={()=>setSessionTarget(p=>({...p,type:k}))} style={{flex:1,padding:'6px',borderRadius:8,background:sessionTarget.type===k?'var(--adim)':'var(--bg)',color:sessionTarget.type===k?'var(--accent2)':'var(--text3)',fontSize:10,fontWeight:600}}>{l}</button>)}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <button onClick={()=>setSessionTarget(p=>({...p,count:Math.max(1,p.count-5)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>-</button>
+          <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:32,textAlign:'center'}}>{sessionTarget.count}</span>
+          <button onClick={()=>setSessionTarget(p=>({...p,count:p.count+5}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+        </div>
+        {session&&!session.ended&&<div style={{height:8,borderRadius:4,background:'var(--bg)',overflow:'hidden',marginTop:8}}><div style={{height:'100%',borderRadius:4,width:Math.min(100,((sessionTarget.type==='dials'?session.dialed:sessionTarget.type==='connected'?(session.dialed-(session.np||0)):session.sets)/(sessionTarget.count||1))*100)+'%',background:'linear-gradient(90deg,var(--accent),var(--green))',transition:'width .5s'}}/></div>}
+      </div>
+
+      {/* Hit Rates */}
+      {(()=>{
+        const ts=session&&!session.ended?session:null;
+        const td=sessionLog.reduce((a,s)=>a+(s.dialed||0),0)+(ts?.dialed||0);
+        const tSets=sessionLog.reduce((a,s)=>a+(s.sets||0),0)+(ts?.sets||0);
+        const tNP=sessionLog.reduce((a,s)=>a+(s.np||0),0)+(ts?.np||0);
+        const tConn=td-tNP;
+        const today=new Date().toDateString();
+        const tds=sessionLog.filter(s=>new Date(s.startTime).toDateString()===today);
+        const dDialed=tds.reduce((a,s)=>a+(s.dialed||0),0)+(ts?.dialed||0);
+        const dSets=tds.reduce((a,s)=>a+(s.sets||0),0)+(ts?.sets||0);
+        const dNP=tds.reduce((a,s)=>a+(s.np||0),0)+(ts?.np||0);
+        const dConn=dDialed-dNP;
+        const cpl=cfg.cpl||0;const cost=td*cpl;
+        const efycTotal=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||x.tip||0),0);
+        return<>
+        <div className="card" style={{marginBottom:10}}>
+          <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',margin:'0 0 10px'}}>Hit Rates</h3>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+            <div style={{textAlign:'center',padding:12,borderRadius:10,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>TODAY</p>
+              <p className="mono" style={{margin:'4px 0',fontSize:22,fontWeight:900,color:'var(--accent2)'}}>{dDialed>0?((dSets/dDialed)*100).toFixed(1):'0'}%</p>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Dialed ({dSets}/{dDialed})</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:15,fontWeight:700,color:'var(--green)'}}>{dConn>0?((dSets/dConn)*100).toFixed(1):'0'}%</p>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Connected ({dSets}/{dConn})</p>
+            </div>
+            <div style={{textAlign:'center',padding:12,borderRadius:10,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>LIFETIME</p>
+              <p className="mono" style={{margin:'4px 0',fontSize:22,fontWeight:900,color:'var(--accent2)'}}>{td>0?((tSets/td)*100).toFixed(1):'0'}%</p>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Dialed ({tSets}/{td})</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:15,fontWeight:700,color:'var(--green)'}}>{tConn>0?((tSets/tConn)*100).toFixed(1):'0'}%</p>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Connected ({tSets}/{tConn})</p>
+            </div>
           </div>
-        </div>)}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6}}>
+            {[['Dialed',dDialed,td,'var(--text2)'],['NP',dNP,tNP,'var(--amber)'],['Conn',dConn,tConn,'var(--blue)'],['Set',dSets,tSets,'var(--green)']].map(([l,d,t,cl])=>
+              <div key={l} style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
+                <p style={{margin:0,fontSize:14,fontWeight:800,color:cl}}>{d}</p>
+                <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{l} today</p>
+                <p className="mono" style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{t} total</p>
+              </div>)}
+          </div>
+        </div>
+
+        {cpl>0&&role==='main'&&<div className="card" style={{marginBottom:10,borderColor:'rgba(240,180,41,.2)'}}>
+          <h3 style={{fontSize:13,fontWeight:700,color:'var(--gold)',margin:'0 0 8px'}}>ROI</h3>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+            <div style={{textAlign:'center'}}><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Cost</p><p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:'var(--red)'}}>${cost.toFixed(0)}</p></div>
+            <div style={{textAlign:'center'}}><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>EFYC</p><p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>${efycTotal.toFixed(0)}</p></div>
+            <div style={{textAlign:'center'}}><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>ROI</p><p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:efycTotal>cost?'var(--green)':'var(--red)'}}>{cost>0?((efycTotal/cost)*100).toFixed(0):'--'}%</p></div>
+          </div>
+        </div>}
+
+        {/* Main-only: Business KPIs */}
+        {role==='main'&&cpl>0&&<div className="card" style={{marginBottom:10,borderColor:'rgba(99,102,241,.2)'}}>
+          <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 10px'}}>Business KPIs</h3>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Cost / Connected</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--amber)'}}>{tConn>0?'$'+((td*cpl)/tConn).toFixed(2):'--'}</p>
+            </div>
+            <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Cost / Appt Set</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--amber)'}}>{tSets>0?'$'+((td*cpl)/tSets).toFixed(2):'--'}</p>
+            </div>
+            <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Avg EFYC / Closed</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const cl=appointments.filter(a=>a.followUp==='closed');return cl.length?'$'+(cl.reduce((a,x)=>a+(x.efyc||x.tip||0),0)/cl.length).toFixed(0):'--'})()}</p>
+            </div>
+            <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Revenue / 100 Dials</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const rev=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||x.tip||0),0);return td>0?'$'+((rev/td)*100).toFixed(0):'--'})()}</p>
+            </div>
+          </div>
+          {/* Conversion Funnel */}
+          <div style={{marginTop:12}}>
+            <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--text3)'}}>CONVERSION FUNNEL</p>
+            {(()=>{const metC=appointments.filter(a=>a.followUp==='met'||a.followUp==='closed').length;const clC=appointments.filter(a=>a.followUp==='closed').length;
+              return[['Leads',leads.length,'var(--text2)'],['Dialed',td,'var(--accent2)'],['Connected',tConn,'var(--blue)'],['Set',tSets,'var(--green)'],['Met',metC,'var(--amber)'],['Closed',clC,'var(--gold)']].map(([label,val,color],i,arr)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'3px 0'}}>
+                <div style={{width:Math.max(20,Math.min(100,(val/(leads.length||1))*100))+'%',height:18,borderRadius:5,background:color+'20',display:'flex',alignItems:'center',paddingLeft:6,minWidth:40}}>
+                  <span style={{fontSize:10,fontWeight:700,color}}>{val}</span>
+                </div>
+                <span style={{fontSize:9,color:'var(--text3)',flexShrink:0}}>{label}{i>0&&arr[i-1][1]>0?' ('+((val/arr[i-1][1])*100).toFixed(0)+'%)':''}</span>
+              </div>)})()}
+          </div>
+        </div>}
+
+        {role==='main'&&tSets>0&&<div className="card" style={{marginBottom:10,borderColor:'rgba(99,102,241,.15)'}}>
+          <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 8px'}}>Main Insights</h3>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+            <div style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>EFYC/Appt</p>
+              <p className="mono" style={{margin:0,fontSize:14,fontWeight:800,color:'var(--gold)'}}>${tSets>0?(efycTotal/tSets).toFixed(0):'--'}</p>
+            </div>
+            <div style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Cost/Appt</p>
+              <p className="mono" style={{margin:0,fontSize:14,fontWeight:800,color:'var(--red)'}}>${tSets>0&&cpl>0?(cost/tSets).toFixed(1):'--'}</p>
+            </div>
+            <div style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Close Rate</p>
+              <p className="mono" style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{tSets>0?((appointments.filter(a=>a.followUp==='closed').length/tSets)*100).toFixed(0):'--'}%</p>
+            </div>
+          </div>
+        </div>}
+
+        {(()=>{const phones={};leads.forEach(l=>{const p=l.phone.replace(/[^\d]/g,'');if(p.length>=7){if(!phones[p])phones[p]=[];phones[p].push(l)}});
+          const dupes=Object.entries(phones).filter(([_,a])=>a.length>1);
+          if(!dupes.length)return null;
+          return<div className="card" style={{marginBottom:10,borderColor:'rgba(248,81,73,.2)'}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--red)',margin:'0 0 8px'}}>Dupes ({dupes.length})</h3>
+            {dupes.slice(0,8).map(([ph,arr])=><div key={ph} style={{display:'flex',alignItems:'center',gap:6,padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
+              <span className="mono" style={{fontSize:10,color:'var(--text2)'}}>{ph}</span>
+              <span style={{fontSize:9,color:'var(--text3)',flex:1}}>{arr.map(l=>l.name).join(', ')}</span>
+              <button onClick={()=>{setLeads(p=>{const seen=new Set();return p.filter(l=>{const k=l.phone.replace(/[^\d]/g,'');if(k===ph){if(seen.has(k))return false;seen.add(k)}return true})});toast('Deduped '+ph)}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600,flexShrink:0}}>x1</button>
+            </div>)}
+          </div>})()}
+
+        <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',margin:'0 0 8px'}}>Sessions</h3>
+        {sessionLog.slice(0,15).map((s,i)=>{const d=new Date(s.startTime);
+          return<div key={i} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+            <div style={{display:'flex',justifyContent:'space-between'}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p><span style={{fontSize:11,color:rank.color}}>{s.rank||s.tier||''}</span></div>
+            <div style={{display:'flex',gap:5,fontSize:10,color:'var(--text3)',marginTop:4}}>
+              <span>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span>NP:{s.np}</span>
+              {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>Replay</button>}
+            </div>
+          </div>})}
+        </>})()}
     </div>}
+
 
     {/* ═══ LIVE DASHBOARD (Main only) ═══ */}
     {tab==='live'&&isManageMode&&<div className='content-pad'>
@@ -1708,15 +1876,16 @@ function App(){
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:10,color:'var(--gold)'}}>💰 Pay Config & Tiers</h3>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Set $/hr and promotion threshold (min appts set) for each tier</p>
         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:10}}>
-          {TIER_META.map((t,i)=><div key={i} style={{background:'var(--bg)',border:'1px solid '+t.color+'30',borderRadius:12,padding:'8px 6px',textAlign:'center'}}>
+          {TIER_META.map((t,i)=>{const enabled=(cfg.tierEnabled||[true,true,true,true,true,true])[i]!==false;return<div key={i} style={{background:'var(--bg)',border:'1px solid '+(enabled?t.color+'30':'var(--border)'),borderRadius:12,padding:'8px 6px',textAlign:'center',opacity:enabled?1:.4,position:'relative'}}>
+            {i>0&&<button onClick={()=>{const te=[...(cfg.tierEnabled||[true,true,true,true,true,true])];while(te.length<6)te.push(true);te[i]=!te[i];setCfg(s=>({...s,tierEnabled:te}))}} style={{position:'absolute',top:3,right:3,width:18,height:18,borderRadius:9,background:enabled?'var(--gdim)':'var(--rdim)',color:enabled?'var(--green)':'var(--red)',fontSize:10,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>{enabled?'✓':'✗'}</button>}
             <p style={{margin:0,fontSize:18}}>{t.emoji}</p>
-            <p style={{margin:'2px 0',fontSize:10,fontWeight:700,color:t.color}}>{t.label}</p>
+            <p style={{margin:'2px 0',fontSize:10,fontWeight:700,color:enabled?t.color:'var(--text3)'}}>{t.label}</p>
             <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>$/hr</label>
-            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0)v=0;const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=v;setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px',marginBottom:4}}/>
+            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0)v=0;const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=v;setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px',marginBottom:4}} disabled={!enabled}/>
             <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Min appts</label>
             <input type="number" min="0" value={(cfg.tierMins||DEF_TIER_MINS)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0)v=0;const m=[...(cfg.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=v;
-              setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0}/>
-          </div>)}
+              setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0||!enabled}/>
+          </div>})}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
           <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Session(h)</label><input type="number" min="0" value={cfg.sessionDur} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,sessionDur:v||5}))}} style={{textAlign:'center'}}/></div>
@@ -1730,7 +1899,8 @@ function App(){
         </div>
         <div style={{marginTop:10}}>
           <label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📅 Billing Day (of each month)</label>
-          <select value={cfg.billingDate||1} onChange={e=>setCfg(s=>({...s,billingDate:+e.target.value}))} style={{fontSize:13}}>
+          <select value={cfg.billingDate||0} onChange={e=>setCfg(s=>({...s,billingDate:+e.target.value}))} style={{fontSize:13}}>
+            <option value={0}>Last day of every month</option>
             {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}{d===1?'st':d===2?'nd':d===3?'rd':'th'} of every month</option>)}
           </select>
         </div>
@@ -1793,6 +1963,40 @@ function App(){
         </div>)}
         {!Object.keys(adminConfigs).length&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:8}}>No custom configs. All admins use defaults.</p>}
       </div>}
+
+      {/* Call Settings */}
+      <div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Settings</h3>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <div>
+            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-convert to NI after this many No Picks</p>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <button onClick={()=>setCfg(s=>({...s,npMax:Math.max(1,(s.npMax||5)-1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
+            <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:24,textAlign:'center'}}>{cfg.npMax||5}</span>
+            <button onClick={()=>setCfg(s=>({...s,npMax:Math.min(20,(s.npMax||5)+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+          </div>
+        </div>
+{role==='main'&&        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Cost per lead</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI in Analytics</p></div>
+          <div style={{display:'flex',alignItems:'center',gap:4}}>
+            <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
+            <input type="number" min="0" step="0.01" value={cfg.cpl||0} onChange={e=>setCfg(s=>({...s,cpl:parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
+          </div>
+        </div>}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div>
+            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Call delay</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Seconds between auto-dial calls</p>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
+            <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:24,textAlign:'center'}}>{cfg.delay}s</span>
+            <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+          </div>
+        </div>
+      </div>
 
       {role==='admin'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>💳 Payment Details</h3>
