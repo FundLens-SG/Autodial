@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="AutoDial">
 <meta name="theme-color" content="#07080d">
 <title>AutoDial</title>
+<script>window.onerror=function(m){if(!m||m==='Script error.'||m==='Script error')return true};</script>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='108' fill='url(%23g)'/%3E%3Cpath d='M352 311v48a16 16 0 01-17 16 158 158 0 01-69-25 156 156 0 01-48-48 158 158 0 01-25-69A16 16 0 01209 216h24a16 16 0 0116 14c1 8 3 15 6 22a16 16 0 01-4 17l-10 10a128 128 0 0048 48l10-10a16 16 0 0117-4c7 3 15 5 22 6A16 16 0 01352 336z' fill='none' stroke='white' stroke-width='18' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%22%2C%22short_name%22%3A%22AutoDial%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22orientation%22%3A%22portrait%22%2C%22background_color%22%3A%22%2307080d%22%2C%22theme_color%22%3A%22%236366f1%22%7D">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -20,7 +21,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async></script>
+<!-- Google GSI loaded on demand --></script>
 <script>
 if(!navigator.locks)navigator.locks={request:(n,o,c)=>{if(typeof o==='function')c=o;return Promise.resolve(c({name:n}))}};
 (function(){var w=console.warn;console.warn=function(){if(typeof(arguments[0])==='string'&&(arguments[0].includes('gotrue')||arguments[0].includes('lock:')))return;w.apply(console,arguments)}})();
@@ -167,14 +168,14 @@ button:active{transform:scale(.97)}
     <div style="margin-bottom:16px">
       <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Account Type</label>
       <div style="display:flex;gap:6px" id="signup-role-pick">
-        <button type="button" data-srole="admin" onclick="document.querySelectorAll('#signup-role-pick button').forEach(b=>{b.style.background='transparent';b.style.borderColor='transparent';b.style.color='var(--text3)'});this.style.background='var(--adim)';this.style.borderColor='var(--accent)';this.style.color='#f1f5f9';window._signupRole='admin'" style="flex:1;padding:12px 8px;border-radius:12px;background:var(--adim);color:#f1f5f9;font-size:12px;font-weight:700;border:2px solid var(--accent);cursor:pointer;text-align:center">&#x1F4DE; Admin<br><span style="font-size:9px;font-weight:400;color:var(--text3)">Caller</span></button>
-        <button type="button" data-srole="main" onclick="document.querySelectorAll('#signup-role-pick button').forEach(b=>{b.style.background='transparent';b.style.borderColor='transparent';b.style.color='var(--text3)'});this.style.background='var(--adim)';this.style.borderColor='var(--accent)';this.style.color='#f1f5f9';window._signupRole='main'" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">&#x1F454; Main<br><span style="font-size:9px;font-weight:400;color:var(--text3)">Manager</span></button>
-        <button type="button" data-srole="both" onclick="document.querySelectorAll('#signup-role-pick button').forEach(b=>{b.style.background='transparent';b.style.borderColor='transparent';b.style.color='var(--text3)'});this.style.background='var(--adim)';this.style.borderColor='var(--accent)';this.style.color='#f1f5f9';window._signupRole='both'" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">&#x1F31F; Both<br><span style="font-size:9px;font-weight:400;color:var(--text3)">Admin + Main</span></button>
+        <button type="button" data-sr="admin" id="sr-admin" style="flex:1;padding:12px 8px;border-radius:12px;background:var(--adim);color:#f1f5f9;font-size:12px;font-weight:700;border:2px solid var(--accent);cursor:pointer;text-align:center">Admin</button>
+        <button type="button" data-sr="main" id="sr-main" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">Main</button>
+        <button type="button" data-sr="both" id="sr-both" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">Both</button>
       </div>
       <p style="font-size:9px;color:var(--text3);margin-top:6px;text-align:center">Owner will review and approve your account</p>
     </div>
     <button class="bp" id="btn-signup">Create Account</button>
-    <button class="bs" id="btn-goback">&#x2190; Back</button>
+    <button class="bs" id="btn-goback">← Back</button>
   </div>
   <div id="auth-pending" style="display:none;text-align:center;padding:24px">
     <div style="font-size:48px;margin-bottom:14px">⏳</div>
@@ -187,13 +188,15 @@ button:active{transform:scale(.97)}
 <div id="toast-area" class="tw"></div>
 
 <script>
+
 // ══════════════════════════════════════════
 //  SUPABASE AUTH + GOOGLE API + AI
 // ══════════════════════════════════════════
 var SB_URL='https://urwfmmgsfunbvwngejey.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyd2ZtbWdzZnVuYnZ3bmdlamV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxODQ5OTQsImV4cCI6MjA5MDc2MDk5NH0.rl3VI-OS7HvGRK-IDXFizYB4oJIYm8Emz5gG6PPbNho';
 // Creator identity protected — set via first-time setup or localStorage
 var CREATOR=(localStorage.getItem('autodial_creator')||'').split(',').filter(Boolean);
-if(!CREATOR.length){CREATOR=['admin'];} // Default placeholder until configured
+if(!CREATOR.length||CREATOR[0]==='admin'){CREATOR=['chungakwanc@gmail.com'];localStorage.setItem('autodial_creator','chungakwanc@gmail.com')}
+window.CREATOR=CREATOR;
 var _SB=null,_user=null,_prof=null;window._role='admin';window._signupRole='admin';
 function isCreator(e){var ce=(e||'').toLowerCase();return CREATOR.some(function(c){return c.toLowerCase()===ce})}
 // First login by creator sets them as creator
@@ -201,7 +204,12 @@ window._setupCreator=function(email){localStorage.setItem('autodial_creator',ema
 function pickRole(r){window._role=r;var a=document.getElementById('btn-admin'),m=document.getElementById('btn-main');
   a.style.background=r==='admin'?'var(--adim)':'transparent';a.style.borderColor=r==='admin'?'var(--accent)':'transparent';a.style.color=r==='admin'?'#f1f5f9':'var(--text3)';
   m.style.background=r==='main'?'var(--adim)':'transparent';m.style.borderColor=r==='main'?'var(--accent)':'transparent';m.style.color=r==='main'?'#f1f5f9':'var(--text3)'}
-try{if(window.supabase)_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'}})}catch(e){}
+// Supabase init is deferred - only created when first needed
+function getSB(){
+  if(_SB)return _SB;
+  try{if(window.supabase){_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'},realtime:{params:{eventsPerSecond:2}}});}}catch(e){}
+  return _SB;
+}
 
 function authMsg(t,type){var e=document.getElementById('auth-message');e.style.display='block';e.style.background=type==='i'?'var(--gdim)':'var(--rdim)';e.style.color=type==='i'?'var(--green)':'var(--red)';e.style.border='1px solid '+(type==='i'?'rgba(63,185,80,.2)':'rgba(248,81,73,.2)');e.textContent=t}
 function authClear(){document.getElementById('auth-message').style.display='none'}
@@ -209,7 +217,7 @@ function authShow(v){authClear();['login','signup','pending'].forEach(function(s
 function toast(m,t){var e=document.createElement('div');e.className='toast t-'+(t||'ok');e.textContent=m;document.getElementById('toast-area').appendChild(e);setTimeout(function(){e.style.opacity='0';e.style.transition='opacity .3s';setTimeout(function(){e.remove()},300)},3000)}
 window.toast=toast;
 
-async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
+async function authLogin(){getSB();authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
   if(!e||!p)return authMsg('Enter email and password');if(!window._role)return authMsg('Select a role');
   authMsg('Signing in…','i');
   try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);
@@ -218,7 +226,7 @@ async function authLogin(){authClear();var e=document.getElementById('auth-email
     try{var sess=await _SB.auth.getSession();if(sess.data?.session?.user){var pr=await _SB.from('profiles').select('approved').eq('id',sess.data.session.user.id).single();if(pr.data&&!pr.data.approved){authShow('pending');return}}}catch(pe){}
     authGrant()}catch(err){authMsg(err.message)}}
 
-async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
+async function authSignup(){getSB();authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
   if(!n||!e||!p)return authMsg('Fill all fields');if(p.length<6)return authMsg('6+ chars');
   authMsg('Creating…','i');
   try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);
@@ -240,10 +248,10 @@ async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.
   _user=s.data.session.user;
   // Always set _prof with auth email as fallback (profiles query may 403)
   _prof={email:_user.email,full_name:_user.user_metadata?.full_name||_user.email,role:'admin'};
-  try{var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof={..._prof,...p.data};if(!p.data.approved&&!isCreator(_user.email)){authShow('pending');return}}}catch(pe){console.warn('[Auth] Profile fetch failed, using session data')}
+  try{var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof=Object.assign({},_prof,p.data);if(!p.data.approved&&!isCreator(_user.email)){authShow('pending');return}}}catch(pe){console.warn('[Auth] Profile fetch failed, using session data')}
   var sr=localStorage.getItem('autodial_role');if(sr){window._role=sr;if(isCreator((_prof?.email||_user?.email||'').toLowerCase()))window._role='main';authGrant()}else{if(isCreator(_user.email)){window._role='main';authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
 
-if(_SB)authCheck();else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(function(){if(!window._mounted){window._mounted=true;initApp()}},100)}
+if(getSB()){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(function(){if(!window._mounted){window._mounted=true;initApp()}},100)}
 
 // Bind auth buttons
 document.addEventListener('DOMContentLoaded',function(){
@@ -253,23 +261,39 @@ document.addEventListener('DOMContentLoaded',function(){
   document.getElementById('btn-gosignup')?.addEventListener('click',function(){authShow('signup')});
   document.getElementById('btn-signup')?.addEventListener('click',function(){authSignup()});
   document.getElementById('btn-goback')?.addEventListener('click',function(){authShow('login')});
+  // Signup role picker
+  document.querySelectorAll('#signup-role-pick button').forEach(function(b){
+    b.addEventListener('click',function(){
+      window._signupRole=b.dataset.sr;
+      document.querySelectorAll('#signup-role-pick button').forEach(function(x){x.style.background='transparent';x.style.borderColor='transparent';x.style.color='var(--text3)'});
+      b.style.background='var(--adim)';b.style.borderColor='var(--accent)';b.style.color='#f1f5f9';
+    });
+  });
+  // Clear console after load (removes harmless CDN cross-origin errors)
+  setTimeout(function(){try{console.clear()}catch(e){}},500);
   document.getElementById('btn-pendout')?.addEventListener('click',function(){authLogout()});
   document.getElementById('auth-pass')?.addEventListener('keydown',function(e){if(e.key==='Enter')authLogin()});
 });
 
 // ══════ REALTIME SYNC ══════
 var _channel=null,_syncCbs=[];
-function initSync(){if(!_SB||!_user?.id)return;if(_channel)try{_SB.removeChannel(_channel)}catch(e){}
+function initSync(){try{if(!_SB||!_user?.id)return;if(_channel)try{_SB.removeChannel(_channel)}catch(e){}
   _channel=_SB.channel('ad-'+_user.id);
   _channel.on('broadcast',{event:'sync'},function(msg){var d=msg.payload;if(!d||d._dev===window._devId)return;_syncCbs.forEach(function(cb){cb(d)})});
-  _channel.subscribe();if(!window._devId)window._devId=Math.random().toString(36).slice(2)}
+  _channel.subscribe();if(!window._devId)window._devId=Math.random().toString(36).slice(2)}catch(e){console.warn('[InitSync]',e)}}
 window.syncSend=function(t,p){if(_channel)_channel.send({type:'broadcast',event:'sync',payload:{...p,type:t,_dev:window._devId,_ts:Date.now()}})};
 window.onSync=function(cb){_syncCbs.push(cb);return function(){_syncCbs=_syncCbs.filter(function(c){return c!==cb})}};
 
 // ══════ GOOGLE API ══════
 var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com',_gToken=null;
 var GSCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
-window.gConnect=function(cb){try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google error','err');return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
+window.gConnect=function(cb){
+  // Lazy-load Google GSI if not available
+  if(typeof google==='undefined'||!google.accounts){
+    var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
+    s.onload=function(){window.gConnect(cb)};s.onerror=function(){toast('Google failed to load','err')};
+    document.head.appendChild(s);return}
+  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google error','err');return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
 window.gF=async function(url,opts){var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google');var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
 window.gSheets={
   async ensureTabs(id,tabNames){
@@ -742,7 +766,7 @@ window.CloudSync={
 };
 </script>
 
-<script type="text/babel">
+<script type="text/babel" data-presets="env,react" data-plugins="proposal-class-properties">
 // ══════════════════════════════════════════════════════
 //  AUTODIAL — React Application
 // ══════════════════════════════════════════════════════
@@ -1504,7 +1528,7 @@ function App(){
   const unpaidEarnings=sessionLog.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0)+incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const unpaidIncentiveTotal=incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const isCreatorUser=isCreator(myEmail);
-  useEffect(()=>{if(isCreatorUser)console.log('[AutoDial] Creator detected:',myEmail,'badge should show')},[]);
+  useEffect(()=>{console.log('[AutoDial] Creator check:',{myEmail,isCreatorUser,userEmail:window._user?.email,profEmail:window._prof?.email,CREATOR:window.CREATOR||'undefined'})},[]);
   const fmtTime=s=>`${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
   const dncCheck=useCallback(()=>{
@@ -1557,7 +1581,8 @@ function App(){
     if(full){
       creditH=sessionDurH; // Met appts bar → full session credit
     }else{
-      creditH=Math.min(actualH,sessionDurH); // Didn't meet bar → actual hours (capped at session)
+      // Round to nearest 30 min (0.5h), minimum 0.5h
+      creditH=Math.max(0.5,Math.round(Math.min(actualH,sessionDurH)*2)/2);
     }
     // Overtime: called >20min beyond the LARGEST slot
     const maxSlotH=slots.length?n(slots[slots.length-1].hours,5):sessionDurH;
@@ -1744,7 +1769,7 @@ function App(){
         <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>AutoDial</h1>
       </div>
       <span style={{fontSize:11,color:'var(--text3)',marginRight:4}}>{userName}</span>
-      {isCreatorUser&&<button onClick={()=>{
+      {(isCreatorUser||isCreator(window._user?.email||''))&&<button onClick={()=>{
         if(_SB){_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data)}setShowApprovalModal(true)}).catch(()=>setShowApprovalModal(true))}else{setShowApprovalModal(true)}
         else setShowApprovalModal(true)
       }} style={{position:'relative',width:30,height:30,borderRadius:8,background:pendingUsers.length?'var(--rdim)':'var(--bg3)',border:'1px solid '+(pendingUsers.length?'rgba(248,81,73,.3)':'var(--border)'),color:pendingUsers.length?'var(--red)':'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,marginRight:2}}>
@@ -3330,25 +3355,12 @@ function App(){
 
 function initApp(){
   try{
-    const root=ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<React.StrictMode><ErrorBoundary><App/></ErrorBoundary></React.StrictMode>);
+    var root=ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App/>);
   }catch(e){
     console.error('[AutoDial] Render error:',e);
-    document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center;color:#f87171"><h2>AutoDial Error</h2><p>'+e.message+'</p><button onclick="location.reload()" style="margin-top:16px;padding:12px 24px;background:#6366f1;color:white;border:none;border-radius:10px;cursor:pointer">Reload</button></div>';
+    document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center;color:#f87171"><h2>AutoDial Error</h2><p>'+e.message+'</p><button onclick="localStorage.clear();location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#6366f1;color:white;border:none;border-radius:10px;cursor:pointer">Clear Data & Retry</button><button onclick="location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:10px;cursor:pointer">Reload</button></div>';
   }
-}
-// Error Boundary component
-class ErrorBoundary extends React.Component{
-  constructor(props){super(props);this.state={hasError:false,error:null}}
-  static getDerivedStateFromError(error){return{hasError:true,error}}
-  componentDidCatch(error,info){console.error('[AutoDial]',error,info)}
-  render(){if(this.state.hasError)return <div style={{padding:40,textAlign:'center'}}>
-    <p style={{fontSize:40,marginBottom:12}}>⚠️</p>
-    <h2 style={{color:'#f87171',marginBottom:8}}>Something went wrong</h2>
-    <p style={{color:'#8b949e',marginBottom:16,fontSize:13}}>{this.state.error?.message||'Unknown error'}</p>
-    <button onClick={()=>{this.setState({hasError:false,error:null});localStorage.clear()}} style={{padding:'12px 24px',background:'#6366f1',color:'white',border:'none',borderRadius:10,cursor:'pointer',fontSize:14,fontWeight:700,marginRight:8}}>Clear Data & Retry</button>
-    <button onClick={()=>location.reload()} style={{padding:'12px 24px',background:'#21262d',color:'#e6edf3',border:'1px solid #30363d',borderRadius:10,cursor:'pointer',fontSize:14,fontWeight:700}}>Reload</button>
-  </div>;return this.props.children}
 }
 window.initApp=initApp;
 </script>
