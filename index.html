@@ -100,6 +100,11 @@ button:active{transform:scale(.97)}
     </div>
     <button class="bp" id="btn-signin">Sign In</button>
     <button class="bs" id="btn-gosignup">Create Account</button>
+    <div style="margin-top:16px;padding:12px;border-radius:12px;background:rgba(248,81,73,.05);border:1px solid rgba(248,81,73,.1)">
+      <p style="font-size:9px;color:var(--text3);line-height:1.5;text-align:center;margin:0">
+        ⚠️ <b style="color:var(--red)">DISCLAIMER</b> — This application is <b>AI-generated</b> and intended for <b>educational & demonstration purposes only</b>. NOT for official commercial use. For official telemarketing, use company-approved <b>DNC-scrubbed</b> phone systems and compliant telemarketer management tools. Users are responsible for compliance with <b>PDPA</b>, <b>DNC Registry</b>, and all applicable data protection regulations. No personal data is stored by the app creator.
+      </p>
+    </div>
   </div>
   <div id="auth-signup" style="display:none">
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Full Name</label><input type="text" id="auth-sname"></div>
@@ -122,10 +127,14 @@ button:active{transform:scale(.97)}
 // ══════════════════════════════════════════
 //  SUPABASE AUTH + GOOGLE API + AI
 // ══════════════════════════════════════════
-var SB_URL='https://mgbxxwoasrwlraffcvab.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nYnh4d29hc3J3bHJhZmZjdmFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODIzMjMsImV4cCI6MjA5MDM1ODMyM30.kJoq_dded4cmW56ymY3NmvmhNxYKFKrwOxbSJvBIfc4';
-var CREATOR=['chungakwanc@gmail.com'];
+var SB_URL='https://urwfmmgsfunbvwngejey.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyd2ZtbWdzZnVuYnZ3bmdlamV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxODQ5OTQsImV4cCI6MjA5MDc2MDk5NH0.rl3VI-OS7HvGRK-IDXFizYB4oJIYm8Emz5gG6PPbNho';
+// Creator identity protected — set via first-time setup or localStorage
+var CREATOR=(localStorage.getItem('autodial_creator')||'').split(',').filter(Boolean);
+if(!CREATOR.length){CREATOR=['admin'];} // Default placeholder until configured
 var _SB=null,_user=null,_prof=null;window._role='admin';
-function isCreator(e){return CREATOR.indexOf((e||'').toLowerCase())>=0}
+function isCreator(e){var ce=(e||'').toLowerCase();return CREATOR.some(function(c){return c.toLowerCase()===ce})}
+// First login by creator sets them as creator
+window._setupCreator=function(email){localStorage.setItem('autodial_creator',email);CREATOR=[email]};
 function pickRole(r){window._role=r;var a=document.getElementById('btn-admin'),m=document.getElementById('btn-main');
   a.style.background=r==='admin'?'var(--adim)':'transparent';a.style.borderColor=r==='admin'?'var(--accent)':'transparent';a.style.color=r==='admin'?'#f1f5f9':'var(--text3)';
   m.style.background=r==='main'?'var(--adim)':'transparent';m.style.borderColor=r==='main'?'var(--accent)':'transparent';m.style.color=r==='main'?'#f1f5f9':'var(--text3)'}
@@ -150,8 +159,12 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
   if(!n||!e||!p)return authMsg('Fill all fields');if(p.length<6)return authMsg('6+ chars');
   authMsg('Creating…','i');
   try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);
-    if(r.data?.user){var cr=isCreator(e);await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr,role:window._role,autodial_role:window._role}).catch(function(){});
-      if(cr){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role};authGrant();return}}
+    // If no creator configured yet, first signup becomes creator
+    var firstUser=CREATOR.length===0||CREATOR[0]==='admin';
+    if(firstUser){window._setupCreator(e)}
+    var cr=isCreator(e);
+    if(r.data?.user){await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr||firstUser,role:window._role,autodial_role:window._role}).catch(function(){});
+      if(cr||firstUser){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role};authGrant();return}}
     authMsg('Created! Awaiting approval.','i');setTimeout(function(){authShow('pending')},1500)}catch(err){authMsg(err.message)}}
 
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
@@ -305,7 +318,96 @@ window.gTimesheet={_id:null,
       return rows.map(function(r){return{date:r[0]||'',day:r[1]||'',admin:r[2]||'',start:r[3]||'',end:r[4]||'',hours:r[5]||'',
         dialed:r[6]||'',np:r[7]||'',cb:r[8]||'',ni:r[9]||'',sets:r[10]||'',tier:r[11]||'',rate:r[12]||'',bonus:r[13]||'',pay:r[14]||'',status:r[15]||''}})
     }catch(e){return[]}}
-};</script>
+};
+
+// ══════════════════════════════════════════════════════
+//  SUPABASE DATABASE LAYER (persistent sync)
+// ══════════════════════════════════════════════════════
+window.DB={
+  // Sessions
+  async saveSess(s,uid,email){if(!_SB)return;try{await _SB.from('autodial_sessions').insert({
+    user_id:uid,email,start_time:new Date(s.startTime).toISOString(),end_time:s.endTime?new Date(s.endTime).toISOString():null,
+    elapsed:s.elapsed,dialed:s.dialed,np:s.np,cb:s.cb,ni:s.ni,sets:s.sets,tier:s.tier,
+    hourly_rate:s.hourlyRate,bonus_mult:s.bonusMult||1.5,is_bonus:!!s.bonus,is_full_session:!!s.fullSession,pay:s.pay||0})}catch(e){console.warn('[DB]',e.message)}},
+  async getSessions(email){if(!_SB)return[];try{var r=await _SB.from('autodial_sessions').select('*').eq('email',email).order('start_time',{ascending:false});return r.data||[]}catch(e){return[]}},
+  async getAllSessions(){if(!_SB)return[];try{var r=await _SB.from('autodial_sessions').select('*').order('start_time',{ascending:false});return r.data||[]}catch(e){return[]}},
+  async markPaid(email){if(!_SB)return;try{await _SB.from('autodial_sessions').update({paid:true,paid_date:new Date().toISOString()}).eq('email',email).eq('paid',false)}catch(e){}},
+
+  // Call Log (session replay)
+  async logAction(sessionId,uid,action,leadName,leadPhone,details){if(!_SB)return;try{await _SB.from('autodial_call_log').insert({
+    session_id:sessionId,admin_id:uid,action,lead_name:leadName,lead_phone:leadPhone,details:details||{}})}catch(e){}},
+  async getCallLog(sessionId){if(!_SB)return[];try{var r=await _SB.from('autodial_call_log').select('*').eq('session_id',sessionId).order('ts',{ascending:true});return r.data||[]}catch(e){return[]}},
+
+  // Appointments
+  async saveAppt(a,uid){if(!_SB)return;try{await _SB.from('autodial_appointments').insert({
+    admin_id:uid,admin_email:a.admin||'',lead_name:a.name,lead_phone:a.phone,appt_date:a.apptDate,appt_time:a.apptTime,
+    duration_mins:a.duration||60,calendar_event_id:a.calEventId||'',invite_emails:a.inviteEmails||''})}catch(e){}},
+  async getAppts(email){if(!_SB)return[];try{var r=await _SB.from('autodial_appointments').select('*').eq('admin_email',email).order('created_at',{ascending:false});return r.data||[]}catch(e){return[]}},
+  async getAllAppts(){if(!_SB)return[];try{var r=await _SB.from('autodial_appointments').select('*').order('created_at',{ascending:false});return r.data||[]}catch(e){return[]}},
+  async updateApptFollowUp(id,followUp,tip){if(!_SB)return;try{await _SB.from('autodial_appointments').update({follow_up:followUp,follow_up_date:new Date().toISOString(),tip:tip||0}).eq('id',id)}catch(e){}},
+
+  // Incentives
+  async saveIncentive(inc){if(!_SB)return;try{await _SB.from('autodial_incentives').insert({
+    admin_id:inc.adminId,admin_email:inc.admin,lead_name:inc.leadName,type:inc.type,amount:inc.amount,
+    billing_date:new Date().toISOString(),appt_original_date:inc.apptOriginalDate||null})}catch(e){}},
+
+  // Payments
+  async savePayment(p){if(!_SB)return;try{await _SB.from('autodial_payments').insert({
+    paid_by:p.paidBy,admin_email:p.admin,amount:p.amount,session_count:p.sessions||0,
+    incentive_count:p.incentives||0,hours:p.hours||0,invoice_num:p.invoiceNum||''})}catch(e){}},
+
+  // Notifications
+  async notify(userId,type,title,body,data){if(!_SB)return;try{await _SB.from('autodial_notifications').insert({user_id:userId,type,title,body,data:data||{}})}catch(e){}},
+  async getNotifs(uid,limit){if(!_SB)return[];try{var r=await _SB.from('autodial_notifications').select('*').eq('user_id',uid).order('created_at',{ascending:false}).limit(limit||20);return r.data||[]}catch(e){return[]}},
+  async markRead(id){if(!_SB)return;try{await _SB.from('autodial_notifications').update({read:true}).eq('id',id)}catch(e){}},
+
+  // CB Queue
+  async addCB(cb){if(!_SB)return;try{await _SB.from('autodial_cb_queue').insert({
+    admin_id:cb.adminId,admin_email:cb.admin,lead_name:cb.name,lead_phone:cb.phone,
+    scheduled_date:cb.cbDate,scheduled_time:cb.cbTime})}catch(e){}},
+  async getCBQueue(email){if(!_SB)return[];try{var r=email?
+    await _SB.from('autodial_cb_queue').select('*').eq('admin_email',email).order('scheduled_date').order('scheduled_time'):
+    await _SB.from('autodial_cb_queue').select('*').order('scheduled_date').order('scheduled_time');return r.data||[]}catch(e){return[]}},
+  async updateCBStatus(id,status){if(!_SB)return;try{await _SB.from('autodial_cb_queue').update({status,called_at:new Date().toISOString()}).eq('id',id)}catch(e){}},
+
+  // WhatsApp Templates
+  async getWATemplates(){if(!_SB)return[];try{var r=await _SB.from('autodial_wa_templates').select('*').order('is_default',{ascending:false});return r.data||[]}catch(e){return[]}},
+  async saveWATemplate(t,uid){if(!_SB)return;try{await _SB.from('autodial_wa_templates').insert({created_by:uid,name:t.name,template:t.template,category:t.category||'custom'})}catch(e){}},
+
+  // Calendar Shares
+  async shareCalendar(ownerId,email,calId,calName){if(!_SB)return;try{await _SB.from('autodial_calendar_shares').insert({
+    owner_id:ownerId,shared_with_email:email,calendar_id:calId||'primary',calendar_name:calName||'Primary'})}catch(e){}},
+  async getSharedCalendars(email){if(!_SB)return[];try{var r=await _SB.from('autodial_calendar_shares').select('*').eq('shared_with_email',email);return r.data||[]}catch(e){return[]}},
+  async getMyShares(uid){if(!_SB)return[];try{var r=await _SB.from('autodial_calendar_shares').select('*').eq('owner_id',uid);return r.data||[]}catch(e){return[]}},
+
+  // Realtime subscriptions for live dashboard
+  subscribeLive(callback){if(!_SB)return null;
+    return _SB.channel('live-dashboard').on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_call_log'},p=>{callback('call',p.new)})
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_appointments'},p=>{callback('appt',p.new)})
+      .on('postgres_changes',{event:'*',schema:'public',table:'autodial_sessions'},p=>{callback('session',p.new)})
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_notifications'},p=>{callback('notif',p.new)})
+      .subscribe()}
+};
+
+// ══════ WHATSAPP DEEP LINK ══════
+window.waLink=function(phone,message){
+  var p=phone.replace(/[^+\d]/g,'');if(!p.startsWith('+'))p='+65'+p;
+  return'https://wa.me/'+p.replace('+','')+'?text='+encodeURIComponent(message)};
+window.waFill=function(template,data){
+  return template.replace(/\{\{(\w+)\}\}/g,function(_,k){return data[k]||''})};
+
+// ══════ CALENDAR SHARING (Google Calendar ACL) ══════
+window.gCalShare={
+  async listCalendars(){try{var r=await gF('https://www.googleapis.com/calendar/v3/users/me/calendarList');return(await r.json()).items||[]}catch(e){return[]}},
+  async share(calId,email,role){try{await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/acl',{method:'POST',
+    body:JSON.stringify({role:role||'reader',scope:{type:'user',value:email}})});return true}catch(e){return false}},
+  async unshare(calId,ruleId){try{await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/acl/'+ruleId,{method:'DELETE'});return true}catch(e){return false}},
+  async getACL(calId){try{var r=await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/acl');return(await r.json()).items||[]}catch(e){return[]}}
+};
+
+// ══════ APPOINTMENT DEFAULT DURATION ══════
+window.DEFAULT_APPT_DURATION=60; // minutes, can be overridden per appointment
+</script>
 
 <script type="text/babel">
 // ══════════════════════════════════════════════════════
@@ -320,8 +422,19 @@ const save=(k,v)=>{try{localStorage.setItem(LS(k),JSON.stringify(v))}catch{}};
 // Status config
 const ST={pending:{c:'var(--text3)',l:'Pending',bg:'rgba(72,79,88,.1)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
 const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?'CB→NP×'+np:'NP×'+np;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
-const TIERS=[{min:0,label:'Bronze 🥉',color:'#cd7f32'},{min:30,label:'Silver 🥈',color:'#c0c0c0'},{min:60,label:'Gold 🥇',color:'#f0b429'}];
-const getTier=n=>{for(let i=TIERS.length-1;i>=0;i--)if(n>=TIERS[i].min)return{...TIERS[i],idx:i};return{...TIERS[0],idx:0}};
+const TIER_META=[
+  {key:'bronze',label:'Bronze',emoji:'🥉',color:'#cd7f32'},
+  {key:'silver',label:'Silver',emoji:'🥈',color:'#c0c0c0'},
+  {key:'gold',label:'Gold',emoji:'🥇',color:'#f0b429'},
+  {key:'plat',label:'Platinum',emoji:'💎',color:'#00d4ff'},
+  {key:'ruby',label:'Platinum Ruby',emoji:'❤️‍🔥',color:'#e11d48'},
+  {key:'elite',label:'Platinum Elite',emoji:'👑',color:'#a855f7'}
+];
+const DEF_TIER_MINS=[0,30,60,100,150,200];
+const DEF_PAY_RATES=[8,10,12,16,20,25];
+function buildTiers(mins){return TIER_META.map((t,i)=>({...t,min:mins?.[i]??DEF_TIER_MINS[i]}))}
+function getTier(n,mins){const tiers=buildTiers(mins);for(let i=tiers.length-1;i>=0;i--)if(n>=tiers[i].min)return{...tiers[i],idx:i};return{...tiers[0],idx:0}}
+function getNextTier(n,mins){const tiers=buildTiers(mins);for(let i=0;i<tiers.length;i++)if(n<tiers[i].min)return{...tiers[i],idx:i};return null}
 
 // Column detection + AI parsing
 const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|remarks|notes|result)$/i};
@@ -358,7 +471,7 @@ function App(){
   const role=window._role||'admin';
   const stored=load('data')||{};
   const[leads,setLeads]=useState(stored.leads||[]);
-  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,12,18],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5});
+  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
   const[running,setRunning]=useState(false);
   const[curIdx,setCurIdx]=useState(-1);
@@ -378,6 +491,7 @@ function App(){
   const[sheetQ,setSheetQ]=useState('');const[sheetResults,setSheetResults]=useState([]);const[sheetSearching,setSheetSearching]=useState(false);
   const[session,setSession]=useState(null);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
+  const[promotionLog,setPromotionLog]=useState(load('promo')||[]);  // [{date,fromTier,toTier,atSets,newRate}]
   const[milestone,setMilestone]=useState(null);const[confetti,setConfetti]=useState(false);
   const[sessionLog,setSessionLog]=useState(load('slog')||[]);
   const[paymentHistory,setPaymentHistory]=useState(load('payh')||[]);
@@ -387,6 +501,26 @@ function App(){
   const[showPaymentDetail,setShowPaymentDetail]=useState(null);
   const[uploadingScreenshot,setUploadingScreenshot]=useState(false);
   const screenshotRef=useRef(null);
+  // New feature states
+  const[liveFeed,setLiveFeed]=useState([]);  // Live dashboard feed
+  const[cbQueue,setCbQueue]=useState([]);     // Callback queue
+  const[notifications,setNotifications]=useState([]);
+  const[waTemplates,setWaTemplates]=useState([]);
+  const[calShares,setCalShares]=useState([]);
+  const[calList,setCalList]=useState([]);
+  const[callLog,setCallLog]=useState([]);     // Current session replay
+  const[apptDuration,setApptDuration]=useState(load('apptDur')||60); // default mins
+  const[showWA,setShowWA]=useState(null);     // WhatsApp template modal
+  const[newWA,setNewWA]=useState({name:'',template:'',category:'appointment'});
+  const[showReplay,setShowReplay]=useState(null); // Session replay modal
+  // Appointments tracking
+  const[appointments,setAppointments]=useState(load('appts')||[]);
+  const[incentives,setIncentives]=useState(load('incv')||[]); // {id,admin,leadName,type:'met'|'closed',amount,date(current!),apptDate(original),paid}
+  const[apptSearch,setApptSearch]=useState('');
+  const[tsSearch,setTsSearch]=useState('');
+  const[leadSearch,setLeadSearch]=useState('');
+  // Billing: fixed date of month (1-28)
+  const billingDate=cfg.billingDate||1;
   const[usersList,setUsersList]=useState([]);
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
@@ -396,10 +530,38 @@ function App(){
 
   useEffect(()=>{save('data',{leads,cfg})},[leads,cfg]);
   useEffect(()=>{save('ts',totalSets)},[totalSets]);
+  useEffect(()=>{save('promo',promotionLog)},[promotionLog]);
   useEffect(()=>{save('slog',sessionLog)},[sessionLog]);
   useEffect(()=>{save('acfg',adminConfigs)},[adminConfigs]);
   useEffect(()=>{save('payh',paymentHistory)},[paymentHistory]);
   useEffect(()=>{save('asess',adminSessions)},[adminSessions]);
+  useEffect(()=>{save('appts',appointments)},[appointments]);
+  useEffect(()=>{save('incv',incentives)},[incentives]);
+  useEffect(()=>{save('apptDur',apptDuration)},[apptDuration]);
+
+  // Initialize new features on mount
+  useEffect(()=>{
+    // Load CB queue
+    DB.getCBQueue(role==='admin'?myEmail:null).then(setCbQueue);
+    // Load WA templates
+    DB.getWATemplates().then(setWaTemplates);
+    // Load notifications
+    if(_user?.id)DB.getNotifs(_user.id).then(setNotifications);
+    // Main: subscribe to live feed
+    if(role==='main'){
+      const sub=DB.subscribeLive((type,data)=>{
+        setLiveFeed(p=>[{type,data,ts:Date.now()},...p].slice(0,50));
+        // Also update CB queue and notifications
+        if(type==='appt')DB.getCBQueue().then(setCbQueue);
+      });
+      // Load calendars for sharing
+      if(gOk)gCalShare.listCalendars().then(setCalList);
+      DB.getMyShares(_user?.id).then(setCalShares);
+      return()=>{if(sub)_SB.removeChannel(sub)};
+    }
+    // Admin: load shared calendars
+    if(role==='admin')DB.getSharedCalendars(myEmail).then(setCalShares);
+  },[]);
 
   // Sync broadcast
   const syncRef=useRef(null);
@@ -423,10 +585,11 @@ function App(){
   const pending=leads.filter(l=>l.status==='pending'||l.status==='cb');
   const cur=curIdx>=0&&curIdx<leads.length?leads[curIdx]:null;
   const progress=leads.length?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
-  const tier=getTier(totalSets);const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
+  const tier=getTier(totalSets,myCfg.tierMins);const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
   const userName=window._prof?.full_name||myEmail||'User';
-  const totalEarnings=sessionLog.reduce((a,s)=>a+(s.pay||0),0);
-  const unpaidEarnings=sessionLog.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0);
+  const totalEarnings=sessionLog.reduce((a,s)=>a+(s.pay||0),0)+incentives.reduce((a,x)=>a+(x.amount||0),0);
+  const unpaidEarnings=sessionLog.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0)+incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
+  const unpaidIncentiveTotal=incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const isCreatorUser=isCreator(myEmail);
   const fmtTime=s=>`${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
@@ -438,8 +601,20 @@ function App(){
   const startSession=()=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false});setElapsed(0);toast('Session started! 🔥')};
   const endSession=()=>{if(!session)return;const s={...session,ended:true,endTime:Date.now(),elapsed};
     const full=s.sets>=myCfg.mThresh,bonus=s.sets>=myCfg.nThresh;
-    s.pay=(full?myCfg.sessionDur:elapsed/3600)*hourlyRate*(bonus?(myCfg.bonusMult||1.5):1);s.fullSession=full;s.bonus=bonus;s.bonusMult=myCfg.bonusMult||1.5;s.hourlyRate=hourlyRate;s.tier=tier.label;
-    setSession(s);setSessionLog(p=>[s,...p]);setRunning(false);setPhase('idle');clearTimeout(cdRef.current);
+    // PROSPECTIVE PAY: hourlyRate is the CURRENT tier rate at this moment.
+    // This rate is LOCKED into this session. Previous sessions keep their own stored rates.
+    // If admin got promoted today, only today's session (and future) uses the new rate.
+    // Sessions from before the promotion are unaffected — they already have their old rate stored.
+    s.pay=(full?myCfg.sessionDur:elapsed/3600)*hourlyRate*(bonus?(myCfg.bonusMult||1.5):1);
+    s.fullSession=full;s.bonus=bonus;s.bonusMult=myCfg.bonusMult||1.5;
+    s.hourlyRate=hourlyRate; // locked at session end — never retroactively changed
+    s.tier=tier.label;s.promotionDate=promotionLog[0]?.date||null;
+    setSession(s);setSessionLog(p=>[{...s,callLog:[...callLog]},...p]);setRunning(false);setPhase('idle');clearTimeout(cdRef.current);
+    // Save to Supabase DB (persistent sync)
+    DB.saveSess(s,_user?.id,myEmail);
+    // Notify Main
+    DB.notify(null,'session_end',`⏱ ${myEmail} ended session`,`${s.sets} appts · $${(s.pay||0).toFixed(2)}`,{email:myEmail,sets:s.sets,pay:s.pay});
+    setCallLog([]); // reset for next session
     syncSend('end',{session:s});
     // Broadcast to Main for aggregate view
     syncSend('adminSession',{session:s,email:myEmail});
@@ -451,14 +626,37 @@ function App(){
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
       if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=5?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
       else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
-      else if(status==='set'){u.status='set';syncSheet(u,'set')}
+      else if(status==='set'){u.status='set';syncSheet(u,'set');
+        // Auto-create appointment entry
+        setAppointments(p=>[...p,{id:Date.now()+Math.random(),leadId:u.id,name:u.name,phone:u.phone,gender:u.gender||detectGender(u)||'',age:u.age||'',
+          apptDate:'',apptTime:'',location:'',industry:'',remarks:'',
+          followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail}])}
       else if(status==='ni'){u.status='ni';syncSheet(u,'ni')}else u.status=status;return u}));
+    // Log action for session replay
+    if(cur)DB.logAction(session?.id||null,_user?.id,status,cur.name,cur.phone,{npCount:cur.npCount,cbDate:extra.cbDate,cbTime:extra.cbTime});
+    setCallLog(p=>[...p,{action:status,lead_name:cur?.name,lead_phone:cur?.phone,ts:new Date().toISOString()}]);
+    // Add to CB queue if callback
+    if(status==='cb'&&cur&&extra.cbDate)DB.addCB({adminId:_user?.id,admin:myEmail,name:cur.name,phone:cur.phone,cbDate:extra.cbDate,cbTime:extra.cbTime||''});
     if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};
       if(status==='np')s.np++;if(status==='ni')s.ni++;if(status==='cb')s.cb++;
       if(status==='set'){s.sets++;const nt=totalSets+1;setTotalSets(nt);
         if(s.sets===myCfg.mThresh){setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'APPTS BAR CLEARED!',sub:`${myCfg.mThresh} appointments!\nFull ${myCfg.sessionDur}hr session logged.\nPush for ${myCfg.nThresh} to unlock ${myCfg.bonusMult||1.5}× BONUS!`,emoji:'🏆'})}
-        else if(s.sets===myCfg.nThresh){setConfetti(true);setTimeout(()=>setConfetti(false),4000);setMilestone({title:'1.5× BONUS UNLOCKED!',sub:`${myCfg.nThresh} appointments!\nYour entire session pay is ${myCfg.bonusMult||1.5}× multiplied!`,emoji:'🔥'})}
-        if(TIERS.some(t=>t.min===nt))setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION!',sub:`${getTier(nt).label}\n$${myCfg.payRates[getTier(nt).idx]}/hr`,emoji:'⭐'})},1500)}
+        else if(s.sets===myCfg.nThresh){setConfetti(true);setTimeout(()=>setConfetti(false),4000);setMilestone({title:'BONUS BAR CLEARED!',sub:`${myCfg.nThresh} appointments!\nYour entire session pay is ${myCfg.bonusMult||1.5}× multiplied!`,emoji:'🔥'})}
+        // Tier promotion check — log the date so pay rate only applies FROM this date forward
+        const tiers=buildTiers(myCfg.tierMins);const matchedTier=tiers.find(t=>t.min===nt&&t.min>0);
+        if(matchedTier){
+          const oldTier=getTier(nt-1,myCfg.tierMins);const newTier=getTier(nt,myCfg.tierMins);
+          const promoDate=new Date().toISOString();
+          // Log promotion: from this date forward, the new rate applies. Previous sessions keep their stored rate.
+          setPromotionLog(p=>[{
+            date:promoDate,
+            fromTier:oldTier.label,toTier:newTier.label,
+            fromRate:myCfg.payRates[oldTier.idx]||0,
+            newRate:myCfg.payRates[newTier.idx]||0,
+            atSets:nt
+          },...p]);
+          setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION! 🚀',sub:`${newTier.label}\n$${myCfg.payRates[oldTier.idx]}/hr → $${myCfg.payRates[newTier.idx]}/hr\n\nNew rate applies from today onwards.\nPrevious sessions keep their original rate.`,emoji:'⭐'})},1500)}
+      }
       return s})},[curIdx,session,totalSets,myCfg,syncSheet]);
 
   const moveNext=useCallback(()=>{setLeads(p=>{const n=getNextDialable(p,curIdx,filters);
@@ -491,8 +689,8 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const adminTabs=[['dial','📞 Dial'],['stats','🏆 Stats'],['timesheet','💰 Pay'],['history','📊'],['leads','📋'],['settings','⚙️']];
-  const mainTabs=[['leads','📋 Leads'],['timesheet','💰 Pay'],['tracking','📊'],['settings','⚙️']];
+  const adminTabs=[['dial','📞 Dial'],['stats','🏆 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['history','📊'],['leads','📋'],['settings','⚙️']];
+  const mainTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊'],['settings','⚙️']];
   const tabs=role==='admin'?adminTabs:mainTabs;
 
   // This is getting very long - rendering the core UI
@@ -515,7 +713,7 @@ function App(){
         <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{userName} {isMob?'📱':'💻'}</p>
       </div>
       {role==='admin'&&<div style={{textAlign:'right'}}>
-        <p style={{margin:0,fontSize:12,fontWeight:800,color:tier.color}}>{tier.label}</p>
+        <p style={{margin:0,fontSize:12,fontWeight:800,color:tier.color}}>{tier.emoji+' '+tier.label}</p>
         <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>${hourlyRate}/hr</p>
       </div>}
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600}}>Out</button>
@@ -584,20 +782,158 @@ function App(){
     </div>}
 
     {/* Other tabs render here - keeping compact */}
-    {tab==='stats'&&role==='admin'&&<div style={{padding:'0 16px',paddingBottom:100}}>
-      <div className="card" style={{textAlign:'center',marginBottom:12,borderColor:tier.color+'30'}}>
-        <p style={{fontSize:48,margin:'0 0 4px'}}>{tier.idx===2?'🥇':tier.idx===1?'🥈':'🥉'}</p>
-        <h2 style={{fontSize:22,fontWeight:900,color:tier.color}}>{tier.label}</h2>
-        <p className="mono" style={{fontSize:28,fontWeight:800,color:'#f1f5f9'}}>{totalSets}</p>
-        <p style={{fontSize:12,color:'var(--text3)'}}>Total Appointments</p>
+    {tab==='stats'&&role==='admin'&&(()=>{
+      const tiers=buildTiers(myCfg.tierMins);
+      const nextT=getNextTier(totalSets,myCfg.tierMins);
+      const prevMin=tiers[tier.idx]?.min||0;
+      const nextMin=nextT?.min||(prevMin+1);
+      const progressPct=nextT?Math.min(100,((totalSets-prevMin)/(nextMin-prevMin))*100):100;
+      return<div style={{padding:'0 16px',paddingBottom:100}}>
+      <div className="card glow-border" style={{textAlign:'center',marginBottom:14,background:'linear-gradient(135deg,'+tier.color+'08,transparent)',borderColor:tier.color+'30'}}>
+        <p style={{fontSize:56,margin:'0 0 4px'}}>{tier.emoji}</p>
+        <h2 style={{fontSize:24,fontWeight:900,color:tier.color,margin:'0 0 4px'}}>{tier.label}</h2>
+        <p className="mono" style={{fontSize:32,fontWeight:900,color:'#f1f5f9'}}>{totalSets}</p>
+        <p style={{fontSize:12,color:'var(--text3)'}}>Appointments Set · ${hourlyRate}/hr</p>
       </div>
+      {nextT&&<div className="card" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {nextT.emoji} {nextT.label}</span>
+          <span className="mono" style={{fontSize:12,fontWeight:700,color:nextT.color}}>{totalSets}/{nextT.min}</span>
+        </div>
+        <div style={{height:10,borderRadius:5,background:'var(--bg)',overflow:'hidden',marginBottom:6}}>
+          <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+tier.color+','+nextT.color+')',transition:'width .5s',boxShadow:'0 0 12px '+nextT.color+'40'}}/>
+        </div>
+        <p style={{margin:0,fontSize:11,color:'var(--text3)',textAlign:'center'}}>{nextT.min-totalSets} more appts to {nextT.label}</p>
+      </div>}
+      {!nextT&&<div className="card" style={{textAlign:'center',padding:16,marginBottom:14,borderColor:'rgba(168,85,247,.2)'}}>
+        <p style={{margin:0,fontSize:14,fontWeight:800,color:'#a855f7'}}>👑 MAX TIER!</p>
+      </div>}
+      <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginBottom:8}}>Tier Roadmap</h3>
+      {tiers.map((t,i)=>{const isActive=tier.idx===i,isPast=tier.idx>i,rate=(myCfg.payRates||DEF_PAY_RATES)[i]||0;
+        return<div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:isPast?.5:1}}>
+          <div style={{width:40,height:40,borderRadius:12,background:isActive?t.color+'20':'var(--bg3)',border:'2px solid '+(isActive?t.color:isPast?'var(--green)':'var(--border)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,flexShrink:0}}>
+            {isPast?'✓':t.emoji}
+          </div>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:13,fontWeight:isActive?800:600,color:isActive?t.color:'var(--text2)'}}>{t.label}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{t.min>0?'≥'+t.min+' appts':'Start'} · ${rate}/hr</p>
+          </div>
+          {isActive&&<span className="pill" style={{background:t.color+'20',color:t.color}}>NOW</span>}
+          {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
+        </div>})}
+      
+      {/* Promotion History — shows when each rate change took effect */}
+      {promotionLog.length>0&&<>
+        <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginTop:16,marginBottom:8}}>📈 Promotion History</h3>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:8}}>New rates apply from the promotion date onwards. Previous sessions keep their original rate.</p>
+        {promotionLog.map((p,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+          <div style={{width:36,height:36,borderRadius:10,background:'var(--adim)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>⭐</div>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:12,fontWeight:700,color:'#f1f5f9'}}>{p.fromTier} → {p.toTier}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{new Date(p.date).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'})} · {p.atSets} total appts</p>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <p className="mono" style={{margin:0,fontSize:13,fontWeight:700,color:'var(--green)'}}>${p.fromRate} → ${p.newRate}</p>
+            <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>per hour</p>
+          </div>
+        </div>)}
+      </>}
+    </div>})()}
+
+    {/* ═══ APPOINTMENTS TAB ═══ */}
+    {tab==='appts'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      <input value={apptSearch} onChange={e=>setApptSearch(e.target.value)} placeholder="🔍 Search appointments…" style={{marginBottom:10}}/>
+      
+      <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+        {[['all','All',''],[' pending','Pending','var(--accent)'],[' met','Met ✅','var(--green)'],[' postponed','Postponed','var(--amber)'],[' flykite','Fly Kite 🪁','var(--red)'],[' closed','Closed 💰','var(--gold)']].map(([k,v,c])=>
+          <button key={k} onClick={()=>setApptSearch(k.trim()==='all'?'':k.trim())} style={{padding:'6px 12px',borderRadius:8,fontSize:10,fontWeight:600,background:apptSearch===k.trim()?'var(--adim)':'var(--bg3)',color:c||'var(--text3)',border:'1px solid '+(apptSearch===k.trim()?'rgba(99,102,241,.3)':'var(--border)')}}>{v}</button>
+        )}
+      </div>
+
+      {appointments.filter(a=>{
+        if(!apptSearch)return true;
+        if(['pending','met','postponed','flykite','closed'].includes(apptSearch))return a.followUp===apptSearch;
+        return(a.name||'').toLowerCase().includes(apptSearch.toLowerCase())||(a.phone||'').includes(apptSearch)
+      }).map((a,i)=>{
+        const isMain=role==='main';const statusColors={pending:'var(--accent)',met:'var(--green)',postponed:'var(--amber)',flykite:'var(--red)',closed:'var(--gold)'};
+        const statusLabels={pending:'Pending',met:'Met ✅',postponed:'Postponed',flykite:'Fly Kite 🪁',closed:'Closed 💰'};
+        return<div key={a.id} className="card" style={{marginBottom:8,borderColor:(statusColors[a.followUp]||'var(--border)')+'30'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+            <div>
+              <p style={{margin:0,fontSize:14,fontWeight:700,color:'#f1f5f9'}}>{a.name}</p>
+              <p className="mono" style={{margin:0,fontSize:11,color:'var(--text3)'}}>{a.phone} {a.gender?'· '+a.gender:''} {a.age?'· '+a.age:''}</p>
+            </div>
+            <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
+          </div>
+          
+          {a.apptDate&&<p style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>📅 {a.apptDate} {a.apptTime} {a.location?'· 📍'+a.location:''}</p>}
+          {a.industry&&<p style={{fontSize:10,color:'var(--text3)',marginBottom:4}}>🏢 {a.industry}</p>}
+          {a.remarks&&<p style={{fontSize:10,color:'var(--text3)',marginBottom:6,fontStyle:'italic'}}>{a.remarks}</p>}
+          
+          {/* Follow-up actions */}
+          {a.followUp==='pending'&&<div style={{display:'flex',gap:5}}>
+            {[['met','Met ✅','var(--green)','var(--gdim)'],['postponed','Postponed','var(--amber)','var(--amdim)'],['flykite','Fly Kite 🪁','var(--red)','var(--rdim)'],['closed','Closed 💰','var(--gold)','var(--golddim)']].map(([k,l,c,bg])=>
+              <button key={k} onClick={()=>{
+                const now=new Date().toISOString();
+                setAppointments(p=>p.map(x=>x.id===a.id?{...x,followUp:k,followUpDate:now}:x));
+                // Met → create incentive with CURRENT date (not appt creation date)
+                // This ensures it lands in the current billing cycle even if appt was months ago
+                if(k==='met'){
+                  setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:'met',
+                    amount:myCfg.metIncentive||10,
+                    date:now, // CURRENT date = this billing cycle
+                    apptOriginalDate:a.createdAt, // when appt was originally set
+                    paid:false}]);
+                  toast(`+$${myCfg.metIncentive||10} incentive for meeting ${a.name} (added to current billing cycle)`)}
+                if(k==='flykite')toast(a.name+' — fly kite 🪁');
+                // Closed → tip also uses CURRENT date for billing
+                if(k==='closed'){const tip=prompt('Tip amount for '+a.name+' ($):');const t=parseFloat(tip)||0;
+                  setAppointments(p=>p.map(x=>x.id===a.id?{...x,tip:t,followUp:'closed',followUpDate:now}:x));
+                  if(t>0){
+                    setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:'closed',
+                      amount:t,
+                      date:now, // CURRENT date = this billing cycle
+                      apptOriginalDate:a.createdAt,
+                      paid:false}]);
+                    toast(`$${t} tip for ${a.name} (added to current billing cycle)`)}}
+              }} style={{flex:1,padding:'8px 2px',borderRadius:8,background:bg,color:c,fontSize:10,fontWeight:700}}>{l}</button>
+            )}
+          </div>}
+          
+          {/* Closed: show tip and paid status */}
+          {a.followUp==='closed'&&<div style={{display:'flex',alignItems:'center',gap:8,marginTop:6}}>
+            <span style={{fontSize:12,color:'var(--gold)'}}>💰 Tip: ${a.tip||0}</span>
+            {a.tipPaid?<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Paid</span>
+            :isMain&&<button onClick={()=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,tipPaid:true}:x))} style={{padding:'4px 10px',borderRadius:6,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Tip Paid</button>}
+          </div>}
+          
+          {/* Met: show as completed */}
+          {a.followUp==='met'&&<p style={{fontSize:10,color:'var(--green)',marginTop:4}}>✓ Meeting completed {a.followUpDate?new Date(a.followUpDate).toLocaleDateString('en-SG'):''}</p>}
+          {a.followUp==='postponed'&&<p style={{fontSize:10,color:'var(--amber)',marginTop:4}}>⏳ Postponed {a.followUpDate?new Date(a.followUpDate).toLocaleDateString('en-SG'):''}</p>}
+          
+          {/* Edit fields (collapsed by default) */}
+          {isMain&&a.followUp==='pending'&&<div style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:6}}>
+              <input value={a.apptDate||''} onChange={e=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,apptDate:e.target.value}:x))} type="date" style={{fontSize:11,padding:8,colorScheme:'dark'}}/>
+              <input value={a.apptTime||''} onChange={e=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,apptTime:e.target.value}:x))} type="time" style={{fontSize:11,padding:8,colorScheme:'dark'}}/>
+            </div>
+            <input value={a.location||''} onChange={e=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,location:e.target.value}:x))} placeholder="Location" style={{fontSize:11,padding:8,marginBottom:6}}/>
+            <input value={a.industry||''} onChange={e=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,industry:e.target.value}:x))} placeholder="Industry" style={{fontSize:11,padding:8,marginBottom:6}}/>
+            <input value={a.remarks||''} onChange={e=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,remarks:e.target.value}:x))} placeholder="Remarks" style={{fontSize:11,padding:8}}/>
+          </div>}
+        </div>})}
+      
+      {!appointments.length&&<div className="card" style={{textAlign:'center',padding:24}}>
+        <p style={{fontSize:24,marginBottom:8}}>📅</p>
+        <p style={{color:'var(--text3)',fontSize:13}}>Appointments appear here when leads are marked "Set"</p>
+      </div>}
     </div>}
 
     {tab==='timesheet'&&<div style={{padding:'0 16px',paddingBottom:100}}>
       <div className="card" style={{marginBottom:12,textAlign:'center',background:'linear-gradient(135deg,rgba(240,180,41,.06),rgba(210,153,34,.03))',borderColor:'rgba(240,180,41,.2)'}}>
         <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em'}}>{role==='admin'?'My Earnings':'Admin Payroll'}</p>
         <p className="mono" style={{margin:'6px 0 2px',fontSize:36,fontWeight:900,color:unpaidEarnings>0?'var(--gold)':'var(--green)'}}>${role==='admin'?totalEarnings.toFixed(2):Object.values(adminSessions).flat().reduce((a,s)=>a+(s.paid?0:(s.pay||0)),0).toFixed(2)}</p>
-        <p style={{margin:0,fontSize:11,color:'var(--text3)'}}>{sessionLog.length} sessions · {tier.label} · ${hourlyRate}/hr</p>
+        <p style={{margin:0,fontSize:11,color:'var(--text3)'}}>{sessionLog.length} sessions · {tier.emoji+' '+tier.label} · ${hourlyRate}/hr</p>
       </div>
 
       {/* Main: Aggregate admin view */}
@@ -626,6 +962,9 @@ function App(){
           const unpaid=sessions.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0);
           const totalHrs=sessions.reduce((a,s)=>{const hc=s.fullSession?myCfg.sessionDur:((s.elapsed||0)/3600);return a+hc},0);
           const totalAppts=sessions.reduce((a,s)=>a+(s.sets||0),0);
+          const adminIncentiveUnpaid=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).reduce((a,x)=>a+(x.amount||0),0);
+          const adminIncentiveCount=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).length;
+          const totalOwed=unpaid+adminIncentiveUnpaid;
           const dates=sessions.map(s=>new Date(s.startTime)).sort((a,b)=>a-b);
           const periodFrom=dates[0]?dates[0].toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
           const periodTo=dates.length>1?dates[dates.length-1].toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
@@ -635,8 +974,8 @@ function App(){
               <div><p style={{margin:0,fontSize:14,fontWeight:700,color:'#f1f5f9'}}>{adminConfigs[email]?.bizName||email}</p>
               <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{email}</p></div>
               <div style={{textAlign:'right'}}>
-                <p className="mono" style={{margin:0,fontSize:20,fontWeight:900,color:unpaid>0?'var(--gold)':'var(--green)'}}>${unpaid.toFixed(2)}</p>
-                <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>of ${total.toFixed(2)} total</p>
+                <p className="mono" style={{margin:0,fontSize:20,fontWeight:900,color:totalOwed>0?'var(--gold)':'var(--green)'}}>${totalOwed.toFixed(2)}</p>
+                <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Sessions: ${unpaid.toFixed(2)}{adminIncentiveUnpaid>0&&` + Incentives: $${adminIncentiveUnpaid.toFixed(2)}`}</p>
               </div>
             </div>
             <div style={{display:'flex',gap:6,marginBottom:8}}>
@@ -647,8 +986,8 @@ function App(){
               <div style={{flex:1,textAlign:'center',padding:'6px',borderRadius:8,background:'var(--bg)'}}>
                 <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{totalAppts}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>Appts</p></div>
             </div>
-            {periodFrom&&<p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Period: {periodFrom}{periodTo?' — '+periodTo:''}</p>}
-            {unpaid>0&&<div style={{display:'flex',gap:6}}>
+            {periodFrom&&<p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Period: {periodFrom}{periodTo?' — '+periodTo:''}{adminIncentiveCount>0&&' · '+adminIncentiveCount+' incentive'+(adminIncentiveCount>1?'s':'')}</p>}
+            {totalOwed>0&&<div style={{display:'flex',gap:6}}>
               <button onClick={()=>{
                 // Generate PDF Invoice
                 try{const doc=new jspdf.jsPDF();const bizName=adminConfigs[email]?.bizName||email;const payNow=adminConfigs[email]?.payNow||'';
@@ -670,9 +1009,14 @@ function App(){
                     rows.push([d.toLocaleDateString('en-SG',{day:'numeric',month:'short'}),s.tier+' · '+(s.sets||0)+' appts',hc.toFixed(1)+' hrs','$'+(s.hourlyRate||0),
                       '$'+base.toFixed(2)])});
                   if(bonusTotal>0)rows.push(['','Bonus (performance)','','','$'+bonusTotal.toFixed(2)]);
+                  // Include unpaid incentives for this admin
+                  const adminIncentives=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email);
+                  const incentiveTotal=adminIncentives.reduce((a,x)=>a+(x.amount||0),0);
+                  adminIncentives.forEach(x=>{rows.push([new Date(x.date).toLocaleDateString('en-SG',{day:'numeric',month:'short'}),(x.type==='met'?'Met incentive':'Tip')+': '+x.leadName,'','','$'+x.amount.toFixed(2)])});
+                  const grandTotal=unpaid+incentiveTotal;
                   doc.autoTable({startY:payNow?75:65,head:[['Date','Description','Hours','Rate','Amount']],body:rows,
                     styles:{fontSize:9,cellPadding:4},headStyles:{fillColor:[99,102,241]},
-                    foot:[['','Total: '+sessions.filter(s=>!s.paid).length+' sessions',totalHrs.toFixed(1)+' hrs','TOTAL','$'+unpaid.toFixed(2)]],
+                    foot:[['','Total: '+sessions.filter(s=>!s.paid).length+' sessions'+(adminIncentives.length?' + '+adminIncentives.length+' incentives':''),totalHrs.toFixed(1)+' hrs','TOTAL','$'+grandTotal.toFixed(2)]],
                     footStyles:{fillColor:[240,240,240],textColor:[0],fontStyle:'bold'}});
                   const fY=doc.lastAutoTable.finalY+15;
                   doc.setFontSize(8);doc.setTextColor(150);doc.text('Freelance admin services. No employer-employee relationship. For tax filing.',20,fY);
@@ -681,9 +1025,12 @@ function App(){
               }} style={{flex:1,padding:'9px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:700}}>📥 Invoice PDF</button>
               <button onClick={()=>{
                 setAdminSessions(p=>({...p,[email]:p[email].map(s=>({...s,paid:true,paidDate:new Date().toISOString()}))}));
-                setPaymentHistory(p=>[{date:new Date().toISOString(),admin:email,amount:unpaid,sessions:sessions.filter(s=>!s.paid).length,hours:totalHrs},...p]);
+                // Also mark this admin's unpaid incentives as paid
+                setIncentives(p=>p.map(x=>(!x.paid&&(x.admin||'').toLowerCase()===email)?{...x,paid:true,paidDate:new Date().toISOString()}:x));
+                const adminIncentiveAmt=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).reduce((a,x)=>a+(x.amount||0),0);
+                setPaymentHistory(p=>[{date:new Date().toISOString(),admin:email,amount:unpaid+adminIncentiveAmt,sessions:sessions.filter(s=>!s.paid).length,hours:totalHrs,incentives:incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).length},...p]);
                 toast(email+' marked paid ✓')
-              }} style={{flex:1,padding:'9px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>✓ Pay ${unpaid.toFixed(2)}</button>
+              }} style={{flex:1,padding:'9px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>✓ Pay ${(unpaid+incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).reduce((a,x)=>a+(x.amount||0),0)).toFixed(2)}</button>
             </div>}
           </div>
         })}
@@ -748,19 +1095,40 @@ function App(){
 
       {/* Session log (Admin read-only, Main can mark paid) */}
       <h3 style={{fontSize:14,fontWeight:700,color:'#f1f5f9',marginTop:16,marginBottom:8}}>Sessions</h3>
-      {sessionLog.map((s,i)=>{const d=new Date(s.startTime);
+      <input value={tsSearch} onChange={e=>setTsSearch(e.target.value)} placeholder="🔍 Search by date, tier…" style={{marginBottom:8,fontSize:12}}/>
+      {sessionLog.filter(s=>!tsSearch||s.tier?.toLowerCase().includes(tsSearch.toLowerCase())||new Date(s.startTime).toLocaleDateString().includes(tsSearch)).map((s,i)=>{const d=new Date(s.startTime);
         return<div key={i} className="card" style={{marginBottom:6,opacity:s.paid?.6:1}}>
           <div style={{display:'flex',justifyContent:'space-between'}}>
             <div><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p>
               <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</p></div>
             <p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:s.paid?'var(--text3)':s.bonus?'var(--gold)':'var(--text)'}}>{s.paid?'PAID':'$'+(s.pay||0).toFixed(2)}</p>
           </div>
-          <div style={{display:'flex',gap:5,fontSize:10,color:'var(--text3)',marginTop:4}}>
+          <div style={{display:'flex',gap:5,fontSize:10,color:'var(--text3)',marginTop:4,alignItems:'center'}}>
             <span>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span>NP:{s.np}</span><span>{s.tier}</span>
+            {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>📹 Replay</button>}
           </div>
           {role==='main'&&!s.paid&&<button onClick={()=>setSessionLog(p=>p.map((x,j)=>j===i?{...x,paid:true,paidDate:new Date().toISOString()}:x))} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
         </div>})}
-      {!sessionLog.length&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{color:'var(--text3)'}}>Complete sessions to see timesheet</p></div>}
+      {!sessionLog.length&&incentives.length===0&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{color:'var(--text3)'}}>Complete sessions to see timesheet</p></div>}
+
+      {/* Incentives (Met/Closed/Tips) — timestamped to CURRENT billing cycle */}
+      {incentives.length>0&&<>
+        <h3 style={{fontSize:14,fontWeight:700,color:'var(--gold)',marginTop:16,marginBottom:8}}>🎯 Incentives & Tips {unpaidIncentiveTotal>0&&<span className="mono" style={{color:'var(--amber)'}}>(${unpaidIncentiveTotal.toFixed(2)} unpaid)</span>}</h3>
+        {incentives.map((x,i)=><div key={x.id} className="card" style={{marginBottom:6,padding:'10px 12px',opacity:x.paid?.5:1,borderColor:x.paid?'var(--border)':'rgba(240,180,41,.2)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <span className="pill" style={{background:x.type==='met'?'var(--gdim)':'var(--golddim)',color:x.type==='met'?'var(--green)':'var(--gold)'}}>{x.type==='met'?'Met':'Tip'}</span>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{x.leadName}</p>
+              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>
+                Billed: {new Date(x.date).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'})}
+                {x.apptOriginalDate&&<span> · Appt set: {new Date(x.apptOriginalDate).toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</span>}
+              </p>
+            </div>
+            <span className="mono" style={{fontSize:14,fontWeight:700,color:x.paid?'var(--text3)':'var(--gold)'}}>{x.paid?'PAID':'$'+x.amount.toFixed(2)}</span>
+            {role==='main'&&!x.paid&&<button onClick={()=>setIncentives(p=>p.map((y,j)=>j===i?{...y,paid:true,paidDate:new Date().toISOString()}:y))} style={{padding:'4px 10px',borderRadius:6,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓</button>}
+          </div>
+        </div>)}
+      </>}
     </div>}
 
     {tab==='leads'&&<div style={{padding:'0 16px',paddingBottom:100}}>
@@ -790,8 +1158,11 @@ function App(){
       </div>
       <input ref={fileRef} type="file" accept=".csv,.tsv,.xlsx,.xls" onChange={handleFile} style={{display:'none'}}/>
       <button onClick={()=>fileRef.current?.click()} style={{width:'100%',padding:'14px',borderRadius:12,border:'2px dashed var(--border2)',background:'transparent',color:'var(--text2)',fontSize:12,fontWeight:600,marginBottom:8}}>📁 Upload CSV/Excel</button>
-      {leads.length>0&&<p style={{fontSize:11,color:'var(--text3)',marginBottom:8}}>{leads.length} leads loaded</p>}
-      {leads.slice(0,30).map(l=><div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+      {leads.length>0&&<>
+        <input value={leadSearch} onChange={e=>setLeadSearch(e.target.value)} placeholder="🔍 Search leads by name, phone…" style={{marginBottom:8}}/>
+        <p style={{fontSize:11,color:'var(--text3)',marginBottom:6}}>{leads.filter(l=>!leadSearch||(l.name||'').toLowerCase().includes(leadSearch.toLowerCase())||(l.phone||'').includes(leadSearch)).length} of {leads.length} leads</p>
+      </>}
+      {leads.filter(l=>!leadSearch||(l.name||'').toLowerCase().includes(leadSearch.toLowerCase())||(l.phone||'').includes(leadSearch)).slice(0,50).map(l=><div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
         <div style={{width:32,height:32,borderRadius:10,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:ST[l.status]?.c,flexShrink:0}}>{l.name.charAt(0)}</div>
         <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p>
         <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div>
@@ -809,6 +1180,97 @@ function App(){
             <div style={{flex:1}}><span style={{fontSize:12,fontWeight:600,color:'#cbd5e1'}}>{l.name}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div>
           </div>
         </div>)}
+    </div>}
+
+    {/* ═══ LIVE DASHBOARD (Main only) ═══ */}
+    {tab==='live'&&role==='main'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      <h3 style={{fontSize:16,fontWeight:800,color:'#f1f5f9',marginBottom:12}}>⚡ Live Activity</h3>
+      {liveFeed.length===0&&<div className="card" style={{textAlign:'center',padding:24}}>
+        <p style={{fontSize:32,marginBottom:8}}>📡</p>
+        <p style={{color:'var(--text3)',fontSize:13}}>Waiting for admin activity…</p>
+        <p style={{color:'var(--text3)',fontSize:10,marginTop:4}}>When admins start calling, their actions appear here in real-time.</p>
+      </div>}
+      {liveFeed.map((f,i)=>{
+        const ago=Math.floor((Date.now()-f.ts)/1000);const agoStr=ago<60?ago+'s':Math.floor(ago/60)+'m';
+        const icons={call:'📞',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭',appt:'📅',session:'⏱'};
+        return<div key={i} className="card fi" style={{marginBottom:6,padding:'10px 12px',borderLeft:`3px solid ${f.type==='appt'?'var(--green)':f.type==='session'?'var(--accent)':'var(--text3)'}`}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <span style={{fontSize:18}}>{icons[f.data?.action||f.type]||'📌'}</span>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>
+                {f.type==='call'&&`${f.data.admin_email||'Admin'} → ${f.data.lead_name||'Lead'} (${f.data.action?.toUpperCase()})`}
+                {f.type==='appt'&&`📅 ${f.data.admin_email} set appointment with ${f.data.lead_name}`}
+                {f.type==='session'&&`⏱ ${f.data.email} ${f.data.end_time?'ended session ('+f.data.sets+' appts, $'+f.data.pay+')':'started session'}`}
+                {f.type==='notif'&&f.data.title}
+              </p>
+              {f.type==='appt'&&<p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{f.data.appt_date} {f.data.appt_time} · {f.data.duration_mins||apptDuration}min</p>}
+            </div>
+            <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{agoStr}</span>
+          </div>
+        </div>
+      })}
+      {/* Notifications */}
+      {notifications.filter(n=>!n.read).length>0&&<>
+        <h3 style={{fontSize:14,fontWeight:700,color:'var(--amber)',marginTop:16,marginBottom:8}}>🔔 Notifications ({notifications.filter(n=>!n.read).length})</h3>
+        {notifications.filter(n=>!n.read).slice(0,10).map(n=><div key={n.id} className="card" style={{marginBottom:6,padding:'10px 12px',borderColor:'rgba(210,153,34,.2)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{n.title}</p>
+              {n.body&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{n.body}</p>}</div>
+            <button onClick={()=>{DB.markRead(n.id);setNotifications(p=>p.map(x=>x.id===n.id?{...x,read:true}:x))}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9}}>✓</button>
+          </div>
+        </div>)}
+      </>}
+    </div>}
+
+    {/* ═══ CALLBACK QUEUE (both roles) ═══ */}
+    {tab==='cb'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <h3 style={{fontSize:16,fontWeight:800,color:'#f1f5f9'}}>🔔 Callback Queue</h3>
+        <button onClick={()=>DB.getCBQueue(role==='admin'?myEmail:null).then(setCbQueue)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Refresh</button>
+      </div>
+      {/* Overdue */}
+      {(()=>{const now=new Date();const overdue=cbQueue.filter(c=>{try{return new Date(c.scheduled_date+'T'+c.scheduled_time)<now&&c.status==='pending'}catch(e){return false}});
+        const upcoming=cbQueue.filter(c=>{try{return new Date(c.scheduled_date+'T'+c.scheduled_time)>=now&&c.status==='pending'}catch(e){return true}});
+        const called=cbQueue.filter(c=>c.status==='called');
+        return<>
+          {overdue.length>0&&<>
+            <p style={{fontSize:12,fontWeight:700,color:'var(--red)',marginBottom:6}}>⚠️ Overdue ({overdue.length})</p>
+            {overdue.map(c=><div key={c.id} className="card" style={{marginBottom:6,padding:'10px 12px',borderColor:'rgba(248,81,73,.2)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{flex:1}}><p style={{margin:0,fontSize:13,fontWeight:600,color:'var(--red)'}}>{c.lead_name}</p>
+                  <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{c.lead_phone} · Was due {c.scheduled_date} {c.scheduled_time}</p>
+                  {role==='main'&&<p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Admin: {c.admin_email}</p>}</div>
+                <div style={{display:'flex',gap:4}}>
+                  <button onClick={()=>{window.location.href='tel:'+c.lead_phone.replace(/[^+\d]/g,'');DB.updateCBStatus(c.id,'called');setCbQueue(p=>p.map(x=>x.id===c.id?{...x,status:'called'}:x))}} style={{padding:'6px 10px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>📞 Call</button>
+                  <button onClick={()=>{setShowWA({name:c.lead_name,phone:c.lead_phone})}} style={{padding:'6px 10px',borderRadius:8,background:'var(--gdim)',color:'#25d366',fontSize:10,fontWeight:600}}>💬</button>
+                </div>
+              </div>
+            </div>)}
+          </>}
+          {upcoming.length>0&&<>
+            <p style={{fontSize:12,fontWeight:700,color:'var(--accent2)',marginTop:overdue.length?12:0,marginBottom:6}}>📅 Upcoming ({upcoming.length})</p>
+            {upcoming.map(c=><div key={c.id} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{flex:1}}><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{c.lead_name}</p>
+                  <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{c.lead_phone} · {c.scheduled_date} {c.scheduled_time}</p>
+                  {role==='main'&&<p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Admin: {c.admin_email}</p>}</div>
+                <button onClick={()=>{setShowWA({name:c.lead_name,phone:c.lead_phone})}} style={{padding:'6px 10px',borderRadius:8,background:'rgba(37,211,102,.1)',color:'#25d366',fontSize:10,fontWeight:600}}>💬 WA</button>
+              </div>
+            </div>)}
+          </>}
+          {called.length>0&&<>
+            <p style={{fontSize:12,fontWeight:700,color:'var(--green)',marginTop:12,marginBottom:6}}>✓ Called ({called.length})</p>
+            {called.slice(0,10).map(c=><div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',opacity:.5}}>
+              <span style={{fontSize:12,color:'#f1f5f9'}}>{c.lead_name}</span>
+              <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{c.lead_phone}</span>
+              <span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Done</span>
+            </div>)}
+          </>}
+          {!cbQueue.length&&<div className="card" style={{textAlign:'center',padding:24}}>
+            <p style={{fontSize:24,marginBottom:8}}>🔔</p>
+            <p style={{color:'var(--text3)',fontSize:13}}>No callbacks scheduled</p>
+          </div>}
+        </>})()}
     </div>}
 
     {tab==='tracking'&&role==='main'&&<div style={{padding:'0 16px',paddingBottom:100}}>
@@ -836,19 +1298,37 @@ function App(){
       </div>}
 
       {role==='main'&&<div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:10,color:'var(--gold)'}}>💰 Pay Config</h3>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
-          {[['🥉$/hr',0],['🥈$/hr',1],['🥇$/hr',2]].map(([l,i])=>
-            <div key={i}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>{l}</label>
-            <input type="number" value={cfg.payRates[i]} onChange={e=>{const r=[...cfg.payRates];r[i]=+e.target.value||0;setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center'}}/></div>)}
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:10,color:'var(--gold)'}}>💰 Pay Config & Tiers</h3>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Set $/hr and promotion threshold (min appts set) for each tier</p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:10}}>
+          {TIER_META.map((t,i)=><div key={i} style={{background:'var(--bg)',border:'1px solid '+t.color+'30',borderRadius:12,padding:'8px 6px',textAlign:'center'}}>
+            <p style={{margin:0,fontSize:18}}>{t.emoji}</p>
+            <p style={{margin:'2px 0',fontSize:10,fontWeight:700,color:t.color}}>{t.label}</p>
+            <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>$/hr</label>
+            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negatives','err');return}const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=v;setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px',marginBottom:4}}/>
+            <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Min appts</label>
+            <input type="number" min="0" value={(cfg.tierMins||DEF_TIER_MINS)[i]||0} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negatives','err');return}const m=[...(cfg.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=v;
+              for(let j=1;j<m.length;j++){if(m[j]>0&&m[j]<=m[j-1]){toast(TIER_META[j].label+' must be > '+TIER_META[j-1].label,'err');return}}
+              setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0}/>
+          </div>)}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Session(h)</label><input type="number" min="0" value={cfg.sessionDur} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negative values','err');return}setCfg(s=>({...s,sessionDur:v||5}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Appts Bar</label><input type="number" min="1" value={cfg.mThresh} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negative values','err');return}if(cfg.nThresh<v){toast('Bonus Bar must be ≥ Appts Bar','err')}setCfg(s=>({...s,mThresh:v||2}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Bonus Bar</label><input type="number" min="1" value={cfg.nThresh} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negative values','err');return}if(v<cfg.mThresh){toast('Bonus Bar must be ≥ Appts Bar','err');return}setCfg(s=>({...s,nThresh:v||4}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult||1.5} onChange={e=>{const v=parseFloat(e.target.value);if(v<1){toast('Bonus must be ≥ 1×','err');return}setCfg(s=>({...s,bonusMult:v||1.5}))}} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Session(h)</label><input type="number" min="0" value={cfg.sessionDur} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negatives','err');return}setCfg(s=>({...s,sessionDur:v||5}))}} style={{textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Appts Bar</label><input type="number" min="1" value={cfg.mThresh} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negatives','err');return}setCfg(s=>({...s,mThresh:v||2}))}} style={{textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Bonus Bar</label><input type="number" min="1" value={cfg.nThresh} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negatives','err');return}if(v<cfg.mThresh){toast('Bonus Bar must be ≥ Appts Bar','err');return}setCfg(s=>({...s,nThresh:v||4}))}} style={{textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult||1.5} onChange={e=>{const v=parseFloat(e.target.value);if(v<1){toast('Must be ≥ 1×','err');return}setCfg(s=>({...s,bonusMult:v}))}} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
         </div>
-        <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Defaults. Customize per-admin below.</p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
+          <div><label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" min="0" value={cfg.metIncentive||10} onChange={e=>{const v=+e.target.value;if(v<0){toast('No negatives','err');return}setCfg(s=>({...s,metIncentive:v}))}} style={{textAlign:'center',borderColor:'rgba(63,185,80,.3)'}}/></div>
+          <div style={{display:'flex',alignItems:'flex-end'}}><p style={{fontSize:9,color:'var(--text3)',lineHeight:1.4}}>Paid when admin marks a lead as "Met". Uses current date for billing, even if the appointment was set months ago.</p></div>
+        </div>
+        <div style={{marginTop:10}}>
+          <label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📅 Billing Day (of each month)</label>
+          <select value={cfg.billingDate||1} onChange={e=>setCfg(s=>({...s,billingDate:+e.target.value}))} style={{fontSize:13}}>
+            {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}{d===1?'st':d===2?'nd':d===3?'rd':'th'} of every month</option>)}
+          </select>
+        </div>
+        <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Defaults. Customize per-admin below. Bronze always starts at 0.</p>
       </div>}
 
       {/* Per-admin config */}
@@ -857,7 +1337,7 @@ function App(){
         <div style={{display:'flex',gap:6,marginBottom:10}}>
           <input value={newAdminEmail} onChange={e=>setNewAdminEmail(e.target.value)} placeholder="Admin email" style={{flex:1,fontSize:13}}/>
           <button onClick={()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
-            setAdminConfigs(p=>({...p,[em]:{payRates:[...cfg.payRates],sessionDur:cfg.sessionDur,mThresh:cfg.mThresh,nThresh:cfg.nThresh,bonusMult:cfg.bonusMult||1.5,bizName:'',payNow:'',timesheetId:''}}));
+            setAdminConfigs(p=>({...p,[em]:{payRates:[...cfg.payRates],sessionDur:cfg.sessionDur,mThresh:cfg.mThresh,nThresh:cfg.nThresh,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],payRates:[...(cfg.payRates||DEF_PAY_RATES)],bizName:'',payNow:'',timesheetId:''}}));
             setNewAdminEmail('');toast('Added '+em)}} style={{padding:'0 16px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Add</button>
         </div>
         {Object.entries(adminConfigs).map(([em,ac])=><div key={em} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:14,padding:12,marginBottom:8}}>
@@ -868,14 +1348,21 @@ function App(){
               <button onClick={()=>{const c={...adminConfigs};delete c[em];setAdminConfigs(c)}} style={{padding:'4px 10px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>×</button>
             </div>
           </div>
-          <div style={{display:'flex',gap:8,fontSize:10,color:'var(--text3)'}}>
-            <span>💰 ${ac.payRates[0]}/${ac.payRates[1]}/${ac.payRates[2]}</span>
-            <span>⏱{ac.sessionDur}h</span><span>Appts:{ac.mThresh}</span><span>Bonus:{ac.nThresh}</span>
+          <div style={{display:'flex',gap:6,fontSize:10,color:'var(--text3)',flexWrap:'wrap'}}>
+            {TIER_META.slice(0,3).map((t,i)=><span key={i} style={{color:t.color}}>{t.emoji}${(ac.payRates||DEF_PAY_RATES)[i]}</span>)}
+            <span>⏱{ac.sessionDur}h</span><span>A:{ac.mThresh}</span><span>B:{ac.nThresh}</span>
           </div>
           {editingAdmin===em&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
-              {[['🥉$/hr',0],['🥈$/hr',1],['🥇$/hr',2]].map(([l,i])=><div key={i}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>{l}</label>
-                <input type="number" value={ac.payRates[i]} onChange={e=>{const r=[...ac.payRates];r[i]=+e.target.value||0;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>)}
+            <p style={{fontSize:10,color:'var(--text3)',fontWeight:700,marginBottom:6}}>Tier Rates & Thresholds</p>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4,marginBottom:8}}>
+              {TIER_META.map((t,i)=><div key={i} style={{background:'var(--bg)',border:'1px solid '+t.color+'20',borderRadius:8,padding:'4px',textAlign:'center'}}>
+                <span style={{fontSize:12}}>{t.emoji}</span>
+                <p style={{margin:0,fontSize:8,fontWeight:700,color:t.color}}>{t.label}</p>
+                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]||0} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=+e.target.value||0;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} placeholder="$/hr" style={{fontSize:10,textAlign:'center',padding:'4px',marginTop:2}}/>
+                <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]||0} onChange={e=>{const v=+e.target.value;const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=v;
+                  for(let j=1;j<m.length;j++){if(m[j]>0&&m[j]<=m[j-1]){toast('Must be ascending','err');return}}
+                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} placeholder="Min" style={{fontSize:9,textAlign:'center',padding:'3px',marginTop:2}} disabled={i===0}/>
+              </div>)}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
               <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Session(h)</label>
@@ -922,6 +1409,70 @@ function App(){
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved')}} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Save</button>
       </div>
 
+      {/* Calendar Sharing (Main only) */}
+      {role==='main'&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Calendar Sharing</h3>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Share your Google Calendars with admins so they can see your availability.</p>
+        <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
+          <input type="number" min="15" step="15" value={apptDuration} onChange={e=>{const v=+e.target.value;if(v>=15)setApptDuration(v)}} style={{textAlign:'center',width:120}}/></div>
+        {gOk&&<>
+          <button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:600,marginBottom:8}}>Load My Calendars</button>
+          {calList.length>0&&<div style={{marginBottom:10}}>
+            {calList.filter(c=>c.accessRole==='owner').map(c=><div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+              <div style={{width:12,height:12,borderRadius:3,background:c.backgroundColor||'var(--accent)',flexShrink:0}}/>
+              <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{c.summary}</p></div>
+              <button onClick={()=>{
+                const email=prompt('Share with admin email:');if(!email||!email.includes('@'))return;
+                gCalShare.share(c.id,email,'reader').then(ok=>{
+                  if(ok){DB.shareCalendar(_user?.id,email,c.id,c.summary);toast(`Shared "${c.summary}" with ${email}`);setCalShares(p=>[...p,{shared_with_email:email,calendar_id:c.id,calendar_name:c.summary}])}
+                  else toast('Share failed','err')})
+              }} style={{padding:'5px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Share</button>
+            </div>)}
+          </div>}
+          {calShares.length>0&&<>
+            <p style={{fontSize:10,fontWeight:700,color:'var(--text2)',marginBottom:4}}>Active Shares:</p>
+            {calShares.map((s,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 0',fontSize:11}}>
+              <span style={{color:'var(--green)'}}>✓</span>
+              <span style={{color:'#f1f5f9'}}>{s.calendar_name||s.calendar_id}</span>
+              <span style={{color:'var(--text3)'}}>→ {s.shared_with_email}</span>
+            </div>)}
+          </>}
+        </>}
+        {!gOk&&<p style={{fontSize:11,color:'var(--text3)'}}>Connect Google to share calendars</p>}
+      </div>}
+
+      {/* WhatsApp Templates (Main) */}
+      {role==='main'&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#25d366'}}>💬 WhatsApp Templates</h3>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Create message templates for admins to use. Placeholders: {'{{name}}, {{date}}, {{time}}, {{admin}}, {{company}}'}</p>
+        {waTemplates.map((t,i)=><div key={t.id||i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+          <span className="pill" style={{background:'rgba(37,211,102,.1)',color:'#25d366'}}>{t.category}</span>
+          <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{t.name}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:200}}>{t.template}</p></div>
+          {t.is_default&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>Default</span>}
+        </div>)}
+        <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+          <input value={newWA.name} onChange={e=>setNewWA(p=>({...p,name:e.target.value}))} placeholder="Template name" style={{marginBottom:6,fontSize:12}}/>
+          <textarea value={newWA.template} onChange={e=>setNewWA(p=>({...p,template:e.target.value}))} placeholder="Hi {{name}}, confirming our meeting on {{date}}…" rows={3} style={{width:'100%',marginBottom:6,background:'var(--bg2)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:12,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
+          <select value={newWA.category} onChange={e=>setNewWA(p=>({...p,category:e.target.value}))} style={{marginBottom:8,fontSize:12}}>
+            <option value="appointment">Appointment</option><option value="reminder">Reminder</option><option value="followup">Follow-up</option><option value="custom">Custom</option>
+          </select>
+          <button onClick={()=>{if(!newWA.name||!newWA.template)return toast('Fill name and template','err');
+            DB.saveWATemplate(newWA,_user?.id);setWaTemplates(p=>[...p,{...newWA,id:Date.now()}]);setNewWA({name:'',template:'',category:'appointment'});toast('Template saved')
+          }} style={{width:'100%',padding:'10px',borderRadius:10,background:'rgba(37,211,102,.15)',color:'#25d366',fontSize:12,fontWeight:700,border:'1px solid rgba(37,211,102,.2)'}}>+ Add Template</button>
+        </div>
+      </div>}
+
+      {/* Admin: Shared Calendars (read-only view) */}
+      {role==='admin'&&calShares.length>0&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Shared Calendars</h3>
+        {calShares.map((s,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+          <span style={{color:'var(--accent2)'}}>📅</span>
+          <span style={{fontSize:12,color:'#f1f5f9'}}>{s.calendar_name||'Calendar'}</span>
+          <button onClick={()=>window.open('https://calendar.google.com/calendar/r?cid='+encodeURIComponent(s.calendar_id),'_blank')} style={{marginLeft:'auto',padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Open</button>
+        </div>)}
+      </div>}
+
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>
     </div>}
 
@@ -944,9 +1495,61 @@ function App(){
         <input type="time" value={apptTime} onChange={e=>setApptTime(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
         <input value={apptInvite} onChange={e=>setApptInvite(e.target.value)} placeholder="Invite emails (comma sep)" style={{marginBottom:14}}/>
         <div style={{display:'flex',gap:8}}>
-          <button onClick={async()=>{if(!apptDate||!apptTime)return;try{const s=new Date(apptDate+'T'+apptTime);await gCal.create('Appt: '+(cur?.name||''),cur?.phone||'',s.toISOString(),new Date(s.getTime()+36e5).toISOString(),apptInvite?apptInvite.split(',').map(s=>s.trim()):[]); toast('Event created!')}catch(e){toast(e.message,'err')}setShowAppt(false)}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
+          <button onClick={async()=>{if(!apptDate||!apptTime)return;
+            const dur=apptDuration||60;
+            try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
+              const evt=await gCal.create('Appt: '+(cur?.name||''),cur?.phone||'',s.toISOString(),end.toISOString(),apptInvite?apptInvite.split(',').map(s=>s.trim()):[]);
+              // Save to DB
+              DB.saveAppt({admin:myEmail,name:cur?.name,phone:cur?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite},_user?.id);
+              // Notify Main
+              DB.notify(null,'appt_set',`📅 ${myEmail} set appointment`,`${cur?.name} on ${apptDate} at ${apptTime} (${dur}min)`,{leadName:cur?.name,apptDate,apptTime});
+              // Offer WhatsApp
+              setShowWA({name:cur?.name,phone:cur?.phone,date:apptDate,time:apptTime});
+              toast('Event created!')}catch(e){toast(e.message,'err')}setShowAppt(false)}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
           <button onClick={()=>setShowAppt(false)} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
         </div>
+        <div style={{marginTop:10}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
+          <input type="number" value={apptDuration} onChange={e=>{const v=+e.target.value;if(v>0)setApptDuration(v)}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+      </div>
+    </div>}
+
+    {/* ═══ WhatsApp Template Modal ═══ */}
+    {showWA&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowWA(null)}>
+      <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
+        <h3 style={{margin:'0 0 8px',fontSize:17,fontWeight:800,color:'#25d366'}}>💬 Send WhatsApp</h3>
+        <p style={{margin:'0 0 14px',fontSize:12,color:'var(--text3)'}}>To: {showWA.name} ({showWA.phone})</p>
+        
+        {/* Quick templates */}
+        <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
+          {waTemplates.slice(0,5).map(t=><button key={t.id} onClick={()=>{
+            const msg=waFill(t.template,{name:showWA.name,date:showWA.date||'',time:showWA.time||'',admin:userName,company:'PolicyLens'});
+            window.open(waLink(showWA.phone,msg),'_blank');setShowWA(null)
+          }} style={{padding:'6px 12px',borderRadius:8,background:'rgba(37,211,102,.1)',color:'#25d366',fontSize:10,fontWeight:600,border:'1px solid rgba(37,211,102,.2)'}}>{t.name}</button>)}
+        </div>
+
+        {/* Custom message */}
+        <textarea id="wa-custom" rows={3} placeholder="Or type a custom message…" style={{width:'100%',marginBottom:10,background:'var(--bg2)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:12,fontSize:13,fontFamily:'inherit',resize:'none'}}/>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>{const msg=document.getElementById('wa-custom')?.value;if(!msg)return toast('Type a message','err');window.open(waLink(showWA.phone,msg),'_blank');setShowWA(null)}} style={{flex:1,padding:'14px',background:'#25d366',color:'#fff',fontSize:14,fontWeight:700,borderRadius:14}}>Send via WhatsApp</button>
+          <button onClick={()=>setShowWA(null)} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14,borderRadius:14}}>×</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* ═══ Session Replay Modal ═══ */}
+    {showReplay&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowReplay(null)}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
+        <h3 style={{margin:'0 0 14px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>📹 Session Replay</h3>
+        {showReplay.log?.length?showReplay.log.map((l,i)=>{
+          const t=new Date(l.ts);const icons={call:'📞',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭'};
+          return<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+            <span className="mono" style={{fontSize:10,color:'var(--text3)',width:50,flexShrink:0}}>{t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+            <span style={{fontSize:14}}>{icons[l.action]||'📌'}</span>
+            <div style={{flex:1}}><span style={{fontSize:12,color:'#f1f5f9'}}>{l.lead_name||'—'}</span> <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.lead_phone}</span></div>
+            <span className="pill" style={{background:l.action==='set'?'var(--gdim)':l.action==='ni'?'var(--rdim)':'var(--bg3)',color:l.action==='set'?'var(--green)':l.action==='ni'?'var(--red)':'var(--text3)'}}>{(l.action||'').toUpperCase()}</span>
+          </div>
+        }):<p style={{color:'var(--text3)',textAlign:'center',padding:20}}>No call log available for this session</p>}
+        <button onClick={()=>setShowReplay(null)} style={{width:'100%',marginTop:14,padding:'12px',borderRadius:14,background:'var(--bg3)',color:'var(--text3)',fontSize:13}}>Close</button>
       </div>
     </div>}
   </div>);
