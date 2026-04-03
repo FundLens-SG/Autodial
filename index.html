@@ -1337,7 +1337,7 @@ function App(){
   const[aiAnalyzing,setAiAnalyzing]=useState(false);
   const[payConfigOpen,setPayConfigOpen]=useState(false);
   const[showSlotPicker,setShowSlotPicker]=useState(false);
-  const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||'');
+  const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||(role==='admin'&&cfg.sharedGeminiKey?cfg.sharedGeminiKey:''));
   useEffect(()=>{if(geminiKeyVal)cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal})},[geminiKeyVal]);
   // ═══ DESKTOP SCRIPT PANEL ═══
   const[scriptOpen,setScriptOpen]=useState(load('scriptOpen')??true);
@@ -2801,9 +2801,9 @@ function App(){
           </div>
           {editingAdmin===em&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
             <p style={{fontSize:10,color:'var(--text3)',fontWeight:700,marginBottom:6}}>Tier Rates & Thresholds</p>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4,marginBottom:8}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:8,padding:'4px 0'}}>
               {TIER_META.map((t,i)=>{const _on=!(ac.enabledTiers&&ac.enabledTiers[i]===false);return<div key={i} style={{background:_on?'var(--bg)':'var(--bg3)',border:'1px solid '+(_on?t.color+'20':'var(--border)'),borderRadius:8,padding:'4px',textAlign:'center',opacity:_on?1:.35,position:'relative'}}>
-                <button onClick={()=>{const et=[...(ac.enabledTiers||[true,true,true,true,true,true])];et[i]=!et[i];setAdminConfigs(p=>({...p,[em]:{...p[em],enabledTiers:et}}))}} style={{position:'absolute',top:1,right:1,width:16,height:16,borderRadius:8,background:_on?'var(--gdim)':'var(--rdim)',color:_on?'var(--green)':'var(--red)',fontSize:8,fontWeight:700,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,zIndex:1}}>{_on?'✓':'✗'}</button>
+                <button onClick={(ev)=>{ev.stopPropagation();const et=[...(ac.enabledTiers||[true,true,true,true,true,true])];et[i]=!et[i];setAdminConfigs(p=>({...p,[em]:{...p[em],enabledTiers:et}}))}} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:11,background:_on?'#22c55e':'#ef4444',color:'#fff',fontSize:11,fontWeight:800,border:'2px solid var(--bg2)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,zIndex:2,boxShadow:'0 2px 6px rgba(0,0,0,.3)'}}>{_on?'✓':'✗'}</button>
                 <span style={{fontSize:12}}>{t.emoji}</span>
                 <p style={{margin:0,fontSize:8,fontWeight:700,color:t.color}}>{t.label}</p>
                 <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>$/hr</label>
@@ -2854,7 +2854,22 @@ function App(){
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
-        {role!=='admin'?<h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📊 Team Rules</h3>:<h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Rules</h3>}
+        {role!=='admin'?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>☁️ Sync All</button></div>:<>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Rules</h3>
+        {adminConfigs[myEmail]&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
+          <p style={{fontSize:9,fontWeight:700,color:'var(--green)',margin:'0 0 4px'}}>☁️ SYNCED FROM MANAGER</p>
+          <div style={{display:'flex',flexWrap:'wrap',gap:6,fontSize:10,color:'var(--text2)'}}>
+            <span>⏱ {myCfg.sessionDur||5}h session</span>
+            <span>📊 {myCfg.mThresh||2} appts bar</span>
+            <span>🎯 {myCfg.nThresh||4} bonus bar</span>
+            <span>💰 ×{myCfg.bonusMult||1.5} bonus</span>
+            <span>🎁 ${myCfg.metIncentive||10} met incentive</span>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4,fontSize:9,color:'var(--text3)'}}>
+            {(myCfg.payRates||[8,10,12]).slice(0,3).map((r,i)=><span key={i}>{['🥉','🥈','🥇'][i]} ${r}/hr</span>)}
+          </div>
+        </div>}
+        </>}
         {/* DNC Hours */}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
           <div>
@@ -2915,10 +2930,14 @@ function App(){
 
       {role==='admin'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>💳 Payment Details</h3>
+        {myCfg.bizName&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 6px'}}>✓ Set by manager: <b>{myCfg.bizName}</b></p>}
         <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Name (for invoice)</label>
-        <input value={localStorage.getItem('ad_bizname')||''} onChange={e=>localStorage.setItem('ad_bizname',e.target.value)} placeholder="Your name or business"/></div>
-        <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>PayNow Number</label>
-        <input value={localStorage.getItem('ad_paynow')||''} onChange={e=>localStorage.setItem('ad_paynow',e.target.value)} placeholder="+65 9xxx xxxx"/></div>
+        <input value={myCfg.bizName||localStorage.getItem('ad_bizname')||''} onChange={e=>localStorage.setItem('ad_bizname',e.target.value)} placeholder="Your name or business" disabled={!!myCfg.bizName} style={{opacity:myCfg.bizName?.6:1}}/></div>
+        <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>PayNow Number</label>
+        <input value={myCfg.payNow||localStorage.getItem('ad_paynow')||''} onChange={e=>localStorage.setItem('ad_paynow',e.target.value)} placeholder="+65 9xxx xxxx" disabled={!!myCfg.payNow} style={{opacity:myCfg.payNow?.6:1}}/></div>
+        {myCfg.timesheetId&&<div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📋 Linked Sheet</label>
+        <p style={{fontSize:11,color:'var(--green)',margin:0}}>✓ {myCfg._tsName||myCfg.timesheetId}</p></div>}
+        <p style={{fontSize:8,color:'var(--text3)',margin:'6px 0 0'}}>Payment details are managed by your team lead</p>
       </div>}
 
       <div style={{display:'flex',alignItems:'center',gap:6,margin:'16px 0 10px'}}>
@@ -2934,7 +2953,9 @@ function App(){
 
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
-        <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:8}}/>
+        <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
+          {role!=='admin'&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
+          {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:9,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
             else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
