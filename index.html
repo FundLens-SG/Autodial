@@ -104,11 +104,13 @@ button{font-family:inherit;cursor:pointer;border:none;transition:all .15s}
   <div id="auth-login">
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Email</label><input type="email" id="auth-email" placeholder="you@example.com"></div>
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Password</label><input type="password" id="auth-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')authLogin()"></div>
-    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">I am a…</label>
+    <div style="margin-bottom:14px" id="role-section">
+      <label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">I am a…</label>
       <div style="display:flex;gap:8px" id="role-pick">
-        <button onclick="document.querySelectorAll('#role-pick button').forEach(b=>b.style.background='var(--bg3)');this.style.background='var(--adim)';this.style.borderColor='var(--accent)';window._role='admin'" style="flex:1;padding:12px;border-radius:10px;background:var(--bg3);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--border2)">📞 Admin<br><span style="font-size:10px;color:var(--text3);font-weight:400">Telemarketer</span></button>
-        <button onclick="document.querySelectorAll('#role-pick button').forEach(b=>b.style.background='var(--bg3)');this.style.background='var(--adim)';this.style.borderColor='var(--accent)';window._role='main'" style="flex:1;padding:12px;border-radius:10px;background:var(--bg3);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--border2)">👔 Main<br><span style="font-size:10px;color:var(--text3);font-weight:400">Manager</span></button>
+        <button id="btn-admin" onclick="pickRole('admin')" style="flex:1;padding:12px;border-radius:10px;background:var(--adim);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--accent);cursor:pointer">📞 Admin<br><span style="font-size:10px;color:var(--text3);font-weight:400">Telemarketer</span></button>
+        <button id="btn-main" onclick="pickRole('main')" style="flex:1;padding:12px;border-radius:10px;background:var(--bg3);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--border2);cursor:pointer">👔 Main<br><span style="font-size:10px;color:var(--text3);font-weight:400">Manager</span></button>
       </div>
+      <p style="font-size:10px;color:var(--text3);margin-top:6px;text-align:center">All new accounts require Creator approval</p>
     </div>
     <button class="bp" onclick="authLogin()">Sign In</button>
     <button class="bs" onclick="authShow('signup')">Create Account</button>
@@ -126,16 +128,80 @@ button{font-family:inherit;cursor:pointer;border:none;transition:all .15s}
 <div id="toast-area" class="tw"></div>
 
 <script>
-var SB_URL='https://mgbxxwoasrwlraffcvab.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nYnh4d29hc3J3bHJhZmZjdmFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODIzMjMsImV4cCI6MjA5MDM1ODMyM30.kJoq_dded4cmW56ymY3NmvmhNxYKFKrwOxbSJvBIfc4',ADMIN_EMAILS=['chungakwanc@gmail.com'];
+var SB_URL='https://mgbxxwoasrwlraffcvab.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nYnh4d29hc3J3bHJhZmZjdmFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODIzMjMsImV4cCI6MjA5MDM1ODMyM30.kJoq_dded4cmW56ymY3NmvmhNxYKFKrwOxbSJvBIfc4',CREATOR_EMAILS=['chungakwanc@gmail.com'];
 var _SB=null,_user=null,_prof=null;window._role='admin';
+
+function isCreator(email){return CREATOR_EMAILS.indexOf((email||'').toLowerCase())>=0}
+
+function pickRole(r){
+  window._role=r;
+  var ba=document.getElementById('btn-admin'),bm=document.getElementById('btn-main');
+  ba.style.background=r==='admin'?'var(--adim)':'var(--bg3)';
+  ba.style.borderColor=r==='admin'?'var(--accent)':'var(--border2)';
+  bm.style.background=r==='main'?'var(--adim)':'var(--bg3)';
+  bm.style.borderColor=r==='main'?'var(--accent)':'var(--border2)';
+  authClear();
+}
+
 try{if(window.supabase)_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'}})}catch(e){}
 function authMsg(t,type){var e=document.getElementById('auth-message');e.style.display='block';e.style.background=type==='i'?'var(--gdim)':'var(--rdim)';e.style.color=type==='i'?'var(--green)':'var(--red)';e.style.border='1px solid '+(type==='i'?'rgba(52,211,153,.2)':'rgba(239,68,68,.2)');e.textContent=t}
 function authClear(){document.getElementById('auth-message').style.display='none'}
 function authShow(v){authClear();['login','signup','pending'].forEach(s=>{var el=document.getElementById('auth-'+s);if(el)el.style.display=s===v?'':'none'})}
 function toast(m,t){var e=document.createElement('div');e.className='toast t-'+(t||'ok');e.textContent=m;document.getElementById('toast-area').appendChild(e);setTimeout(()=>{e.style.opacity='0';e.style.transition='opacity .3s';setTimeout(()=>e.remove(),300)},3000)}
 window.toast=toast;
-async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;if(!e||!p)return authMsg('Enter email and password');if(!window._role)return authMsg('Select Admin or Main');authMsg('Signing in…','i');try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);_SB.auth.getSession().then(s=>{_user=s?.data?.session?.user||{email:e}});_prof={email:e,role:window._role};authGrant()}catch(err){authMsg(err.message)}}
-async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;if(!n||!e||!p)return authMsg('Fill all fields');authMsg('Creating…','i');try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);authMsg('Created! Sign in now.','i');setTimeout(()=>authShow('login'),1500)}catch(err){authMsg(err.message)}}
+
+async function authLogin(){
+  authClear();
+  var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
+  if(!e||!p)return authMsg('Enter email and password');
+  if(!window._role)return authMsg('Select a role');
+    return authMsg('Only authorized managers can log in as Main');
+  }
+  authMsg('Signing in…','i');
+  try{
+    var r=await _SB.auth.signInWithPassword({email:e,password:p});
+    if(r.error)return authMsg(r.error.message);
+    _SB.auth.getSession().then(s=>{_user=s?.data?.session?.user||{email:e}});
+    _prof={email:e,role:window._role};
+    // Creator always approved
+    if(isCreator(e)){
+      authGrant();return;
+    }
+    // Others need Creator approval
+    try{
+      var sess=await _SB.auth.getSession();
+      if(sess.data?.session?.user){
+        var pr=await _SB.from('profiles').select('approved').eq('id',sess.data.session.user.id).single();
+        if(pr.data&&!pr.data.approved){authShow('pending');return}
+      }
+    }catch(pe){}
+    authGrant();
+  }catch(err){authMsg(err.message)}
+}
+async function authSignup(){
+  authClear();
+  var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
+  if(!n||!e||!p)return authMsg('Fill all fields');
+  if(!window._role)return authMsg('Select Admin or Main');
+  if(p.length<6)return authMsg('Password must be 6+ characters');
+  authMsg('Creating account…','i');
+  try{
+    var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});
+    if(r.error)return authMsg(r.error.message);
+    if(r.data&&r.data.user){
+      var creator=isCreator(e);
+      await _SB.from('profiles').upsert({
+        id:r.data.user.id,email:e,full_name:n,
+        approved:creator,
+        role:creator?window._role:window._role, // store requested role
+        autodial_role:window._role // explicit autodial role
+      }).catch(function(){});
+      if(creator){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role};authGrant();return}
+    }
+    authMsg('Account created! Awaiting Creator approval.','i');
+    setTimeout(function(){authShow('pending')},1500);
+  }catch(err){authMsg(err.message)}
+}
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
 function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;localStorage.setItem('autodial_role',window._role);initSync();if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
@@ -442,6 +508,9 @@ function App(){
   const[showFollowUp,setShowFollowUp]=useState(null);
   const[tipAmount,setTipAmount]=useState('');
   const[showInvoice,setShowInvoice]=useState(null);
+  const[usersList,setUsersList]=useState([]);
+  const[usersLoading,setUsersLoading]=useState(false);
+  const isCreatorUser=isCreator(myEmail);
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
 
@@ -1076,6 +1145,48 @@ function App(){
 
     {/* ═══ SETTINGS ═══ */}
     {tab==='settings'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+
+      {/* ═══ Creator: User Management ═══ */}
+      {isCreatorUser&&<div className="card" style={{marginBottom:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <h3 style={{fontSize:14,fontWeight:600,color:'var(--accent2)'}}>👥 User Management</h3>
+          <button onClick={async()=>{
+            setUsersLoading(true);
+            try{const r=await _SB.from('profiles').select('*').order('created_at',{ascending:false});setUsersList(r.data||[])}catch(e){toast(e.message,'err')}
+            setUsersLoading(false);
+          }} style={{padding:'5px 12px',borderRadius:7,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>{usersLoading?'Loading…':'Load Users'}</button>
+        </div>
+        <p style={{fontSize:11,color:'var(--text3)',marginBottom:10}}>Approve or revoke access. Only you (Creator) can manage users.</p>
+
+        {usersList.map(u=>(
+          <div key={u.id} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+            <div style={{width:32,height:32,borderRadius:8,background:u.approved?'var(--gdim)':'var(--rdim)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:u.approved?'var(--green)':'var(--red)',flexShrink:0}}>{(u.full_name||u.email||'?').charAt(0).toUpperCase()}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.full_name||'—'}</p>
+              <div style={{display:'flex',alignItems:'center',gap:4,marginTop:1}}>
+                <span style={{fontSize:10,color:'var(--text3)'}}>{u.email}</span>
+                <span className="pill" style={{background:u.autodial_role==='main'?'var(--adim)':'var(--amdim)',color:u.autodial_role==='main'?'var(--accent2)':'var(--amber)',fontSize:9}}>{(u.autodial_role||u.role||'admin').toUpperCase()}</span>
+                {u.approved?<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:9}}>Approved</span>
+                :<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:9}}>Pending</span>}
+              </div>
+            </div>
+            {!isCreator(u.email)&&<div style={{display:'flex',gap:4,flexShrink:0}}>
+              {!u.approved&&<button onClick={async()=>{
+                await _SB.from('profiles').update({approved:true}).eq('id',u.id);
+                setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:true}:x));
+                toast(`${u.full_name||u.email} approved ✓`);
+              }} style={{padding:'5px 10px',borderRadius:6,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>Approve</button>}
+              {u.approved&&<button onClick={async()=>{
+                await _SB.from('profiles').update({approved:false}).eq('id',u.id);
+                setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));
+                toast(`${u.full_name||u.email} revoked`);
+              }} style={{padding:'5px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>Revoke</button>}
+            </div>}
+          </div>
+        ))}
+        {usersList.length===0&&!usersLoading&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:10}}>Tap "Load Users" to see accounts</p>}
+      </div>}
+
       {role==='main'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:600,marginBottom:10,color:'var(--gold)'}}>💰 Pay & Session Config</h3>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
