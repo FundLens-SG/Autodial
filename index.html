@@ -103,26 +103,26 @@ button{font-family:inherit;cursor:pointer;border:none;transition:all .15s}
   <div id="auth-message" style="display:none;font-size:12px;padding:10px;border-radius:8px;margin-bottom:12px"></div>
   <div id="auth-login">
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Email</label><input type="email" id="auth-email" placeholder="you@example.com"></div>
-    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Password</label><input type="password" id="auth-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')authLogin()"></div>
+    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Password</label><input type="password" id="auth-pass" placeholder="••••••••"></div>
     <div style="margin-bottom:14px" id="role-section">
       <label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">I am a…</label>
       <div style="display:flex;gap:8px" id="role-pick">
-        <button id="btn-admin" onclick="pickRole('admin')" style="flex:1;padding:12px;border-radius:10px;background:var(--adim);color:#f1f5f9;font-size:13px;font-weight:600;border:2px solid var(--accent);cursor:pointer">📞 Admin<br><span style="font-size:10px;font-weight:400;color:var(--accent2)">Telemarketer</span></button>
-        <button id="btn-main" onclick="pickRole('main')" style="flex:1;padding:12px;border-radius:10px;background:transparent;color:var(--text3);font-size:13px;font-weight:600;border:2px solid transparent;cursor:pointer">👔 Main<br><span style="font-size:10px;font-weight:400;color:var(--text3)">Manager</span></button>
+        <button id="btn-admin" data-role="admin" style="flex:1;padding:12px;border-radius:10px;background:var(--adim);color:#f1f5f9;font-size:13px;font-weight:600;border:2px solid var(--accent);cursor:pointer">📞 Admin<br><span style="font-size:10px;font-weight:400;color:var(--accent2)">Telemarketer</span></button>
+        <button id="btn-main" data-role="main" style="flex:1;padding:12px;border-radius:10px;background:transparent;color:var(--text3);font-size:13px;font-weight:600;border:2px solid transparent;cursor:pointer">👔 Main<br><span style="font-size:10px;font-weight:400;color:var(--text3)">Manager</span></button>
       </div>
       <p style="font-size:10px;color:var(--text3);margin-top:6px;text-align:center">All new accounts require Creator approval</p>
     </div>
-    <button class="bp" onclick="authLogin()">Sign In</button>
-    <button class="bs" onclick="authShow('signup')">Create Account</button>
+    <button class="bp" id="btn-signin">Sign In</button>
+    <button class="bs" id="btn-gosignup">Create Account</button>
   </div>
   <div id="auth-signup" style="display:none">
     <div style="margin-bottom:12px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Full Name</label><input type="text" id="auth-sname"></div>
     <div style="margin-bottom:12px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Email</label><input type="email" id="auth-semail"></div>
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Password</label><input type="password" id="auth-spass" placeholder="Min 6 chars"></div>
-    <button class="bp" onclick="authSignup()">Create Account</button>
-    <button class="bs" onclick="authShow('login')">← Back</button>
+    <button class="bp" id="btn-signup">Create Account</button>
+    <button class="bs" id="btn-goback">← Back</button>
   </div>
-  <div id="auth-pending" style="display:none;text-align:center;padding:20px"><div style="font-size:40px;margin-bottom:12px">⏳</div><p style="color:var(--accent2);font-weight:600">Pending Approval</p><button class="bs" onclick="authLogout()">Sign Out</button></div>
+  <div id="auth-pending" style="display:none;text-align:center;padding:20px"><div style="font-size:40px;margin-bottom:12px">⏳</div><p style="color:var(--accent2);font-weight:600">Pending Approval</p><button class="bs" id="btn-pendout">Sign Out</button></div>
 </div></div>
 <div id="root"></div>
 <div id="toast-area" class="tw"></div>
@@ -160,8 +160,6 @@ async function authLogin(){
   var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
   if(!e||!p)return authMsg('Enter email and password');
   if(!window._role)return authMsg('Select a role');
-    return authMsg('Only authorized managers can log in as Main');
-  }
   authMsg('Signing in…','i');
   try{
     var r=await _SB.auth.signInWithPassword({email:e,password:p});
@@ -404,6 +402,27 @@ window.aiParseSheet=async function(rows,headers){
     if(aiSt[ri]){var a=aiSt[ri];st={s:a.status||'pending',n:a.notes||'',np:a.np_count||0,cbd:a.cb_date||'',cbt:a.cb_time||''}}
     leads.push({id:Date.now()+Math.random(),name,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:c.age!==-1?String(r[c.age]||'').trim():'',race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',savings:c.savings!==-1?String(r[c.savings]||'').trim():'',birthday:c.birthday!==-1?String(r[c.birthday]||'').trim():'',company:c.company!==-1?String(r[c.company]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status:st.s,npCount:st.np||0,cbDate:st.cbd||'',cbTime:st.cbt||'',cbHistory:[],calledAt:null,notes:st.n||'',sheetRow:ri+2,statusCol:c.status!=null?c.status:-1})}
   return{leads,count:leads.length,aiUsed:true}};
+
+// ═══ Bind auth buttons (addEventListener is more reliable than onclick) ═══
+document.addEventListener('DOMContentLoaded',function(){
+  var ba=document.getElementById('btn-admin');
+  var bm=document.getElementById('btn-main');
+  if(ba)ba.addEventListener('click',function(){pickRole('admin')});
+  if(bm)bm.addEventListener('click',function(){pickRole('main')});
+  var si=document.getElementById('btn-signin');
+  if(si)si.addEventListener('click',function(){authLogin()});
+  var gs=document.getElementById('btn-gosignup');
+  if(gs)gs.addEventListener('click',function(){authShow('signup')});
+  var su=document.getElementById('btn-signup');
+  if(su)su.addEventListener('click',function(){authSignup()});
+  var gb=document.getElementById('btn-goback');
+  if(gb)gb.addEventListener('click',function(){authShow('login')});
+  var po=document.getElementById('btn-pendout');
+  if(po)po.addEventListener('click',function(){authLogout()});
+  // Password enter key
+  var pp=document.getElementById('auth-pass');
+  if(pp)pp.addEventListener('keydown',function(e){if(e.key==='Enter')authLogin()});
+});
 </script>
 
 <script type="text/babel">
