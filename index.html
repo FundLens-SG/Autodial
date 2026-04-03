@@ -785,6 +785,17 @@ const save=(k,v)=>{try{localStorage.setItem(LS(k),JSON.stringify(v))}catch{}};
 // Cloud sync bucket mapping: localStorage key → cloud bucket
 const SYNC_MAP={data:'leads',cfg:'cfg',acfg:'adminConfigs',slog:'sessions',appts:'appointments',incv:'incentives',payh:'payments',
   ts:'userState',promo:'userState',learned:'userState',invitees:'userState',starget:'userState',mainMode:'userState',apptDur:'userState'};
+// Publish each admin's config to a shared key they can read
+function publishAdminConfigs(configs){
+  if(!_SB)return;
+  Object.entries(configs).forEach(function(entry){
+    var email=entry[0],cfg=entry[1];
+    if(!email||email.indexOf('@')<0)return;
+    // Remove transient fields
+    var clean=Object.assign({},cfg);delete clean._tsResults;delete clean._tsName;
+    try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_admincfg_'+email.toLowerCase(),biz_name:JSON.stringify(clean)},{onConflict:'admin_email'}).then(function(){}).catch(function(){})}catch(e){}
+  });
+}
 const cloudSave=(k,v)=>{const bucket=SYNC_MAP[k];if(bucket&&window.CloudSync._userId){
   if(bucket==='userState'){// Bundle all userState keys together
     const us=load('_cloudUserState')||{};us[k]=v;save('_cloudUserState',us);CloudSync.save('userState',us)}
@@ -1372,7 +1383,7 @@ function App(){
   useEffect(()=>{save('ts',totalSets);cloudSave('ts',totalSets)},[totalSets]);
   useEffect(()=>{save('promo',promotionLog);cloudSave('promo',promotionLog)},[promotionLog]);
   useEffect(()=>{save('slog',sessionLog);cloudSave('slog',sessionLog)},[sessionLog]);
-  useEffect(()=>{save('acfg',adminConfigs);cloudSave('acfg',adminConfigs)},[adminConfigs]);
+  useEffect(()=>{save('acfg',adminConfigs);cloudSave('acfg',adminConfigs);if(role!=='admin')publishAdminConfigs(adminConfigs)},[adminConfigs]);
   useEffect(()=>{save('payh',paymentHistory);cloudSave('payh',paymentHistory)},[paymentHistory]);
   useEffect(()=>{save('asess',adminSessions)},[adminSessions]);
   useEffect(()=>{save('appts',appointments);cloudSave('appts',appointments)},[appointments]);
@@ -1392,6 +1403,25 @@ function App(){
       try{
         setSyncing(true);
         const cloud=await CloudSync.loadAll();
+        // Admin: load own config published by Main
+        if(role==='admin'&&_SB){
+          try{
+            const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
+            if(r.data){
+              const myCfgFromMain=JSON.parse(r.data.biz_name);
+              setAdminConfigs(p=>({...p,[myEmail]:Object.assign({},p[myEmail]||{},myCfgFromMain)}));
+              console.log('[AutoDial] Loaded config from Main for',myEmail);
+            }
+          }catch(e){console.warn('[AdminCfg] personal:',e.message)}
+          try{
+            const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
+            if(gr.data){
+              const globalCfg=JSON.parse(gr.data.biz_name);
+              setCfg(p=>({...globalCfg,...p}));
+              console.log('[AutoDial] Loaded global config from Main');
+            }
+          }catch(e){console.warn('[AdminCfg] global:',e.message)}
+        }
         if(Object.keys(cloud).length>0){
           console.log('[CloudSync] Loaded '+Object.keys(cloud).length+' buckets from cloud');
           // Merge cloud data with localStorage (cloud wins for empty local)
