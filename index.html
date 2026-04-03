@@ -305,7 +305,9 @@ window.gDriveUpload={
 window.detectGender=function(l){if(l.gender){var g=l.gender.toLowerCase();if(/^(m|male|mr)$/i.test(g))return'male';if(/^(f|female|mrs|ms|miss|mdm)$/i.test(g))return'female'}var n=(l.name||'');if(/^(mr\.?|encik)\s/i.test(n))return'male';if(/^(mrs\.?|ms\.?|miss|mdm)\s/i.test(n))return'female';return null};
 window.parseAgeRange=function(a){if(!a)return null;var s=String(a).trim(),d=parseInt(s);if(!isNaN(d)&&s.length<=3)return{min:d,max:d};var m=s.match(/(\d+)\s*(?:to|-)\s*(\d+)/i);return m?{min:+m[1],max:+m[2]}:null};
 window.getNextDialable=function(leads,after,f){f=f||{};var now=new Date();for(var i=(after>=0?after+1:0);i<leads.length;i++){var l=leads[i];
-  if(l.status==='ni'||l.status==='set')continue;if(l.status==='np'&&l.npCount>=5)continue;if(f.skipAllNP&&l.status==='np')continue;
+  if(l.status==='ni'||l.status==='set')continue;
+  // Safety net: re-check remarks for obvious NI/SET even if status is wrong
+  if(l.notes){var _rl=l.notes.toLowerCase().trim();if(/^ni$/i.test(l.notes.trim()))continue;if(/not interested/i.test(_rl))continue}if(l.status==='np'&&l.npCount>=5)continue;if(f.skipAllNP&&l.status==='np')continue;
   if(l.status==='cb'){if(!l.cbDate||!l.cbTime)continue;try{var diff=(new Date(l.cbDate+'T'+l.cbTime)-now)/6e4;if(diff>15||diff<-5)continue}catch(e){continue}}
   if(f.genderFilter&&f.genderFilter!=='all'){var g=detectGender(l);if(g&&g!==f.genderFilter)continue}
   if(f.ageFilter&&f.ageMin){var ar=parseAgeRange(l.age);if(ar&&(ar.max<(+f.ageMin)||ar.min>(+f.ageMax||999)))continue}
@@ -512,7 +514,7 @@ function getTier(n,mins){const tiers=buildTiers(mins);for(let i=tiers.length-1;i
 function getNextTier(n,mins){const tiers=buildTiers(mins);for(let i=0;i<tiers.length;i++)if(n<tiers[i].min)return{...tiers[i],idx:i};return null}
 
 // Column detection + AI parsing
-const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
+const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction\s*id|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
 function parseSheet(rows,h){window._learnedPatterns=window._learnedPatterns||{};const c={};for(const[k,r]of Object.entries(RE))c[k]=h.findIndex(x=>r.test(x.trim()));
   if(c.phone===-1)for(let i=0;i<h.length;i++){if(rows.slice(0,15).filter(r=>r[i]&&/^\d{7,15}$/.test(String(r[i]).replace(/[\s\-().+]/g,''))).length>=3){c.phone=i;break}}
   if(c.phone===-1)return{leads:[],error:'No phone column'};
@@ -566,6 +568,46 @@ async function aiParse(rows,h){const ai=await aiAnalyzeSheet(h,rows);if(!ai?.col
     const notes=a.notes||remarks;
     leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:String(age),race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status:a.status||'pending',npCount:a.np_count||0,cbDate:a.cb_date||'',cbTime:a.cb_time||'',cbHistory:[],calledAt:null,notes,sheetRow:ri+2,statusCol:c.status!=null?c.status:(c.remarks!=null?c.remarks:-1)})}
   return{leads,count:leads.length}}
+
+// ═══ STATUS VALIDATION SAFETY NET ═══
+// Runs AFTER any import (AI or manual) to catch missed statuses
+function validateStatuses(leads){
+  var lp=window._learnedPatterns||{};
+  return leads.map(function(l){
+    if(!l.notes&&!l.remarks)return l; // No remarks = stay as-is
+    var rmk=(l.notes||'').trim();if(!rmk)return l;
+    var rl=rmk.toLowerCase().trim();
+    // Already correctly set? Don't override user corrections
+    if(l.status!=='pending'&&!l._aiSet)return l;
+    // Learned patterns first
+    if(lp[rl])return Object.assign({},l,{status:lp[rl],_validated:true});
+    // Hard rules — these are CERTAIN
+    if(/^ni$/i.test(rmk))return Object.assign({},l,{status:'ni',_validated:true});
+    if(/\bnot interested\b/i.test(rl))return Object.assign({},l,{status:'ni',_validated:true});
+    // NP with count
+    if(/^np\s*x?\s*\d*$/i.test(rmk)){var m=rl.match(/np\s*x?\s*(\d+)/i);return Object.assign({},l,{status:'np',npCount:m?parseInt(m[1]):1,_validated:true})}
+    // Contains NI as standalone word (e.g. "5328 NI")
+    if(/\bni\b/i.test(rl)&&rl.length<20&&!/callback|call|appt|set/i.test(rl))return Object.assign({},l,{status:'ni',_validated:true});
+    // Explicit appointment keywords
+    if(/\bappt set\b|\bappointment set\b/i.test(rl))return Object.assign({},l,{status:'set',_validated:true});
+    if(/\bappt\b|\bappointment\b/i.test(rl)&&!/cancel/i.test(rl))return Object.assign({},l,{status:'set',_validated:true});
+    // Callback keywords — check BEFORE date patterns
+    if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true});
+    if(/\bcall in\b|\bcall at\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true});
+    // Date+Time = SET (e.g. "3pm 28th Feb Kinex")
+    var hasTime=/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl);
+    var hasMonth=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl);
+    if(hasTime&&hasMonth)return Object.assign({},l,{status:'set',_validated:true});
+    // Date+ordinal+month with location text
+    if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)return Object.assign({},l,{status:'set',_validated:true});
+    // NP anywhere (but not in longer words)
+    if(/\bnp\b/i.test(rl)&&rl.length<15)return Object.assign({},l,{status:'np',npCount:1,_validated:true});
+    // Unknown non-empty remark
+    if(rl.length>3)return Object.assign({},l,{needsReview:true});
+    return l;
+  });
+}
+window.validateStatuses=validateStatuses;
 
 // Confetti
 const Confetti=({show})=>{if(!show)return null;const cols=['#f0b429','#3fb950','#6366f1','#f85149','#58a6ff'];
@@ -850,7 +892,7 @@ function App(){
     if(!headers||!rows)return;const key=geminiKey();if(!key){toast('Add Gemini key first','err');return}
     setAiAnalyzing(true);toast('🧠 AI analyzing '+rows.length+' leads…','info');
     try{const ai=await aiParse(rows,headers);
-      if(ai?.leads.length){setLeads(ai.leads);toast('✨ '+ai.count+' leads reanalyzed with AI!');
+      if(ai?.leads.length){const rv=validateStatuses(ai.leads);setLeads(rv);toast('✨ '+ai.count+' leads reanalyzed!');
         // Count how many got a non-pending status
         const detected=ai.leads.filter(l=>l.status!=='pending').length;
         if(detected>0)toast(detected+' leads with detected status','info')}
@@ -863,7 +905,7 @@ function App(){
       const h=v[0].map(String),r=v.slice(1);
       setRawSheet({headers:h,rows:r}); // Store for re-analysis
       const ai=await aiParse(r,h);
-      if(ai?.leads.length){setLeads(ai.leads);toast('✨ '+ai.count+' leads (AI)');setSLoad(false);return}
+      if(ai?.leads.length){const validated=validateStatuses(ai.leads);setLeads(validated);const ni=validated.filter(l=>l.status==='ni').length,set=validated.filter(l=>l.status==='set').length,cb=validated.filter(l=>l.status==='cb').length,pend=validated.filter(l=>l.status==='pending').length;toast('✨ '+ai.count+' leads | '+pend+' callable, '+ni+' NI, '+set+' Set, '+cb+' CB');setSLoad(false);return}
       // No AI — use basic parser
       const res=parseSheet(r,h);if(res.error){toast(res.error,'err');setSLoad(false);return}
       // Check for ambiguous status/remarks columns — find candidates
@@ -871,17 +913,18 @@ function App(){
       if(statusCandidates.length>1){
         // Multiple possible columns — ask user to pick
         setShowColPicker({headers:h,candidates:statusCandidates,rows:r});
-        setLeads(res.leads);toast(res.count+' leads loaded — please confirm status column','info')
+        const v3=validateStatuses(res.leads);setLeads(v3);toast(v3.filter(l=>l.status==='pending').length+' callable of '+res.count+' leads loaded — please confirm status column','info')
       }else{
-        setLeads(res.leads);
-        if(!geminiKey())toast(res.count+' leads loaded. Add Gemini AI key for smarter analysis','info');
-        else toast(res.count+' leads loaded')
+        const validated2=validateStatuses(res.leads);setLeads(validated2);
+        const ni2=validated2.filter(l=>l.status==='ni').length,set2=validated2.filter(l=>l.status==='set').length,pend2=validated2.filter(l=>l.status==='pending').length;
+        toast(res.count+' leads | '+pend2+' callable, '+ni2+' NI, '+set2+' Set');
+        if(!geminiKey())toast('Add Gemini AI for smarter analysis','info')
       }}catch(e){toast(e.message,'err')}setSLoad(false)};
   const handleFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const ext=f.name.split('.').pop().toLowerCase();let h,r;
     if(['csv','tsv','txt'].includes(ext)){const p=Papa.parse(await f.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}
     else{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
-    setRawSheet({headers:h,rows:r});const ai=await aiParse(r,h);if(ai?.leads.length){setLeads(p=>[...p,...ai.leads]);toast('✨ '+ai.count+' imported (AI)');return}
-    const res=parseSheet(r,h);if(res.error)return toast(res.error,'err');setLeads(p=>[...p,...res.leads]);toast(res.count+' imported')}catch(err){toast(err.message,'err')}if(fileRef.current)fileRef.current.value=''};
+    setRawSheet({headers:h,rows:r});const ai=await aiParse(r,h);if(ai?.leads.length){setLeads(p=>[...p,...validateStatuses(ai.leads)]);toast('✨ '+ai.count+' imported');return}
+    const res=parseSheet(r,h);if(res.error)return toast(res.error,'err');setLeads(p=>[...p,...validateStatuses(res.leads)]);toast(res.count+' imported')}catch(err){toast(err.message,'err')}if(fileRef.current)fileRef.current.value=''};
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
