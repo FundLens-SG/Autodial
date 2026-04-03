@@ -141,7 +141,105 @@ async function authLogin(){authClear();var e=document.getElementById('auth-email
 async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;if(!n||!e||!p)return authMsg('Fill all fields');authMsg('Creating…','i');try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);authMsg('Created! Sign in now.','i');setTimeout(()=>authShow('login'),1500)}catch(err){authMsg(err.message)}}
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
-function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;localStorage.setItem('autodial_role',window._role);if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
+function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;localStorage.setItem('autodial_role',window._role);initSync();if(!window._mounted){window._mounted=true;initApp()}else{document.getElementById('root').innerHTML='';initApp()}}
+
+// ══════════════════════════════════════════
+//  SUPABASE REALTIME SYNC — PC ↔ Phone
+// ══════════════════════════════════════════
+var _channel=null;
+var _syncCallbacks=[];
+
+function initSync(){
+  if(!_SB||!_user?.id)return;
+  if(_channel){try{_SB.removeChannel(_channel)}catch(e){}}
+  var room='autodial-'+_user.id;
+  _channel=_SB.channel(room);
+  _channel.on('broadcast',{event:'sync'},function(msg){
+    var d=msg.payload;if(!d)return;
+    // Ignore our own broadcasts (check device id)
+    if(d._device===window._deviceId)return;
+    console.log('[Sync] Received:',d.type);
+    _syncCallbacks.forEach(function(cb){cb(d)});
+  });
+  _channel.subscribe(function(status){
+    if(status==='SUBSCRIBED')console.log('[Sync] Connected to room:',room);
+  });
+  // Unique device ID to filter own messages
+  if(!window._deviceId)window._deviceId=Math.random().toString(36).slice(2);
+}
+
+window.syncSend=function(type,payload){
+  if(!_channel)return;
+  _channel.send({type:'broadcast',event:'sync',payload:{...payload,type:type,_device:window._deviceId,_ts:Date.now()}});
+};
+window.onSync=function(cb){_syncCallbacks.push(cb);return function(){_syncCallbacks=_syncCallbacks.filter(function(c){return c!==cb})}};
+
+// ═══ Gender Detection ═══
+window.detectGender=function(lead){
+  // 1. Check gender field directly
+  if(lead.gender){var g=lead.gender.toLowerCase();if(/^(m|male|mr)$/i.test(g))return 'male';if(/^(f|female|mrs|ms|miss|mdm|madam)$/i.test(g))return 'female'}
+  // 2. Check name prefix
+  var n=(lead.name||'').trim();
+  if(/^(mr\.?|encik|en\.?)\s/i.test(n))return 'male';
+  if(/^(mrs\.?|ms\.?|miss\.?|mdm\.?|madam|puan|cik)\s/i.test(n))return 'female';
+  return null; // unknown
+};
+
+// ═══ Age Parsing — handles "51 to 60", "55", "51-60" ═══
+window.parseAgeRange=function(ageStr){
+  if(!ageStr)return null;
+  var s=String(ageStr).trim();
+  // Direct number
+  var direct=parseInt(s);if(!isNaN(direct)&&s.length<=3)return{min:direct,max:direct};
+  // Range: "51 to 60", "51-60", "51 - 60"
+  var m=s.match(/(\d+)\s*(?:to|-|–)\s*(\d+)/i);
+  if(m)return{min:parseInt(m[1]),max:parseInt(m[2])};
+  return null;
+};
+window.ageOverlaps=function(leadAge,filterMin,filterMax){
+  var r=parseAgeRange(leadAge);if(!r)return true; // can't determine, include
+  // Check if ranges overlap
+  return r.max>=filterMin&&r.min<=filterMax;
+};
+
+// ═══ Smart Queue — skip NI, time-aware CB, filters ═══
+window.getNextDialable=function(leads,afterIdx,filters){
+  var f=filters||{};
+  var now=new Date();
+  for(var i=(afterIdx>=0?afterIdx+1:0);i<leads.length;i++){
+    var l=leads[i];
+    // Skip NI — permanently done
+    if(l.status==='ni')continue;
+    // Skip Set — already converted
+    if(l.status==='set')continue;
+    // Skip NP with 5+ — auto NI
+    if(l.status==='np'&&l.npCount>=5)continue;
+    // Filter: skip ALL NPs
+    if(f.skipAllNP&&l.status==='np')continue;
+    // CB — only dial if within 15 min of scheduled time
+    if(l.status==='cb'){
+      if(!l.cbDate||!l.cbTime){continue}
+      try{
+        var cbDateTime=new Date(l.cbDate+'T'+l.cbTime);
+        var diffMin=(cbDateTime-now)/60000;
+        if(diffMin>15||diffMin<-5)continue;
+      }catch(e){continue}
+    }
+    // Filter: gender
+    if(f.genderFilter&&f.genderFilter!=='all'){
+      var g=detectGender(l);
+      if(g&&g!==f.genderFilter)continue; // skip mismatched, but include unknown
+    }
+    // Filter: age range
+    if(f.ageFilter&&(f.ageMin||f.ageMax)){
+      var amin=f.ageMin||0,amax=f.ageMax||999;
+      if(l.age&&!ageOverlaps(l.age,amin,amax))continue;
+    }
+    // Pending or eligible — dialable
+    return i;
+  }
+  return -1;
+};
 async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}_user=s.data.session.user;var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data)_prof=p.data;var savedRole=localStorage.getItem('autodial_role');if(savedRole){window._role=savedRole;authGrant()}else{document.getElementById('auth-gate').style.display='flex';var emailEl=document.getElementById('auth-email');if(emailEl&&_user.email)emailEl.value=_user.email}}catch(e){document.getElementById('auth-gate').style.display='flex'}}
 if(_SB)authCheck();else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(()=>{if(!window._mounted){window._mounted=true;initApp()}},100)}
 
@@ -322,6 +420,8 @@ function App(){
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);
   const[newF,setNewF]=useState({name:'',phone:''});
+  const[showFilters,setShowFilters]=useState(false);
+  const[filters,setFilters]=useState({genderFilter:'all',ageFilter:false,ageMin:'',ageMax:'',skipAllNP:false});
   const[gOk,setGOk]=useState(!!localStorage.getItem('ad_gt'));
   const[sTabs,setSTabs]=useState([]);
   const[sLoad,setSLoad]=useState(false);
@@ -354,11 +454,48 @@ function App(){
   const pending=leads.filter(l=>l.status==='pending'||l.status==='cb');
   const cur=curIdx>=0&&curIdx<leads.length?leads[curIdx]:null;
   const progress=leads.length?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
+  const hasGender=leads.some(l=>detectGender(l)!==null);
+  const hasAge=leads.some(l=>l.age);
   const tier=getTier(totalSets);const nextTier=getNextTier(totalSets);
   const userName=window._prof?.full_name||window._prof?.email||'User';
   const hourlyRate=cfg.payRates[tier.idx]||cfg.payRates[0];
 
-  const dial=useCallback(ph=>{if(isMob)window.location.href=`tel:${ph.replace(/[^+\d]/g,'')}`},[]);
+  const dial=useCallback(ph=>{
+    if(isMob)window.location.href=`tel:${ph.replace(/[^+\d]/g,'')}`;
+    // Broadcast dial event so phone auto-dials if PC triggered
+    syncSend('dial',{phone:ph});
+  },[]);
+
+  // ─── Cross-device sync listener ───
+  useEffect(()=>{
+    const unsub=onSync((data)=>{
+      if(data.type==='dial'&&isMob){
+        // Phone received dial command from PC — auto-trigger call
+        setTimeout(()=>{window.location.href=`tel:${data.phone.replace(/[^+\d]/g,'')}`},500);
+      }
+      if(data.type==='outcome'){
+        // Other device marked an outcome — apply it
+        setLeads(data.leads||[]);
+        if(data.curIdx!==undefined)setCurIdx(data.curIdx);
+        if(data.phase)setPhase(data.phase);
+        if(data.running!==undefined)setRunning(data.running);
+        if(data.session)setSession(data.session);
+        if(data.countdown!==undefined)setCountdown(data.countdown);
+      }
+      if(data.type==='start'){
+        setLeads(data.leads||leads);
+        setCurIdx(data.curIdx);setRunning(true);setPhase(data.phase||'calling');
+        setSession(data.session);setTab('dial');
+        // Phone auto-dials
+        if(isMob&&data.phone){
+          setTimeout(()=>{window.location.href=`tel:${data.phone.replace(/[^+\d]/g,'')}`},800);
+        }
+      }
+      if(data.type==='pause'){setRunning(false);setPhase('idle')}
+      if(data.type==='end'){setSession(data.session);setRunning(false);setPhase('idle')}
+    });
+    return unsub;
+  },[leads]);
 
   const syncSheet=useCallback(async(lead,st)=>{
     if(!cfg.sheetId||lead.statusCol===-1||!lead.sheetRow||!localStorage.getItem('ad_gt'))return;
@@ -382,7 +519,7 @@ function App(){
     setSession(s);
     setSessionLog(p=>[s,...p]);
     setRunning(false);setPhase('idle');clearTimeout(cdRef.current);
-    // Auto-write to Google Sheets timesheet
+    syncSend('end',{session:s});
     if(localStorage.getItem('ad_gt')){
       gTimesheet.appendSession(s,userName,cfg).then(()=>toast('Timesheet updated ✓')).catch(()=>{});
     }
@@ -391,15 +528,20 @@ function App(){
   // ─── Outcome ───
   const applyOutcome=useCallback((status,extra={})=>{
     const idx=curIdx;
-    setLeads(prev=>prev.map((l,i)=>{
-      if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
-      if(status==='np'){const wasCb=l.status==='cb';const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=5?'ni':'np';if(wasCb&&l.cbDate){u.cbHistory=[...(l.cbHistory||[]),{date:`${l.cbDate} ${l.cbTime}`,result:'NP'}]}syncSheet(u,nc>=5?'ni':'np')}
-      else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
-      else if(status==='set'){u.status='set';syncSheet(u,'set')}
-      else if(status==='ni'){u.status='ni';syncSheet(u,'ni')}
-      else u.status=status;
-      return u;
-    }));
+    let updatedLeads=null;
+    setLeads(prev=>{
+      const next=prev.map((l,i)=>{
+        if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
+        if(status==='np'){const wasCb=l.status==='cb';const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=5?'ni':'np';if(wasCb&&l.cbDate){u.cbHistory=[...(l.cbHistory||[]),{date:`${l.cbDate} ${l.cbTime}`,result:'NP'}]}syncSheet(u,nc>=5?'ni':'np')}
+        else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
+        else if(status==='set'){u.status='set';syncSheet(u,'set')}
+        else if(status==='ni'){u.status='ni';syncSheet(u,'ni')}
+        else u.status=status;
+        return u;
+      });
+      updatedLeads=next;
+      return next;
+    });
     // Update session stats
     if(session&&!session.ended){
       setSession(prev=>{
@@ -408,7 +550,6 @@ function App(){
         if(status==='set'){
           s.sets=prev.sets+1;
           const newTotal=totalSets+1;setTotalSets(newTotal);
-          // Check milestones
           if(s.sets===cfg.mThresh){
             setConfetti(true);setTimeout(()=>setConfetti(false),3000);
             setMilestone({title:'FULL SESSION EARNED! 🎉',sub:`You hit ${cfg.mThresh} appointments! Your full ${cfg.sessionDur}-hour session is now logged.\n\nBut why stop? Push for ${cfg.nThresh} appts to unlock the 1.5× BONUS!`,emoji:'🏆'});
@@ -416,7 +557,6 @@ function App(){
             setConfetti(true);setTimeout(()=>setConfetti(false),4000);
             setMilestone({title:'1.5× BONUS UNLOCKED! 💰',sub:`INCREDIBLE! ${cfg.nThresh} appointments! Your entire session pay is now multiplied by 1.5×!\n\nYou're on FIRE — keep going!`,emoji:'🔥'});
           }
-          // Tier promotion check
           if(TIERS.some(t=>t.min===newTotal)){
             setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION! 🚀',sub:`You've reached ${getTier(newTotal).label}!\nYour hourly rate is now $${cfg.payRates[getTier(newTotal).idx]}/hr!`,emoji:'⭐'})},1500);
           }
@@ -427,8 +567,17 @@ function App(){
   },[curIdx,session,totalSets,cfg,syncSheet]);
 
   const moveNext=useCallback(()=>{
-    setLeads(prev=>{const n=prev.findIndex((l,i)=>i>curIdx&&(l.status==='pending'||l.status==='cb'));if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return prev}setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);return prev});
-  },[curIdx,cfg.delay]);
+    setLeads(prev=>{
+      const n=getNextDialable(prev,curIdx,filters);
+      if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);
+        syncSend('outcome',{leads:prev,curIdx:-1,phase:'idle',running:false,session});
+        return prev}
+      setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);
+      // Broadcast so other device knows what's next
+      setTimeout(()=>{syncSend('outcome',{leads:prev,curIdx:n,phase:'waiting',running:true,session,countdown:cfg.delay})},100);
+      return prev;
+    });
+  },[curIdx,cfg.delay,session]);
 
   const handleOutcome=useCallback((status,extra={})=>{
     if(status==='set'){applyOutcome(status,extra);setShowAppt(true);setApptDate('');setApptTime('');setApptInvite('');setTimeout(moveNext,150);return}
@@ -437,11 +586,22 @@ function App(){
 
   useEffect(()=>{
     if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
-    if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}
+    if(phase==='waiting'&&countdown===0&&running&&cur){
+      setPhase('calling');dial(cur.phone);
+    }
   },[phase,countdown,running,cur,dial]);
 
-  const startDial=()=>{if(!session||session.ended)startSession();const f=leads.findIndex(l=>l.status==='pending'||l.status==='cb');if(f===-1)return;setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500)};
-  const pauseDial=()=>{setRunning(false);setPhase('idle');clearTimeout(cdRef.current)};
+  const startDial=()=>{
+    if(!session||session.ended)startSession();
+    const f=getNextDialable(leads,-1,filters);
+    if(f===-1){toast('No eligible leads','err');return}
+    setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');
+    const phone=leads[f].phone;
+    setTimeout(()=>dial(phone),500);
+    // Broadcast start so phone auto-dials
+    syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone,leads});
+  };
+  const pauseDial=()=>{setRunning(false);setPhase('idle');clearTimeout(cdRef.current);syncSend('pause',{})};
 
   const connectG=()=>gConnect(()=>setGOk(true));
   const fetchTabs=async(id)=>{const sid=id||cfg.sheetId;const m=sid?.match(/\/d\/([a-zA-Z0-9_-]+)/)||sid?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m){toast('Bad URL','err');return}const fid=m[1];setCfg(s=>({...s,sheetId:fid}));setSLoad(true);try{setSTabs(await gSheets.meta(fid));toast('Tabs loaded')}catch(e){toast(e.message,'err')}setSLoad(false)};
@@ -573,6 +733,44 @@ function App(){
         </div>
       </div>
 
+      {/* ─── Session Filters ─── */}
+      <button onClick={()=>setShowFilters(!showFilters)} style={{width:'100%',padding:'8px',borderRadius:8,background:showFilters?'var(--adim)':'var(--bg3)',color:showFilters?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:600,marginBottom:showFilters?0:10,border:'1px solid '+(showFilters?'rgba(99,102,241,.2)':'var(--border)'),display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+        🎯 Filters {(filters.genderFilter!=='all'||filters.ageFilter||filters.skipAllNP)&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)'}}>Active</span>}
+      </button>
+      {showFilters&&<div className="card" style={{marginBottom:10,marginTop:6}}>
+        {/* Gender filter */}
+        <div style={{marginBottom:10,opacity:hasGender?1:.4,pointerEvents:hasGender?'auto':'none'}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
+            <span style={{fontSize:11,fontWeight:600,color:'var(--text2)'}}>Gender</span>
+            {!hasGender&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>No data detected</span>}
+          </div>
+          <div style={{display:'flex',gap:6}}>
+            {[['all','All'],['male','♂ Male'],['female','♀ Female']].map(([k,v])=>
+              <button key={k} onClick={()=>setFilters(f=>({...f,genderFilter:k}))} style={{flex:1,padding:'8px 0',borderRadius:8,fontSize:11,fontWeight:600,background:filters.genderFilter===k?'var(--adim)':'var(--bg3)',color:filters.genderFilter===k?'var(--accent2)':'var(--text3)',border:`1px solid ${filters.genderFilter===k?'rgba(99,102,241,.3)':'var(--border)'}`}}>{v}</button>
+            )}
+          </div>
+        </div>
+        {/* Age range filter */}
+        <div style={{marginBottom:10,opacity:hasAge?1:.4,pointerEvents:hasAge?'auto':'none'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+            <input type="checkbox" checked={filters.ageFilter} onChange={e=>setFilters(f=>({...f,ageFilter:e.target.checked}))} style={{width:16,height:16,accentColor:'var(--accent)'}}/>
+            <span style={{fontSize:11,fontWeight:600,color:'var(--text2)'}}>Age Range</span>
+            {!hasAge&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>No data</span>}
+          </div>
+          {filters.ageFilter&&<div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="number" value={filters.ageMin} onChange={e=>setFilters(f=>({...f,ageMin:e.target.value}))} placeholder="Min" style={{flex:1,textAlign:'center',fontSize:13,padding:'8px'}}/>
+            <span style={{color:'var(--text3)',fontSize:12}}>to</span>
+            <input type="number" value={filters.ageMax} onChange={e=>setFilters(f=>({...f,ageMax:e.target.value}))} placeholder="Max" style={{flex:1,textAlign:'center',fontSize:13,padding:'8px'}}/>
+          </div>}
+        </div>
+        {/* Skip all NPs */}
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <input type="checkbox" checked={filters.skipAllNP} onChange={e=>setFilters(f=>({...f,skipAllNP:e.target.checked}))} style={{width:16,height:16,accentColor:'var(--amber)'}}/>
+          <span style={{fontSize:11,fontWeight:600,color:'var(--text2)'}}>Skip all NPs</span>
+          <span style={{fontSize:10,color:'var(--text3)'}}>(NP×1 through NP×4)</span>
+        </div>
+      </div>}
+
       <button onClick={running?pauseDial:startDial} disabled={pending.length===0} style={{width:'100%',padding:'14px',borderRadius:12,background:running?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:15,fontWeight:700,opacity:pending.length===0?.4:1,marginBottom:8}}>
         {running?'⏸ Pause':'▶ Start ('+pending.length+')'}
       </button>
@@ -631,66 +829,142 @@ function App(){
     </div>}
 
     {/* ═══ TIMESHEET (both roles) ═══ */}
-    {tab==='timesheet'&&<div style={{padding:'0 16px',paddingBottom:100}}>
-      {/* Total earnings banner */}
-      <div className="card" style={{marginBottom:12,textAlign:'center',background:'linear-gradient(135deg,rgba(251,191,36,.08),rgba(245,158,11,.04))',borderColor:'rgba(251,191,36,.2)'}}>
-        <p style={{margin:0,fontSize:11,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.1em'}}>Total Earnings</p>
-        <p className="mono" style={{margin:'4px 0 2px',fontSize:36,fontWeight:800,color:'var(--gold)'}}>${totalEarnings.toFixed(2)}</p>
-        <p style={{margin:0,fontSize:12,color:'var(--text3)'}}>{sessionLog.length} sessions · {totalSets} appointments · {tier.label}</p>
+    {tab==='timesheet'&&(()=>{
+      const unpaidSessions=sessionLog.filter(s=>!s.paid);
+      const paidSessions=sessionLog.filter(s=>s.paid);
+      const unpaidSessionPay=unpaidSessions.reduce((a,s)=>a+(s.pay||0),0);
+      const unpaidIncentives=incentives.filter(x=>!x.paid);
+      const paidIncentives=incentives.filter(x=>x.paid);
+      const unpaidIncentiveTotal=unpaidIncentives.reduce((a,x)=>a+(x.amount||0),0);
+      const totalOwed=unpaidSessionPay+unpaidIncentiveTotal;
+      const totalPaidAll=paidSessions.reduce((a,s)=>a+(s.pay||0),0)+paidIncentives.reduce((a,x)=>a+(x.amount||0),0);
+      const totalAllTime=totalOwed+totalPaidAll;
+      // Follow-up leads (status=set, can be updated to postpone/met/mia/closed)
+      const setLeads=leads.filter(l=>l.status==='set'||l.followUp);
+
+      return<div style={{padding:'0 16px',paddingBottom:100}}>
+      {/* Earnings summary */}
+      <div className="card" style={{marginBottom:10,textAlign:'center',background:'linear-gradient(135deg,rgba(251,191,36,.08),rgba(245,158,11,.04))',borderColor:'rgba(251,191,36,.2)'}}>
+        <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.1em'}}>Outstanding Pay</p>
+        <p className="mono" style={{margin:'4px 0 0',fontSize:32,fontWeight:800,color:totalOwed>0?'var(--gold)':'var(--green)'}}>${totalOwed.toFixed(2)}</p>
+        <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:11,color:'var(--text3)'}}>
+          <span>Sessions: <b className="mono">${unpaidSessionPay.toFixed(2)}</b></span>
+          <span>Incentives: <b className="mono">${unpaidIncentiveTotal.toFixed(2)}</b></span>
+        </div>
+        <div style={{marginTop:6,fontSize:10,color:'var(--text3)'}}>
+          All-time earned: <b className="mono">${totalAllTime.toFixed(2)}</b> · Paid: <b className="mono">${totalPaidAll.toFixed(2)}</b>
+        </div>
+        <div style={{marginTop:4,fontSize:10,color:'var(--text3)'}}>Billing cycle: every <b>{cfg.billingDays}</b> days · {tier.label} · ${hourlyRate}/hr</div>
       </div>
 
-      {/* Pay scheme (read-only for Admin) */}
-      <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:13,fontWeight:600,marginBottom:8,color:'var(--text2)'}}>💰 Pay Scheme</h3>
-        <div style={{display:'flex',gap:6,marginBottom:8}}>
-          {TIERS.map((t,i)=><div key={i} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:8,background:tier.idx===i?`${t.color}18`:'var(--bg3)',border:`1px solid ${tier.idx===i?t.color+'40':'var(--border)'}`,transition:'all .3s'}}>
-            <p style={{margin:0,fontSize:16}}>{i===0?'🥉':i===1?'🥈':'🥇'}</p>
-            <p style={{margin:'2px 0 0',fontSize:11,fontWeight:700,color:t.color}}>{t.label.split(' ')[0]}</p>
-            <p className="mono" style={{margin:'2px 0 0',fontSize:13,fontWeight:800,color:tier.idx===i?'#f1f5f9':'var(--text3)'}}>${cfg.payRates[i]}/hr</p>
-            <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)'}}>≥{t.min} appts</p>
-          </div>)}
-        </div>
-        <div style={{display:'flex',gap:8,fontSize:11,color:'var(--text3)'}}>
-          <span>Session: <b style={{color:'var(--text2)'}}>{cfg.sessionDur}hr</b></span>
-          <span>Full @ <b style={{color:'var(--green)'}}>{cfg.mThresh} appts</b></span>
-          <span>1.5× @ <b style={{color:'var(--gold)'}}>{cfg.nThresh} appts</b></span>
-        </div>
-      </div>
+      {/* Main: Mark paid + generate invoice */}
+      {role==='main'&&unpaidSessions.length+unpaidIncentives.length>0&&<div style={{display:'flex',gap:6,marginBottom:10}}>
+        <button onClick={()=>{setSessionLog(p=>p.map(s=>s.paid?s:{...s,paid:true,paidDate:new Date().toISOString()}));setIncentives(p=>p.map(x=>x.paid?x:{...x,paid:true,paidDate:new Date().toISOString()}));toast('All marked as paid ✓')}} style={{flex:1,padding:'10px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,border:'1px solid rgba(52,211,153,.2)'}}>✓ Mark All Paid</button>
+        <button onClick={()=>setShowInvoice({sessions:unpaidSessions,incentives:unpaidIncentives,sessionPay:unpaidSessionPay,incentiveTotal:unpaidIncentiveTotal,total:totalOwed})} style={{flex:1,padding:'10px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>📄 Invoice</button>
+      </div>}
+
+      {/* Follow-up leads (Postpone/Met/MIA/Closed) */}
+      {setLeads.length>0&&<>
+        <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',marginBottom:6}}>📋 Appointment Follow-up</h3>
+        {setLeads.map(l=><div key={l.id} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+            <div style={{flex:1}}><span style={{fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{l.name}</span> <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span></div>
+            <Badge s={l.status} np={l.npCount} cbh={l.cbHistory} fu={l.followUp}/>
+          </div>
+          {!l.followUp&&<div style={{display:'flex',gap:5}}>
+            {[['postpone','Postpone','var(--amber)','var(--amdim)'],['met','Met ✓','var(--green)','var(--gdim)'],['mia','MIA','var(--red)','var(--rdim)'],['closed','Closed','var(--gold)','var(--golddim)']].map(([k,label,c,bg])=>
+              <button key={k} onClick={()=>{
+                setLeads(p=>p.map(x=>x.id===l.id?{...x,followUp:k}:x));
+                if(k==='met'){setIncentives(p=>[...p,{id:Date.now(),leadName:l.name,type:'met',amount:cfg.metIncentive,date:new Date().toISOString(),paid:false}]);toast(`+$${cfg.metIncentive} incentive for meeting ${l.name}`)}
+                if(k==='closed'){setShowFollowUp(l.id)}
+              }} style={{flex:1,padding:'7px 2px',borderRadius:6,background:bg,color:c,fontSize:10,fontWeight:700}}>{label}</button>
+            )}
+          </div>}
+          {l.followUp==='closed'&&l.tip!=null&&<p style={{margin:'4px 0 0',fontSize:11,color:'var(--gold)'}}>💰 Tip: ${l.tip}</p>}
+        </div>)}
+      </>}
 
       {/* Session log */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-        <h3 style={{fontSize:14,fontWeight:700,color:'#f1f5f9'}}>Session Log</h3>
-        {sessionLog.length>0&&<button onClick={exportCSV} style={{padding:'5px 12px',borderRadius:7,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>⬇ Export</button>}
-      </div>
-
+      <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',marginTop:12,marginBottom:6}}>📊 Sessions {unpaidSessions.length>0&&<span style={{color:'var(--amber)',fontWeight:600}}>({unpaidSessions.length} unpaid)</span>}</h3>
       {sessionLog.map((s,i)=>{
         const d=new Date(s.startTime);const ed=s.endTime?new Date(s.endTime):null;
-        const hoursCredit=s.fullSession?cfg.sessionDur:(s.elapsed/3600);
-        return<div key={i} className="card" style={{marginBottom:8,borderColor:s.bonus?'rgba(251,191,36,.2)':s.fullSession?'rgba(52,211,153,.15)':'var(--border)',background:s.bonus?'rgba(251,191,36,.03)':'var(--bg2)'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+        const hc=s.fullSession?cfg.sessionDur:(s.elapsed/3600);
+        return<div key={i} className="card" style={{marginBottom:6,padding:'10px 12px',opacity:s.paid?.6:1,borderColor:s.paid?'var(--border)':s.bonus?'rgba(251,191,36,.2)':'var(--border)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
             <div>
-              <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'})}</p>
-              <p className="mono" style={{margin:0,fontSize:11,color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} → {ed?ed.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—'}</p>
+              <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p>
+              <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}→{ed?ed.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—'}</p>
             </div>
             <div style={{textAlign:'right'}}>
-              <p className="mono" style={{margin:0,fontSize:18,fontWeight:800,color:s.bonus?'var(--gold)':s.fullSession?'var(--green)':'var(--text)'}}>${(s.pay||0).toFixed(2)}</p>
-              {s.bonus&&<span className="pill" style={{background:'var(--golddim)',color:'var(--gold)'}}>🔥 1.5×</span>}
-              {s.fullSession&&!s.bonus&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓ Full</span>}
+              <p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:s.paid?'var(--text3)':s.bonus?'var(--gold)':'var(--text)'}}>{s.paid?'PAID':'$'+(s.pay||0).toFixed(2)}</p>
+              {s.bonus&&!s.paid&&<span className="pill" style={{background:'var(--golddim)',color:'var(--gold)'}}>🔥1.5×</span>}
             </div>
           </div>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {[['Dialed',s.dialed,'var(--text2)'],['Set',s.sets,'var(--green)'],['NP',s.np,'var(--amber)'],['CB',s.cb,'var(--blue)'],['NI',s.ni,'var(--red)']].map(([l,v,c])=>
-              <span key={l} style={{fontSize:10,color:c,fontWeight:600}}>{l}:{v}</span>
-            )}
-            <span style={{fontSize:10,color:'var(--text3)'}}>·</span>
-            <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{Math.floor(s.elapsed/60)}min</span>
-            <span style={{fontSize:10,color:'var(--text3)'}}>·</span>
-            <span style={{fontSize:10,color:s.tier?.includes('Gold')?'var(--gold)':s.tier?.includes('Silver')?'#c0c0c0':'#cd7f32',fontWeight:600}}>{s.tier}</span>
-            <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>${s.hourlyRate}/hr × {hoursCredit.toFixed(1)}h</span>
+          <div style={{display:'flex',gap:5,flexWrap:'wrap',fontSize:10}}>
+            <span style={{color:'var(--text2)'}}>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span style={{color:'var(--amber)'}}>NP:{s.np}</span><span style={{color:'var(--blue)'}}>CB:{s.cb}</span><span style={{color:'var(--red)'}}>NI:{s.ni}</span>
+            <span style={{color:'var(--text3)'}}>· {s.tier} ${s.hourlyRate}/hr×{hc.toFixed(1)}h</span>
           </div>
+          {role==='main'&&!s.paid&&<button onClick={()=>setSessionLog(p=>p.map((x,j)=>j===i?{...x,paid:true,paidDate:new Date().toISOString()}:x))} style={{marginTop:6,padding:'5px 10px',borderRadius:6,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
         </div>
       })}
-      {sessionLog.length===0&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{fontSize:24,marginBottom:8}}>📋</p><p style={{color:'var(--text3)',fontSize:13}}>Complete a calling session to see your timesheet</p></div>}
+
+      {/* Incentives log */}
+      {incentives.length>0&&<>
+        <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',marginTop:12,marginBottom:6}}>🎯 Incentives & Tips</h3>
+        {incentives.map((x,i)=><div key={x.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)',opacity:x.paid?.5:1}}>
+          <span className="pill" style={{background:x.type==='met'?'var(--gdim)':x.type==='closed'?'var(--golddim)':'var(--bg3)',color:x.type==='met'?'var(--green)':'var(--gold)'}}>{x.type==='met'?'Met':'Tip'}</span>
+          <span style={{flex:1,fontSize:12,color:'#cbd5e1'}}>{x.leadName}</span>
+          <span className="mono" style={{fontSize:13,fontWeight:700,color:x.paid?'var(--text3)':'var(--gold)'}}>{x.paid?'PAID':'$'+x.amount.toFixed(2)}</span>
+          {role==='main'&&!x.paid&&<button onClick={()=>setIncentives(p=>p.map((y,j)=>j===i?{...y,paid:true}:y))} style={{padding:'3px 8px',borderRadius:5,background:'var(--gdim)',color:'var(--green)',fontSize:9,fontWeight:600}}>✓</button>}
+        </div>)}
+      </>}
+
+      {sessionLog.length===0&&incentives.length===0&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{fontSize:24,marginBottom:8}}>📋</p><p style={{color:'var(--text3)',fontSize:13}}>Complete a session to see your timesheet</p></div>}
+    </div>})()}
+
+    {/* ═══ Follow-up Tip Modal (Main keys tip for Closed) ═══ */}
+    {showFollowUp&&(()=>{const l=leads.find(x=>x.id===showFollowUp);if(!l)return null;
+      return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowFollowUp(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
+          <h3 style={{margin:'0 0 8px',fontSize:17,fontWeight:700,color:'var(--gold)'}}>🎉 Deal Closed — {l.name}</h3>
+          <p style={{margin:'0 0 14px',fontSize:13,color:'var(--text3)'}}>Enter discretionary tip (or $0 to skip)</p>
+          <input type="number" value={tipAmount} onChange={e=>setTipAmount(e.target.value)} placeholder="Tip amount ($)" style={{marginBottom:14,colorScheme:'dark'}}/>
+          <button onClick={()=>{
+            const tip=parseFloat(tipAmount)||0;
+            setLeads(p=>p.map(x=>x.id===l.id?{...x,followUp:'closed',tip}:x));
+            if(tip>0)setIncentives(p=>[...p,{id:Date.now(),leadName:l.name,type:'closed',amount:tip,date:new Date().toISOString(),paid:false}]);
+            toast(tip>0?`$${tip} tip added for ${l.name}`:`${l.name} closed`);
+            setShowFollowUp(null);setTipAmount('');
+          }} style={{width:'100%',padding:'13px',borderRadius:10,background:'linear-gradient(135deg,var(--gold),#f59e0b)',color:'#0b0f1a',fontSize:14,fontWeight:700}}>Confirm</button>
+        </div>
+      </div>})()}
+
+    {/* ═══ Invoice Modal ═══ */}
+    {showInvoice&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowInvoice(null)}>
+      <div id="invoice-content" onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,maxHeight:'85vh',overflow:'auto',background:'#fff',borderRadius:16,padding:'28px 24px',color:'#111'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:20}}>
+          <div><h2 style={{margin:0,fontSize:20,fontWeight:800,color:'#111'}}>INVOICE</h2><p style={{margin:'2px 0 0',fontSize:11,color:'#666'}}>Freelance Admin Services</p></div>
+          <div style={{textAlign:'right'}}><p style={{margin:0,fontSize:11,color:'#666'}}>Date: {new Date().toLocaleDateString('en-SG')}</p><p style={{margin:0,fontSize:11,color:'#666'}}>Invoice #{Date.now().toString(36).toUpperCase()}</p></div>
+        </div>
+        <div style={{borderTop:'2px solid #111',borderBottom:'1px solid #ddd',padding:'12px 0',marginBottom:16}}>
+          <p style={{margin:0,fontSize:12,color:'#666'}}>From: <b style={{color:'#111'}}>{userName}</b></p>
+          <p style={{margin:'4px 0 0',fontSize:12,color:'#666'}}>To: <b style={{color:'#111'}}>Main / Manager</b></p>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,marginBottom:16}}>
+          <thead><tr style={{borderBottom:'1px solid #ddd'}}><th style={{textAlign:'left',padding:'6px 4px',color:'#666',fontWeight:600}}>Description</th><th style={{textAlign:'right',padding:'6px 4px',color:'#666',fontWeight:600}}>Amount</th></tr></thead>
+          <tbody>
+            {showInvoice.sessions.map((s,i)=>{const d=new Date(s.startTime);return<tr key={i} style={{borderBottom:'1px solid #eee'}}><td style={{padding:'6px 4px'}}>Session {d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})} · {s.tier} · {s.sets} appts {s.bonus?'(1.5× bonus)':s.fullSession?'(full session)':''}</td><td style={{padding:'6px 4px',textAlign:'right',fontWeight:600}}>${(s.pay||0).toFixed(2)}</td></tr>})}
+            {showInvoice.incentives.map((x,i)=><tr key={'i'+i} style={{borderBottom:'1px solid #eee'}}><td style={{padding:'6px 4px'}}>{x.type==='met'?'Meeting incentive':'Tip'}: {x.leadName}</td><td style={{padding:'6px 4px',textAlign:'right',fontWeight:600}}>${x.amount.toFixed(2)}</td></tr>)}
+          </tbody>
+        </table>
+        <div style={{display:'flex',justifyContent:'space-between',padding:'10px 4px',borderTop:'2px solid #111',fontSize:16,fontWeight:800}}>
+          <span>TOTAL</span><span>${showInvoice.total.toFixed(2)}</span>
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:20}}>
+          <button onClick={()=>{window.print()}} style={{flex:1,padding:'12px',borderRadius:10,background:'#111',color:'#fff',fontSize:13,fontWeight:700}}>🖨 Print</button>
+          <button onClick={()=>setShowInvoice(null)} style={{padding:'12px 20px',borderRadius:10,background:'#eee',color:'#666',fontSize:13,fontWeight:600}}>Close</button>
+        </div>
+      </div>
     </div>}
 
     {/* ═══ HISTORY (both roles) ═══ */}
@@ -793,6 +1067,14 @@ function App(){
           <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>M (full sess)</label><input type="number" value={cfg.mThresh} onChange={e=>setCfg(s=>({...s,mThresh:parseInt(e.target.value)||2}))} style={{fontSize:13,textAlign:'center'}}/></div>
           <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>N (1.5× bonus)</label><input type="number" value={cfg.nThresh} onChange={e=>setCfg(s=>({...s,nThresh:parseInt(e.target.value)||4}))} style={{fontSize:13,textAlign:'center'}}/></div>
         </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:10}}>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>Billing Cycle (days)</label>
+            <select value={cfg.billingDays} onChange={e=>setCfg(s=>({...s,billingDays:parseInt(e.target.value)}))} style={{fontSize:13,textAlign:'center'}}>
+              <option value={7}>Weekly (7)</option><option value={14}>Bi-weekly (14)</option><option value={28}>Monthly (28)</option><option value={30}>Monthly (30)</option>
+            </select></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" value={cfg.metIncentive} onChange={e=>setCfg(s=>({...s,metIncentive:parseFloat(e.target.value)||0}))} style={{fontSize:13,textAlign:'center'}}/></div>
+        </div>
+        <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Tips for "Closed" leads are discretionary — enter per lead in Timesheet tab.</p>
       </div>}
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:600,marginBottom:6,color:'#f1f5f9'}}>Google</h3>
