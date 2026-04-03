@@ -818,8 +818,9 @@ const TIER_RANKS=[
 function getTierRank(monthlyAppts,tierMins,enabledTiers){
   var active=TIER_RANKS.filter(function(t,i){return !enabledTiers||enabledTiers[i]!==false});
   var mins=(tierMins||[0,30,60,100,150,200]).filter(function(m,i){return !enabledTiers||enabledTiers[i]!==false});
+  if(!active.length)return{...TIER_RANKS[0],idx:0,tierIdx:0,total:1,appts:monthlyAppts,threshold:0};
   var idx=0;for(var i=mins.length-1;i>=0;i--){if(monthlyAppts>=mins[i]){idx=i;break}}
-  return{...active[idx],idx:idx,tierIdx:idx,total:active.length,appts:monthlyAppts,threshold:mins[idx]||0}
+  return{...active[Math.min(idx,active.length-1)],idx:idx,tierIdx:idx,total:active.length,appts:monthlyAppts,threshold:mins[idx]||0}
 }
 function getNextTierRank(monthlyAppts,tierMins,enabledTiers){
   var mins=(tierMins||[0,30,60,100,150,200]).filter(function(m,i){return !enabledTiers||enabledTiers[i]!==false});
@@ -1427,20 +1428,20 @@ function App(){
         if(role==='admin'&&_SB){
           try{
             const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
-            if(r.data){
-              const myCfgFromMain=JSON.parse(r.data.biz_name);
+            if(r.data&&r.data.biz_name){
+              try{const myCfgFromMain=JSON.parse(r.data.biz_name);
               setAdminConfigs(p=>({...p,[myEmail]:Object.assign({},p[myEmail]||{},myCfgFromMain)}));
-              console.log('[AutoDial] Loaded config from Main for',myEmail);
+              console.log('[AutoDial] Loaded config from Main:',Object.keys(myCfgFromMain))}catch(pe){}
             }
-          }catch(e){console.warn('[AdminCfg] personal:',e.message)}
+          }catch(e){console.warn('[AdminCfg]',e.message||'no personal config')}
           try{
             const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
-            if(gr.data){
-              const globalCfg=JSON.parse(gr.data.biz_name);
-              setCfg(p=>({...globalCfg,...p}));
-              console.log('[AutoDial] Loaded global config from Main');
+            if(gr.data&&gr.data.biz_name){
+              try{const globalCfg=JSON.parse(gr.data.biz_name);
+              setCfg(p=>{const merged={...p};Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});return merged});
+              console.log('[AutoDial] Loaded global config')}catch(pe){}
             }
-          }catch(e){console.warn('[AdminCfg] global:',e.message)}
+          }catch(e){console.warn('[AdminCfg]',e.message||'no global config')}
         }
         if(Object.keys(cloud).length>0){
           console.log('[CloudSync] Loaded '+Object.keys(cloud).length+' buckets from cloud');
@@ -1804,7 +1805,9 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const callTabs=role==='admin'?[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const _showRank=role!=='admin'||(myCfg.rankEnabled===true);
+  const _baseTabs=[['dial','📞 Dial'],['analytics','📊 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const callTabs=_showRank?[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:_baseTabs;
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
@@ -2062,8 +2065,8 @@ function App(){
     {tab==='rank'&&isCallMode&&(()=>{
       // Admin uses pay tier ranks, Main uses ML ranks
       const isAdminRank=role==='admin';
-      const tierRank=isAdminRank?getTierRank(monthlyAppts,myCfg.tierMins,myCfg.enabledTiers):null;
-      const nextTier=isAdminRank?getNextTierRank(monthlyAppts,myCfg.tierMins,myCfg.enabledTiers):null;
+      const tierRank=isAdminRank?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
+      const nextTier=isAdminRank?getNextTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
       const displayRank=isAdminRank?tierRank:rank;
       const displayNext=isAdminRank?nextTier:nextRank;
       const starsInTier=isAdminRank?(nextTier?monthlyAppts-(tierRank.threshold||0):monthlyAppts):rank.stars;
@@ -2799,7 +2802,8 @@ function App(){
           {editingAdmin===em&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
             <p style={{fontSize:10,color:'var(--text3)',fontWeight:700,marginBottom:6}}>Tier Rates & Thresholds</p>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4,marginBottom:8}}>
-              {TIER_META.map((t,i)=><div key={i} style={{background:'var(--bg)',border:'1px solid '+t.color+'20',borderRadius:8,padding:'4px',textAlign:'center'}}>
+              {TIER_META.map((t,i)=>{const _on=!(ac.enabledTiers&&ac.enabledTiers[i]===false);return<div key={i} style={{background:_on?'var(--bg)':'var(--bg3)',border:'1px solid '+(_on?t.color+'20':'var(--border)'),borderRadius:8,padding:'4px',textAlign:'center',opacity:_on?1:.35,position:'relative'}}>
+                <button onClick={()=>{const et=[...(ac.enabledTiers||[true,true,true,true,true,true])];et[i]=!et[i];setAdminConfigs(p=>({...p,[em]:{...p[em],enabledTiers:et}}))}} style={{position:'absolute',top:1,right:1,width:16,height:16,borderRadius:8,background:_on?'var(--gdim)':'var(--rdim)',color:_on?'var(--green)':'var(--red)',fontSize:8,fontWeight:700,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,zIndex:1}}>{_on?'✓':'✗'}</button>
                 <span style={{fontSize:12}}>{t.emoji}</span>
                 <p style={{margin:0,fontSize:8,fontWeight:700,color:t.color}}>{t.label}</p>
                 <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>$/hr</label>
@@ -2808,7 +2812,7 @@ function App(){
                 <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>Min appts</label>
                 <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':+e.target.value;
                   setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} style={{fontSize:9,textAlign:'center',padding:'3px',marginTop:1}} disabled={i===0}/>
-              </div>)}
+              </div>})}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
               <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Session(h)</label>
@@ -2826,7 +2830,7 @@ function App(){
             </div>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'4px 0 8px',padding:'8px 12px',borderRadius:10,background:'var(--bg3)',border:'1px solid var(--border)'}}>
               <div><span style={{fontSize:11,fontWeight:600,color:'#f1f5f9'}}>🏆 Rank System</span><br/><span style={{fontSize:9,color:'var(--text3)'}}>Gamified rank progression</span></div>
-              <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],rankEnabled:!(ac.rankEnabled!==false)}}))} style={{padding:'4px 12px',borderRadius:6,background:ac.rankEnabled!==false?'var(--gdim)':'var(--bg)',color:ac.rankEnabled!==false?'var(--green)':'var(--text3)',fontSize:10,fontWeight:700,border:'1px solid '+(ac.rankEnabled!==false?'rgba(63,185,80,.2)':'var(--border)')}}>{ac.rankEnabled!==false?'ON':'OFF'}</button>
+              <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],rankEnabled:!ac.rankEnabled}}))} style={{padding:'4px 12px',borderRadius:6,background:ac.rankEnabled===true?'var(--gdim)':'var(--bg)',color:ac.rankEnabled===true?'var(--green)':'var(--text3)',fontSize:10,fontWeight:700,border:'1px solid '+(ac.rankEnabled===true?'rgba(63,185,80,.2)':'var(--border)')}}>{ac.rankEnabled===true?'ON':'OFF'}</button>
             </div>
             <div style={{marginBottom:8}}>
               <label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:2}}>📋 Leads Sheet</label>
