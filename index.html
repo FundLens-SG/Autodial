@@ -630,7 +630,15 @@ const MilestonePopup=({show,title,sub,emoji,onClose})=>{if(!show)return null;
 function App(){
   const role=window._role||'admin';
   const stored=load('data')||{};
-  const[leads,setLeads]=useState(stored.leads||[]);
+  // Auto-validate cached leads on startup (fixes stale statuses)
+  const[leads,setLeads]=useState(()=>{
+    const cached=stored.leads||[];
+    if(!cached.length)return cached;
+    const fixed=validateStatuses(cached);
+    const changed=fixed.filter((l,i)=>l.status!==cached[i]?.status).length;
+    if(changed>0)console.log('[AutoDial] Fixed '+changed+' stale lead statuses from cache');
+    return fixed;
+  });
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
   const[running,setRunning]=useState(false);
@@ -699,6 +707,18 @@ function App(){
   const myCfg=role==='admin'&&adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg;
 
   useEffect(()=>{save('data',{leads,cfg})},[leads,cfg]);
+  // Re-validate leads when raw sheet data becomes available (e.g. after re-fetch)
+  useEffect(()=>{
+    if(!rawSheet||!leads.length)return;
+    const h=rawSheet.headers,r=rawSheet.rows;
+    let rmkCol=h.findIndex(x=>/^(remarks?|notes?|comments?)$/i.test(x.trim()));
+    if(rmkCol===-1)rmkCol=h.findIndex(x=>/^status$/i.test(x.trim()));
+    if(rmkCol===-1)rmkCol=h.findIndex(x=>x.trim().length<12&&/remarks|notes|comment/i.test(x.trim()));
+    if(rmkCol===-1)return;
+    const revalidated=validateStatuses(leads,r,rmkCol);
+    const changed=revalidated.filter((l,i)=>l.status!==leads[i]?.status).length;
+    if(changed>0){setLeads(revalidated);toast(changed+' lead statuses corrected from sheet data')}
+  },[rawSheet]);
   useEffect(()=>{save('ts',totalSets)},[totalSets]);
   useEffect(()=>{save('promo',promotionLog)},[promotionLog]);
   useEffect(()=>{save('slog',sessionLog)},[sessionLog]);
@@ -1073,7 +1093,7 @@ function App(){
             </>}
           </>
         ):(!showNextPreview&&<div style={{textAlign:'center',padding:'20px 0'}}>
-            <p style={{color:'var(--text3)',fontSize:13,marginBottom:10}}>{pending.length?'Ready — '+pending.length+' leads':'Upload leads to start'}</p>
+            <p style={{color:'var(--text3)',fontSize:13,marginBottom:10}}>{pending.length?(cfg.sheetId?'Ready — '+pending.length+' callable. Tap Leads tab → Fetch to refresh':'Ready — '+pending.length+' leads'):'Upload leads to start'}</p>
             {pending.length>0&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
               <span style={{fontSize:10,color:'var(--text3)'}}>Call delay:</span>
               <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
