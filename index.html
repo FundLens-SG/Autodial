@@ -83,7 +83,7 @@ button:active{transform:scale(.97)}
 @media(min-width:960px){
   .desktop-wrap{gap:0}
   .desktop-wrap .app-shell{margin:0;border-radius:0;flex-shrink:0}
-  .script-panel{width:420px;max-width:420px;min-height:100vh;min-height:100dvh;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden}
+  .script-panel{width:520px;max-width:520px;min-height:100vh;min-height:100dvh;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden}
   .script-panel .sp-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
   .script-panel .sp-body{flex:1;overflow-y:auto;padding:16px}
   .script-panel .sp-lead{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0}
@@ -91,6 +91,17 @@ button:active{transform:scale(.97)}
   .script-toggle:hover{background:var(--adim);border-color:var(--accent)}
   .script-toggle.open{background:var(--adim);border-color:var(--accent);box-shadow:0 0 12px rgba(99,102,241,.2)}
 }
+.sp-toolbar{display:flex;gap:3px;padding:8px 16px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;align-items:center}
+.sp-toolbar button{width:28px;height:28px;border-radius:6px;background:var(--bg);border:1px solid var(--border);color:var(--text2);display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;padding:0;transition:all .15s}
+.sp-toolbar button:hover{background:var(--bg3);border-color:var(--accent)}
+.sp-toolbar button.active{background:var(--adim);border-color:var(--accent);color:var(--accent2)}
+.sp-toolbar .sep{width:1px;height:20px;background:var(--border);margin:0 4px;flex-shrink:0}
+.sp-hl{border-radius:3px;padding:0 2px}
+.sp-edit{outline:none;min-height:200px;line-height:1.7;font-size:13.5px;color:var(--text);font-family:inherit;white-space:pre-wrap;word-wrap:break-word}
+.sp-edit:focus{outline:none}
+.sp-edit b{font-weight:700;color:#f1f5f9}
+.sp-edit i{font-style:italic;color:var(--accent3)}
+.sp-edit u{text-decoration:underline;text-underline-offset:3px}
 @media(max-width:959px){.script-panel{display:none!important}.script-toggle{display:none!important}}
 .hdr-row1{display:flex;align-items:center;gap:10;padding:14px 14px 0}
 .hdr-row2{display:flex;align-items:center;justify-content:space-between;padding:8px 14px 8px;gap:10}
@@ -1241,6 +1252,8 @@ function App(){
   const[rawSheet,setRawSheet]=useState(null); // {headers,rows} for re-analysis
   const[showColPicker,setShowColPicker]=useState(null); // {headers, onPick} for status column selection
   const[aiAnalyzing,setAiAnalyzing]=useState(false);
+  const[payConfigOpen,setPayConfigOpen]=useState(false);
+  const[showSlotPicker,setShowSlotPicker]=useState(false);
   const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||'');
   useEffect(()=>{if(geminiKeyVal)cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal})},[geminiKeyVal]);
   // ═══ DESKTOP SCRIPT PANEL ═══
@@ -1495,28 +1508,33 @@ function App(){
       await gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,v)
     }catch(e){console.warn('[SyncSheet]',e.message)}},[cfg]);
 
-  const startSession=()=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false});setElapsed(0);toast('Session started! 🔥')};
+  const startSession=(chosenSlot)=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false,selectedSlot:chosenSlot||null});setElapsed(0);setShowSlotPicker(false);toast(chosenSlot?'🔥 '+n(chosenSlot.hours,5)+'h challenge accepted!':'Session started! 🔥')};
   const endSession=()=>{if(!session)return;const s={...session,ended:true,endTime:Date.now(),elapsed};
     s.rank=rank.label;s.monthlyAppts=monthlyAppts;
-    const sessionDurH=n(myCfg.sessionDur,5);const mThresh=n(myCfg.mThresh,2);const nThresh=n(myCfg.nThresh,4);
-    const actualH=elapsed/3600;const full=s.sets>=mThresh;const bonus=s.sets>=nThresh;
-    // ═══ SMART PAY LOGIC ═══
-    // If admin didn't meet appts bar AND called less than session duration → pay actual hours only
-    // If admin met appts bar → pay full session duration (reward)
-    // If admin called MORE than session duration (+20min tolerance) → flag for Main override
+    const actualH=elapsed/3600;
+    // ═══ SMART PAY LOGIC — SELECTED SLOT ═══
+    const slots=(myCfg.sessionSlots||[{hours:n(myCfg.sessionDur,5),apptsBar:n(myCfg.mThresh,2),bonusBar:n(myCfg.nThresh,4)}])
+      .filter(sl=>n(sl.hours,0)>0).sort((a,b)=>n(a.hours,0)-n(b.hours,0));
+    // Use the slot the admin CHOSE at session start, or fall back to auto-match
+    let matchedSlot=s.selectedSlot||slots[0]||{hours:5,apptsBar:2,bonusBar:4};
+    if(!s.selectedSlot){for(let i=slots.length-1;i>=0;i--){if(actualH>=n(slots[i].hours,0)-0.33){matchedSlot=slots[i];break}}}
+    const sessionDurH=n(matchedSlot.hours,5);const mThresh=n(matchedSlot.apptsBar,2);const nThresh=n(matchedSlot.bonusBar,4);
+    const full=s.sets>=mThresh;const bonus=s.sets>=nThresh;
     let creditH;let tsNote='';
     if(full){
       creditH=sessionDurH; // Met appts bar → full session credit
     }else{
       creditH=Math.min(actualH,sessionDurH); // Didn't meet bar → actual hours (capped at session)
     }
-    // Overtime detection: if called >20min beyond session
-    if(actualH>sessionDurH+0.33){
+    // Overtime: called >20min beyond the LARGEST slot
+    const maxSlotH=slots.length?n(slots[slots.length-1].hours,5):sessionDurH;
+    if(actualH>maxSlotH+0.33){
       const nextSlot=Math.ceil(actualH);
-      tsNote='⚠ OVERTIME: Called '+actualH.toFixed(1)+'h (session='+sessionDurH+'h). Main: override to '+nextSlot+'h? Adjust appts/bonus bars accordingly.';
+      tsNote='⚠ OVERTIME: Called '+actualH.toFixed(1)+'h (max slot='+maxSlotH+'h). Main: override to '+nextSlot+'h?';
       s.overtime=true;s.overtimeHours=actualH;s.suggestedHours=nextSlot;
-      if(!full)creditH=actualH; // If didn't meet bar but went overtime, still pay actual
+      if(!full)creditH=actualH;
     }
+    s.matchedSlot={hours:sessionDurH,apptsBar:mThresh,bonusBar:nThresh};
     s.pay=creditH*hourlyRate*(bonus?n(myCfg.bonusMult,1.5):1);
     s.creditHours=creditH;s.tsNote=tsNote;
     s.fullSession=full;s.bonus=bonus;s.bonusMult=n(myCfg.bonusMult,1.5);s.hourlyRate=hourlyRate;s.tier=tier.label;
@@ -1596,7 +1614,7 @@ function App(){
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}},[phase,countdown,running,cur,dial]);
 
-  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads','err');return}
+  const startDial=(chosenSlot)=>{if(!session||session.ended){const slots=(myCfg.sessionSlots||[]).filter(sl=>n(sl.hours,0)>0);if(slots.length>1&&!chosenSlot){setShowSlotPicker(true);return}startSession(chosenSlot||slots[0]||null)}const f=getNextDialable(leads,-1,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads','err');return}
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
   const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
@@ -1733,6 +1751,7 @@ function App(){
           <span className="mono" style={{fontSize:22,fontWeight:800,color:'var(--accent2)'}}>{fmtTime(elapsed)}</span>
           <div style={{display:'flex',alignItems:'center',gap:6}}>
             <span style={{fontSize:14,fontWeight:700,color:rank.color}}>{rank.emoji} {rank.label}</span>
+            {session.selectedSlot&&<span className="pill" style={{background:'var(--golddim)',color:'var(--gold)',fontSize:8}}>{n(session.selectedSlot.hours,5)}h 🎯{n(session.selectedSlot.apptsBar,2)}</span>}
             <button onClick={()=>{if(confirm('End session?'))endSession()}} style={{padding:'5px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600}}>End</button>
           </div>
         </div>
@@ -1741,6 +1760,24 @@ function App(){
             <div key={l} style={{flex:1,textAlign:'center',padding:'6px 0',borderRadius:8,background:'var(--bg)'}}>
               <p style={{margin:0,fontSize:16,fontWeight:800,color:c}}>{v}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{l}</p></div>)}
         </div>
+        {/* Challenge progress */}
+        {session.selectedSlot&&<div style={{marginBottom:8}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+            <span style={{fontSize:10,fontWeight:700,color:'var(--text3)'}}>CHALLENGE: {n(session.selectedSlot.hours,5)}h</span>
+            <span style={{fontSize:10,fontWeight:700,color:session.sets>=n(session.selectedSlot.bonusBar,4)?'var(--gold)':session.sets>=n(session.selectedSlot.apptsBar,2)?'var(--green)':'var(--text3)'}}>
+              {session.sets>=n(session.selectedSlot.bonusBar,4)?'🔥 BONUS!':session.sets>=n(session.selectedSlot.apptsBar,2)?'✅ BAR MET':'🎯 '+session.sets+'/'+n(session.selectedSlot.apptsBar,2)}
+            </span>
+          </div>
+          <div style={{display:'flex',gap:3,height:6}}>
+            {Array.from({length:n(session.selectedSlot.bonusBar,4)}).map((_,i)=>
+              <div key={i} style={{flex:1,borderRadius:3,background:i<session.sets?(i<n(session.selectedSlot.apptsBar,2)?'var(--green)':'var(--gold)'):'var(--bg)',transition:'background .3s'}}/>
+            )}
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',marginTop:2}}>
+            <span style={{fontSize:8,color:'var(--text3)'}}>Appts Bar: {n(session.selectedSlot.apptsBar,2)}</span>
+            <span style={{fontSize:8,color:'var(--gold)'}}>Bonus: {n(session.selectedSlot.bonusBar,4)}</span>
+          </div>
+        </div>}
         {/* Rank progress */}
         {nextRank&&<div>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
@@ -1886,7 +1923,7 @@ function App(){
       </div>}
 
       {!showNextPreview&&<div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:10}}>
-        {!running?<button onClick={startDial} disabled={!pending.length} style={{width:'100%',padding:'16px',background:'linear-gradient(135deg,#22c55e,#16a34a)',color:'#fff',fontSize:16,fontWeight:800,borderRadius:14,opacity:pending.length?1:.4,boxShadow:'0 6px 24px rgba(34,197,94,.3)'}}>
+        {!running?<button onClick={()=>startDial()} disabled={!pending.length} style={{width:'100%',padding:'16px',background:'linear-gradient(135deg,#22c55e,#16a34a)',color:'#fff',fontSize:16,fontWeight:800,borderRadius:14,opacity:pending.length?1:.4,boxShadow:'0 6px 24px rgba(34,197,94,.3)'}}>
           ▶ Start ({pending.length})
         </button>
         :<>
@@ -2598,8 +2635,12 @@ function App(){
       </div>}
 
       {role==='main'&&<div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:10,color:'var(--gold)'}}>💰 Pay Config & Tiers</h3>
-        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Set $/hr and promotion threshold (min appts set) for each tier</p>
+        <button onClick={()=>setPayConfigOpen(p=>!p)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',background:'transparent',padding:0,color:'var(--gold)'}}>
+          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>💰 Pay Config & Tiers</h3>
+          <span style={{fontSize:12,color:'var(--text3)',fontWeight:600}}>{payConfigOpen?'▾ Hide':'▸ Show'}</span>
+        </button>
+        {payConfigOpen&&<>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10,marginTop:10}}>Set $/hr and promotion threshold (min appts set) for each tier</p>
         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:10}}>
           {TIER_META.map((t,i)=>{const enabled=(cfg.tierEnabled||[true,true,true,true,true,true])[i]!==false;return<div key={i} style={{background:'var(--bg)',border:'1px solid '+(enabled?t.color+'30':'var(--border)'),borderRadius:12,padding:'8px 6px',textAlign:'center',opacity:enabled?1:.4,position:'relative'}}>
             {i>0&&<button onClick={()=>{const te=[...(cfg.tierEnabled||[true,true,true,true,true,true])];while(te.length<6)te.push(true);te[i]=!te[i];setCfg(s=>({...s,tierEnabled:te}))}} style={{position:'absolute',top:3,right:3,width:18,height:18,borderRadius:9,background:enabled?'var(--gdim)':'var(--rdim)',color:enabled?'var(--green)':'var(--red)',fontSize:10,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>{enabled?'✓':'✗'}</button>}
@@ -2612,11 +2653,26 @@ function App(){
               setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0||!enabled}/>
           </div>})}
         </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Session(h)</label><input type="number" min="0" value={cfg.sessionDur??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,sessionDur:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Appts Bar</label><input type="number" min="1" value={cfg.mThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,mThresh:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Bonus Bar</label><input type="number" min="1" value={cfg.nThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,nThresh:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center'}}/></div>
-          <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult??''} onChange={e=>setCfg(s=>({...s,bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}))} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
+        {/* ═══ SESSION SLOTS ═══ */}
+        <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent2)'}}>SESSION CONFIGURATIONS</p>
+        <p style={{margin:'0 0 8px',fontSize:9,color:'var(--text3)'}}>Define multiple session lengths. Admin's actual time auto-matches the best slot.</p>
+        {(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}]).map((slot,si)=>
+          <div key={si} style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 80px',gap:6,marginBottom:6,padding:'8px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
+            <div><label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Hours</label>
+              <input type="number" min="1" step="0.5" value={slot.hours??''} onChange={e=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots[si]={...slots[si],hours:e.target.value===''?'':+e.target.value};setCfg(s=>({...s,sessionSlots:slots}))}} style={{textAlign:'center',fontSize:13,padding:'6px'}}/></div>
+            <div><label style={{fontSize:8,color:'var(--green)',fontWeight:700}}>Appts Bar</label>
+              <input type="number" min="1" value={slot.apptsBar??''} onChange={e=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots[si]={...slots[si],apptsBar:e.target.value===''?'':+e.target.value};setCfg(s=>({...s,sessionSlots:slots}))}} style={{textAlign:'center',fontSize:13,padding:'6px'}}/></div>
+            <div><label style={{fontSize:8,color:'var(--gold)',fontWeight:700}}>Bonus Bar</label>
+              <input type="number" min="1" value={slot.bonusBar??''} onChange={e=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots[si]={...slots[si],bonusBar:e.target.value===''?'':+e.target.value};setCfg(s=>({...s,sessionSlots:slots}))}} style={{textAlign:'center',fontSize:13,padding:'6px'}}/></div>
+            <div style={{display:'flex',alignItems:'flex-end'}}>
+              {(cfg.sessionSlots||[]).length>1?<button onClick={()=>{const slots=[...(cfg.sessionSlots||[])];slots.splice(si,1);setCfg(s=>({...s,sessionSlots:slots}))}} style={{width:'100%',padding:'6px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:700}}>×</button>
+              :<span style={{fontSize:8,color:'var(--text3)',textAlign:'center',display:'block',padding:'6px'}}>Default</span>}
+            </div>
+          </div>
+        )}
+        <button onClick={()=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots.push({hours:'',apptsBar:'',bonusBar:''});setCfg(s=>({...s,sessionSlots:slots}))}} style={{width:'100%',padding:'8px',borderRadius:8,background:'var(--bg3)',color:'var(--accent2)',fontSize:11,fontWeight:600,marginBottom:8,border:'1px dashed var(--border2)'}}>+ Add Session Slot</button>
+        <div style={{display:'flex',gap:8}}>
+          <div style={{flex:1}}><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult??''} onChange={e=>setCfg(s=>({...s,bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}))} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
           <div><label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" min="0" value={cfg.metIncentive??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,metIncentive:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center',borderColor:'rgba(63,185,80,.3)'}}/></div>
@@ -2630,6 +2686,7 @@ function App(){
           </select>
         </div>
         <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Defaults. Customize per-admin below. Bronze starts at 0. <span style={{color:'var(--amber)'}}>Tip: Min appts should be higher than the previous tier.</span></p>
+        </>}
       </div>}
 
       {/* Per-admin config */}
@@ -2843,6 +2900,61 @@ function App(){
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>
     </div>}
 
+    {/* ═══ CHALLENGE PICKER MODAL ═══ */}
+    {showSlotPicker&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowSlotPicker(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:24,padding:'28px 20px',border:'1px solid var(--border2)'}}>
+        <div style={{textAlign:'center',marginBottom:20}}>
+          <p style={{fontSize:40,margin:'0 0 8px'}}>⚔️</p>
+          <h2 style={{margin:0,fontSize:22,fontWeight:900,color:'#f1f5f9',letterSpacing:'-.02em'}}>Choose Your Challenge</h2>
+          <p style={{margin:'6px 0 0',fontSize:12,color:'var(--text3)'}}>Higher stakes = bigger rewards. Hit the appts bar to earn full session pay.</p>
+        </div>
+        {(()=>{
+          const slots=(myCfg.sessionSlots||[{hours:n(myCfg.sessionDur,5),apptsBar:n(myCfg.mThresh,2),bonusBar:n(myCfg.nThresh,4)}])
+            .filter(sl=>n(sl.hours,0)>0).sort((a,b)=>n(a.hours,0)-n(b.hours,0));
+          const diffLabels=['🟢 Warm-up','🔵 Standard','🟡 Grind','🟠 Push','🔴 Beast Mode','💀 Legendary'];
+          const diffColors=['#22c55e','#3b82f6','#eab308','#f97316','#ef4444','#a855f7'];
+          const diffGlow=['rgba(34,197,94,.15)','rgba(59,130,246,.15)','rgba(234,179,8,.15)','rgba(249,115,22,.15)','rgba(239,68,68,.15)','rgba(168,85,247,.15)'];
+          return slots.map((slot,i)=>{
+            const hrs=n(slot.hours,5);const ab=n(slot.apptsBar,2);const bb=n(slot.bonusBar,4);
+            const basePay=hrs*hourlyRate;const bonusPay=hrs*hourlyRate*n(myCfg.bonusMult,1.5);
+            const label=diffLabels[Math.min(i,diffLabels.length-1)];
+            const color=diffColors[Math.min(i,diffColors.length-1)];
+            const glow=diffGlow[Math.min(i,diffGlow.length-1)];
+            return<button key={i} onClick={()=>{startDial(slot)}} style={{width:'100%',padding:'16px',borderRadius:16,background:'var(--bg3)',border:'2px solid '+color+'40',marginBottom:10,textAlign:'left',position:'relative',overflow:'hidden',boxShadow:'0 4px 20px '+glow}}>
+              <div style={{position:'absolute',top:0,right:0,bottom:0,width:'40%',background:'linear-gradient(90deg,transparent,'+color+'08)',pointerEvents:'none'}}/>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div>
+                  <span style={{fontSize:13,fontWeight:800,color}}>{label}</span>
+                  <span style={{fontSize:20,fontWeight:900,color:'#f1f5f9',display:'block',marginTop:2}}>{hrs}h Session</span>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Base pay</p>
+                  <p className="mono" style={{margin:0,fontSize:18,fontWeight:800,color:'var(--green)'}}>${basePay.toFixed(0)}</p>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <div style={{flex:1,padding:'8px',borderRadius:8,background:'var(--bg)',textAlign:'center'}}>
+                  <p style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>{ab}</p>
+                  <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>🎯 Appts Bar</p>
+                  <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>= full {hrs}h pay</p>
+                </div>
+                <div style={{flex:1,padding:'8px',borderRadius:8,background:'var(--bg)',textAlign:'center',border:'1px solid '+color+'20'}}>
+                  <p style={{margin:0,fontSize:16,fontWeight:800,color:'var(--gold)'}}>{bb}</p>
+                  <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>🔥 Bonus Bar</p>
+                  <p className="mono" style={{margin:0,fontSize:9,color:'var(--gold)'}}>${bonusPay.toFixed(0)} ({n(myCfg.bonusMult,1.5)}×)</p>
+                </div>
+                <div style={{flex:1,padding:'8px',borderRadius:8,background:'var(--bg)',textAlign:'center'}}>
+                  <p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color}}>${hourlyRate}</p>
+                  <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>💰 $/hr</p>
+                  <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>{tier.emoji} {tier.label}</p>
+                </div>
+              </div>
+            </button>})
+        })()}
+        <button onClick={()=>setShowSlotPicker(false)} style={{width:'100%',padding:'12px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,marginTop:4}}>Cancel</button>
+      </div>
+    </div>}
+
     {/* CB Modal */}
     {showCb&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowCb(false)}>
       <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
@@ -2997,7 +3109,7 @@ function App(){
     <div className="sp-header">
       <h3 style={{margin:0,fontSize:15,fontWeight:800,color:'#f1f5f9'}}>📋 Calling Script</h3>
       <div style={{display:'flex',gap:6,alignItems:'center'}}>
-        {scriptEditing?<button onClick={()=>{setCfg(s=>({...s,callingScript:scriptContent}));setScriptEditing(false);toast('Script saved ✓')}} style={{padding:'5px 12px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>Save</button>
+        {scriptEditing?<button onClick={()=>{setCfg(s=>({...s,callingScript:scriptContent}));setScriptEditing(false);toast('Script saved ✓');const el=document.querySelector('.sp-edit');if(el)el._init=false}} style={{padding:'5px 12px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>Save</button>
         :<button onClick={()=>setScriptEditing(true)} style={{padding:'5px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:700}}>Edit</button>}
         <button onClick={()=>setScriptOpen(false)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',padding:0,fontSize:14}}>×</button>
       </div>
@@ -3021,20 +3133,44 @@ function App(){
       {cur.notes&&<p style={{margin:'6px 0 0',fontSize:11,color:'var(--amber)',lineHeight:1.3}}>📝 {cur.notes}</p>}
     </div>}
 
+    {/* Rich text toolbar */}
+    {scriptEditing&&<div className="sp-toolbar">
+      <button onClick={()=>document.execCommand('bold')} title="Bold"><b>B</b></button>
+      <button onClick={()=>document.execCommand('italic')} title="Italic"><i>I</i></button>
+      <button onClick={()=>document.execCommand('underline')} title="Underline"><u>U</u></button>
+      <div className="sep"/>
+      <button onClick={()=>document.execCommand('hiliteColor',false,'#facc15')} title="Highlight Yellow" style={{background:'#facc15',color:'#000',fontSize:10}}>H</button>
+      <button onClick={()=>document.execCommand('hiliteColor',false,'#4ade80')} title="Highlight Green" style={{background:'#4ade80',color:'#000',fontSize:10}}>H</button>
+      <button onClick={()=>document.execCommand('hiliteColor',false,'#f87171')} title="Highlight Red" style={{background:'#f87171',color:'#000',fontSize:10}}>H</button>
+      <button onClick={()=>document.execCommand('hiliteColor',false,'#60a5fa')} title="Highlight Blue" style={{background:'#60a5fa',color:'#000',fontSize:10}}>H</button>
+      <button onClick={()=>document.execCommand('hiliteColor',false,'#c084fc')} title="Highlight Purple" style={{background:'#c084fc',color:'#000',fontSize:10}}>H</button>
+      <div className="sep"/>
+      <button onClick={()=>document.execCommand('foreColor',false,'#22c55e')} title="Green text" style={{color:'#22c55e',fontWeight:700}}>A</button>
+      <button onClick={()=>document.execCommand('foreColor',false,'#f59e0b')} title="Amber text" style={{color:'#f59e0b',fontWeight:700}}>A</button>
+      <button onClick={()=>document.execCommand('foreColor',false,'#ef4444')} title="Red text" style={{color:'#ef4444',fontWeight:700}}>A</button>
+      <button onClick={()=>document.execCommand('foreColor',false,'#e6edf3')} title="Reset text color" style={{color:'#e6edf3',fontWeight:700,fontSize:10}}>↺</button>
+      <div className="sep"/>
+      <button onClick={()=>document.execCommand('removeFormat')} title="Clear formatting" style={{fontSize:10,color:'var(--text3)'}}>✕</button>
+      <span style={{marginLeft:'auto',fontSize:9,color:'var(--text3)'}}>Select text → format</span>
+    </div>}
+
     {/* Script body */}
     <div className="sp-body">
       {scriptEditing?<>
-        <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Variables: {'{{name}} {{age}} {{race}} {{gender}} {{phone}} {{email}} {{income}} {{notes}} {{status}} {{npcount}} {{admin}} {{company}}'}</p>
-        <textarea value={scriptContent} onChange={e=>setScriptContent(e.target.value)} placeholder={'Hi {{name}}, my name is {{admin}} from {{company}}.\n\nI\'m reaching out because...\n\n[OPENING]\n- Build rapport\n- Ask about current coverage\n\n[QUALIFY]\n- Age: {{age}}\n- Employment status\n\n[CLOSE]\n- Suggest meeting\n- Confirm date/time'} style={{width:'100%',height:'calc(100vh - 260px)',background:'var(--bg)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:14,fontSize:13,fontFamily:'inherit',resize:'none',lineHeight:1.6}}/>
+        <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Variables: {'{{name}} {{age}} {{race}} {{gender}} {{phone}} {{email}} {{income}} {{notes}} {{admin}} {{company}}'}</p>
+        <div className="sp-edit" contentEditable suppressContentEditableWarning
+          ref={el=>{if(el&&!el._init&&(cfg.callingScript||scriptContent)){el.innerHTML=cfg.callingScript||scriptContent;el._init=true}}}
+          onInput={e=>setScriptContent(e.currentTarget.innerHTML)}
+          style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:12,padding:14,minHeight:'calc(100vh - 320px)'}}/>
       </>:<>
-        {(cfg.callingScript||scriptContent)?<div style={{fontSize:13,color:'var(--text)',lineHeight:1.7,whiteSpace:'pre-wrap',fontFamily:'inherit'}}>
-          {fillScript(cfg.callingScript||scriptContent,cur||{name:'[Lead Name]',phone:'[Phone]',age:'[Age]',race:'[Race]',gender:'[Gender]'})}
-        </div>
+        {(cfg.callingScript||scriptContent)?<div
+          style={{fontSize:13.5,color:'var(--text)',lineHeight:1.7,fontFamily:'inherit'}}
+          dangerouslySetInnerHTML={{__html:fillScript(cfg.callingScript||scriptContent,cur||{name:'<span style="color:#818cf8;font-weight:700">[Lead Name]</span>',phone:'[Phone]',age:'<span style="color:#818cf8">[Age]</span>',race:'<span style="color:#818cf8">[Race]</span>',gender:'[Gender]'})}}/>
         :<div style={{textAlign:'center',padding:'40px 20px'}}>
           <p style={{fontSize:40,marginBottom:12}}>📋</p>
           <p style={{color:'var(--text3)',fontSize:14,fontWeight:600,marginBottom:4}}>No calling script yet</p>
-          <p style={{color:'var(--text3)',fontSize:11,lineHeight:1.5,marginBottom:16}}>Create a script template with variables like {'{{name}}'}, {'{{age}}'}, {'{{race}}'} that auto-fill with the current lead.</p>
-          <button onClick={()=>{setScriptContent('Hi {{name}}, my name is {{admin}} from {{company}}.\n\nI\'m reaching out to share some information about financial planning that may be relevant to you.\n\n── OPENING ──\n• Build rapport (weather, area, etc.)\n• "Do you currently have any insurance coverage?"\n\n── QUALIFY ──\n• Age: {{age}} | Race: {{race}}\n• "What do you do for work?"\n• "Do you have dependents?"\n\n── PRESENT ──\n• Share 2-3 key benefits\n• Use stories, not features\n• "Many people your age are surprised to learn..."\n\n── HANDLE OBJECTIONS ──\n• "I understand" → acknowledge first\n• Questions ≠ objections\n• "That\'s a great question..."\n\n── CLOSE ──\n• "I\'d love to share more in person"\n• Suggest 2 time options\n• Confirm: date, time, location');setScriptEditing(true)}} style={{padding:'10px 20px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700}}>+ Create Script</button>
+          <p style={{color:'var(--text3)',fontSize:11,lineHeight:1.5,marginBottom:16}}>Create a script with rich formatting. Highlight key phrases, color-code sections, bold important lines.</p>
+          <button onClick={()=>{const tpl='<div>Hi <b>{{name}}</b>, my name is <b>{{admin}}</b> from <b>{{company}}</b>.</div><br><div>I\'m reaching out to share some information about financial planning.</div><br><div style="color:#22c55e;font-weight:700">── OPENING ──</div><div>• Build rapport (weather, area, etc.)</div><div>• <span style="background:#facc15;color:#000;border-radius:3px;padding:0 3px">"Do you currently have any insurance coverage?"</span></div><br><div style="color:#60a5fa;font-weight:700">── QUALIFY ──</div><div>• Age: <b>{{age}}</b> | Race: {{race}}</div><div>• <span style="background:#facc15;color:#000;border-radius:3px;padding:0 3px">"What do you do for work?"</span></div><div>• "Do you have dependents?"</div><br><div style="color:#f59e0b;font-weight:700">── PRESENT ──</div><div>• Share 2-3 key benefits</div><div>• Use stories, not features</div><div>• <span style="background:#4ade80;color:#000;border-radius:3px;padding:0 3px">"Many people your age are surprised to learn..."</span></div><br><div style="color:#ef4444;font-weight:700">── HANDLE OBJECTIONS ──</div><div>• <b>"I understand"</b> → acknowledge first</div><div>• <span style="color:#f59e0b">Questions ≠ objections</span></div><div>• <span style="background:#facc15;color:#000;border-radius:3px;padding:0 3px">"That\'s a great question..."</span></div><br><div style="color:#a855f7;font-weight:700">── CLOSE ──</div><div>• <span style="background:#4ade80;color:#000;border-radius:3px;padding:0 3px">"I\'d love to share more in person"</span></div><div>• Suggest 2 time options</div><div>• <b>Confirm: date, time, location</b></div>';setScriptContent(tpl);setCfg(s=>({...s,callingScript:tpl}));setScriptEditing(true)}} style={{padding:'10px 20px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700}}>+ Create Script</button>
         </div>}
       </>}
     </div>
