@@ -1754,7 +1754,7 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const callTabs=[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const callTabs=role==='admin'?[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
@@ -2691,6 +2691,11 @@ function App(){
 
     {tab==='settings'&&<div className='content-pad'>
       {/* Creator user management */}
+      {role!=='admin'&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 10px'}}>
+        <div style={{height:1,flex:1,background:'var(--border)'}}/>
+        <span style={{fontSize:9,fontWeight:700,color:'var(--accent2)',letterSpacing:1}}>👥 TEAM MANAGEMENT</span>
+        <div style={{height:1,flex:1,background:'var(--border)'}}/>
+      </div>}
       {isCreatorUser&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
           <h3 style={{fontSize:14,fontWeight:700,color:'var(--accent2)'}}>👥 Users</h3>
@@ -2703,63 +2708,9 @@ function App(){
         </div>)}
       </div>}
 
-      {role==='main'&&<div className="card" style={{marginBottom:12}}>
-        <button onClick={()=>setPayConfigOpen(p=>!p)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',background:'transparent',padding:0,color:'var(--gold)'}}>
-          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>💰 Pay Config & Tiers</h3>
-          <span style={{fontSize:12,color:'var(--text3)',fontWeight:600}}>{payConfigOpen?'▾ Hide':'▸ Show'}</span>
-        </button>
-        {payConfigOpen&&<>
-        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10,marginTop:10}}>Set $/hr and promotion threshold (min appts set) for each tier</p>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:10}}>
-          {TIER_META.map((t,i)=>{const enabled=(cfg.tierEnabled||[true,true,true,true,true,true])[i]!==false;return<div key={i} style={{background:'var(--bg)',border:'1px solid '+(enabled?t.color+'30':'var(--border)'),borderRadius:12,padding:'8px 6px',textAlign:'center',opacity:enabled?1:.4,position:'relative'}}>
-            {i>0&&<button onClick={()=>{const te=[...(cfg.tierEnabled||[true,true,true,true,true,true])];while(te.length<6)te.push(true);te[i]=!te[i];setCfg(s=>({...s,tierEnabled:te}))}} style={{position:'absolute',top:3,right:3,width:18,height:18,borderRadius:9,background:enabled?'var(--gdim)':'var(--rdim)',color:enabled?'var(--green)':'var(--red)',fontSize:10,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>{enabled?'✓':'✗'}</button>}
-            <p style={{margin:0,fontSize:18}}>{t.emoji}</p>
-            <p style={{margin:'2px 0',fontSize:10,fontWeight:700,color:enabled?t.color:'var(--text3)'}}>{t.label}</p>
-            <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>$/hr</label>
-            <div style={{position:'relative'}}><span style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',fontSize:11,color:'var(--text3)',pointerEvents:'none'}}>$</span>
-            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':Math.max(0,+e.target.value);setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px 6px 6px 18px',marginBottom:4}} disabled={!enabled}/></div>
-            <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Min appts</label>
-            <input type="number" min="0" value={(cfg.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(cfg.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':Math.max(0,+e.target.value);
-              setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0||!enabled}/>
-          </div>})}
-        </div>
-        {/* ═══ SESSION SLOTS ═══ */}
-        <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent2)'}}>SESSION CONFIGURATIONS</p>
-        <p style={{margin:'0 0 8px',fontSize:9,color:'var(--text3)'}}>Define multiple session lengths. Admin's actual time auto-matches the best slot.</p>
-        {(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}]).map((slot,si)=>
-          <div key={si} style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 80px',gap:6,marginBottom:6,padding:'8px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
-            <div><label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Hours</label>
-              <input type="number" min="1" step="0.5" value={slot.hours??''} onChange={e=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots[si]={...slots[si],hours:e.target.value===''?'':+e.target.value};setCfg(s=>({...s,sessionSlots:slots}))}} style={{textAlign:'center',fontSize:13,padding:'6px'}}/></div>
-            <div><label style={{fontSize:8,color:'var(--green)',fontWeight:700}}>Appts Bar</label>
-              <input type="number" min="1" value={slot.apptsBar??''} onChange={e=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots[si]={...slots[si],apptsBar:e.target.value===''?'':+e.target.value};setCfg(s=>({...s,sessionSlots:slots}))}} style={{textAlign:'center',fontSize:13,padding:'6px'}}/></div>
-            <div><label style={{fontSize:8,color:'var(--gold)',fontWeight:700}}>Bonus Bar</label>
-              <input type="number" min="1" value={slot.bonusBar??''} onChange={e=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots[si]={...slots[si],bonusBar:e.target.value===''?'':+e.target.value};setCfg(s=>({...s,sessionSlots:slots}))}} style={{textAlign:'center',fontSize:13,padding:'6px'}}/></div>
-            <div style={{display:'flex',alignItems:'flex-end'}}>
-              {(cfg.sessionSlots||[]).length>1?<button onClick={()=>{const slots=[...(cfg.sessionSlots||[])];slots.splice(si,1);setCfg(s=>({...s,sessionSlots:slots}))}} style={{width:'100%',padding:'6px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:700}}>×</button>
-              :<span style={{fontSize:8,color:'var(--text3)',textAlign:'center',display:'block',padding:'6px'}}>Default</span>}
-            </div>
-          </div>
-        )}
-        <button onClick={()=>{const slots=[...(cfg.sessionSlots||[{hours:n(cfg.sessionDur,5),apptsBar:n(cfg.mThresh,2),bonusBar:n(cfg.nThresh,4)}])];slots.push({hours:'',apptsBar:'',bonusBar:''});setCfg(s=>({...s,sessionSlots:slots}))}} style={{width:'100%',padding:'8px',borderRadius:8,background:'var(--bg3)',color:'var(--accent2)',fontSize:11,fontWeight:600,marginBottom:8,border:'1px dashed var(--border2)'}}>+ Add Session Slot</button>
-        <div style={{display:'flex',gap:8}}>
-          <div style={{flex:1}}><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:3}}>Bonus ×</label><input type="number" min="1" step="0.1" value={cfg.bonusMult??''} onChange={e=>setCfg(s=>({...s,bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}))} style={{textAlign:'center',borderColor:'rgba(240,180,41,.3)'}}/></div>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
-          <div><label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" min="0" value={cfg.metIncentive??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setCfg(s=>({...s,metIncentive:e.target.value===''?'':Math.max(0,+e.target.value)}))}} style={{textAlign:'center',borderColor:'rgba(63,185,80,.3)'}}/></div>
-          <div style={{display:'flex',alignItems:'flex-end'}}><p style={{fontSize:9,color:'var(--text3)',lineHeight:1.4}}>Paid when admin marks a lead as "Met". Uses current date for billing, even if the appointment was set months ago.</p></div>
-        </div>
-        <div style={{marginTop:10}}>
-          <label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📅 Billing Day (of each month)</label>
-          <select value={cfg.billingDate||0} onChange={e=>setCfg(s=>({...s,billingDate:+e.target.value}))} style={{fontSize:13}}>
-            <option value={0}>Last day of every month</option>
-            {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}{d===1?'st':d===2?'nd':d===3?'rd':'th'} of every month</option>)}
-          </select>
-        </div>
-        <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Defaults. Customize per-admin below. Bronze starts at 0. <span style={{color:'var(--amber)'}}>Tip: Min appts should be higher than the previous tier.</span></p>
-        </>}
-      </div>}
+      
 
-      {/* Per-admin config */}
+            {/* Per-admin config */}
       {role==='main'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>👥 Admin Pay (Per-Person)</h3>
         <div style={{display:'flex',gap:6,marginBottom:10}}>
@@ -2813,7 +2764,10 @@ function App(){
               <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:2}}>Bonus ×</label>
                 <input type="number" min="1" step="0.1" value={ac.bonusMult??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
               <div><label style={{fontSize:9,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:2}}>Timesheet Sheet ID</label>
-                <input value={ac.timesheetId||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:e.target.value.trim()}}))} placeholder="Google Sheet ID" style={{fontSize:11,padding:'8px'}}/></div>
+                <input value={ac._tsName||ac.timesheetId||''} onChange={e=>{const v=e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],_tsName:v}}));if(v.length>=2&&gOk){clearTimeout(window['_ts'+em]);window['_ts'+em]=setTimeout(()=>{gDrive.search(v).then(r=>{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:r}}))}).catch(()=>{})},400)}else{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:[]}}))}}} placeholder="Search Google Sheets..." style={{fontSize:11,padding:'8px'}}/>
+                {(ac._tsResults||[]).length>0&&<div style={{maxHeight:100,overflowY:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,marginTop:2}}>
+                  {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}))} style={{padding:'6px 8px',fontSize:10,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>{f.name}</div>)}
+                </div>}</div>
             </div>
             <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Invoice Name</label>
               <input value={ac.bizName||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bizName:e.target.value}}))} placeholder="Business or full name" style={{fontSize:12,padding:'8px'}}/></div>
@@ -2826,9 +2780,8 @@ function App(){
         {!Object.keys(adminConfigs).length&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:8}}>No custom configs. All admins use defaults.</p>}
       </div>}
 
-      {/* Call Settings */}
       <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Settings</h3>
+        {role!=='admin'?<h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📊 Team Rules</h3>:<h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Rules</h3>}
         {/* DNC Hours */}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
           <div>
@@ -2895,6 +2848,11 @@ function App(){
         <input value={localStorage.getItem('ad_paynow')||''} onChange={e=>localStorage.setItem('ad_paynow',e.target.value)} placeholder="+65 9xxx xxxx"/></div>
       </div>}
 
+      <div style={{display:'flex',alignItems:'center',gap:6,margin:'16px 0 10px'}}>
+        <div style={{height:1,flex:1,background:'var(--border)'}}/>
+        <span style={{fontSize:9,fontWeight:700,color:'var(--text3)',letterSpacing:1}}>🔗 INTEGRATIONS</span>
+        <div style={{height:1,flex:1,background:'var(--border)'}}/>
+      </div>
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
@@ -2902,7 +2860,7 @@ function App(){
       </div>
 
       <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'#4285f4'}}>🔵 Gemini AI</h3>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
         <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:8}}/>
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
