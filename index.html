@@ -163,9 +163,18 @@ button:active{transform:scale(.97)}
   <div id="auth-signup" style="display:none">
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Full Name</label><input type="text" id="auth-sname"></div>
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Email</label><input type="email" id="auth-semail"></div>
-    <div style="margin-bottom:16px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Password</label><input type="password" id="auth-spass" placeholder="Min 6 chars"></div>
+    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Password</label><input type="password" id="auth-spass" placeholder="Min 6 chars"></div>
+    <div style="margin-bottom:16px">
+      <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Account Type</label>
+      <div style="display:flex;gap:6px" id="signup-role-pick">
+        <button type="button" data-srole="admin" onclick="document.querySelectorAll('#signup-role-pick button').forEach(b=>{b.style.background='transparent';b.style.borderColor='transparent';b.style.color='var(--text3)'});this.style.background='var(--adim)';this.style.borderColor='var(--accent)';this.style.color='#f1f5f9';window._signupRole='admin'" style="flex:1;padding:12px 8px;border-radius:12px;background:var(--adim);color:#f1f5f9;font-size:12px;font-weight:700;border:2px solid var(--accent);cursor:pointer;text-align:center">&#x1F4DE; Admin<br><span style="font-size:9px;font-weight:400;color:var(--text3)">Caller</span></button>
+        <button type="button" data-srole="main" onclick="document.querySelectorAll('#signup-role-pick button').forEach(b=>{b.style.background='transparent';b.style.borderColor='transparent';b.style.color='var(--text3)'});this.style.background='var(--adim)';this.style.borderColor='var(--accent)';this.style.color='#f1f5f9';window._signupRole='main'" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">&#x1F454; Main<br><span style="font-size:9px;font-weight:400;color:var(--text3)">Manager</span></button>
+        <button type="button" data-srole="both" onclick="document.querySelectorAll('#signup-role-pick button').forEach(b=>{b.style.background='transparent';b.style.borderColor='transparent';b.style.color='var(--text3)'});this.style.background='var(--adim)';this.style.borderColor='var(--accent)';this.style.color='#f1f5f9';window._signupRole='both'" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">&#x1F31F; Both<br><span style="font-size:9px;font-weight:400;color:var(--text3)">Admin + Main</span></button>
+      </div>
+      <p style="font-size:9px;color:var(--text3);margin-top:6px;text-align:center">Owner will review and approve your account</p>
+    </div>
     <button class="bp" id="btn-signup">Create Account</button>
-    <button class="bs" id="btn-goback">← Back</button>
+    <button class="bs" id="btn-goback">&#x2190; Back</button>
   </div>
   <div id="auth-pending" style="display:none;text-align:center;padding:24px">
     <div style="font-size:48px;margin-bottom:14px">⏳</div>
@@ -185,7 +194,7 @@ var SB_URL='https://urwfmmgsfunbvwngejey.supabase.co',SB_KEY='eyJhbGciOiJIUzI1Ni
 // Creator identity protected — set via first-time setup or localStorage
 var CREATOR=(localStorage.getItem('autodial_creator')||'').split(',').filter(Boolean);
 if(!CREATOR.length){CREATOR=['admin'];} // Default placeholder until configured
-var _SB=null,_user=null,_prof=null;window._role='admin';
+var _SB=null,_user=null,_prof=null;window._role='admin';window._signupRole='admin';
 function isCreator(e){var ce=(e||'').toLowerCase();return CREATOR.some(function(c){return c.toLowerCase()===ce})}
 // First login by creator sets them as creator
 window._setupCreator=function(email){localStorage.setItem('autodial_creator',email);CREATOR=[email]};
@@ -218,7 +227,7 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
     if(firstUser){window._setupCreator(e)}
     var cr=isCreator(e);
     if(r.data?.user){
-      try{await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr||firstUser,role:window._role,autodial_role:window._role})}catch(ue){console.warn('Profile:',ue)}
+      var reqRole=window._signupRole||window._role||'admin';try{await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr||firstUser,role:reqRole,autodial_role:reqRole,requested_role:reqRole})}catch(ue){console.warn('Profile:',ue)}
       if(cr||firstUser){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role};authGrant();return}}
     authMsg('Created! Awaiting approval.','i');setTimeout(function(){authShow('pending')},1500)}catch(err){authMsg(err.message)}}
 
@@ -1381,8 +1390,8 @@ function App(){
 
     // ═══ AUTO-FETCH PENDING APPROVALS (creator only) ═══
     if(isCreator(myEmail)&&_SB){
-      _SB.from('profiles').select('*').eq('approved',false).then(r=>{
-        if(r.data?.length)setPendingUsers(r.data)});
+      _SB.from('profiles').select('*').then(r=>{
+        if(r.data){const pending=r.data.filter(u=>!u.approved&&!isCreator(u.email));if(pending.length)setPendingUsers(pending)}});
     }
 
     // ═══ SUPABASE HARD SYNC — pull persistent data on startup ═══
@@ -1726,9 +1735,12 @@ function App(){
         <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>AutoDial</h1>
       </div>
       <span style={{fontSize:11,color:'var(--text3)',marginRight:4}}>{userName}</span>
-      {isCreatorUser&&pendingUsers.length>0&&<button onClick={()=>setShowApprovalModal(true)} style={{position:'relative',width:30,height:30,borderRadius:8,background:'var(--rdim)',border:'1px solid rgba(248,81,73,.3)',color:'var(--red)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,marginRight:2}}>
+      {isCreatorUser&&<button onClick={()=>{
+        if(_SB){_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data);setShowApprovalModal(true)}else setShowApprovalModal(true)})}
+        else setShowApprovalModal(true)
+      }} style={{position:'relative',width:30,height:30,borderRadius:8,background:pendingUsers.length?'var(--rdim)':'var(--bg3)',border:'1px solid '+(pendingUsers.length?'rgba(248,81,73,.3)':'var(--border)'),color:pendingUsers.length?'var(--red)':'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,marginRight:2}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
-        <span style={{position:'absolute',top:-4,right:-4,width:18,height:18,borderRadius:9,background:'#ef4444',color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 2px 6px rgba(239,68,68,.4)'}}>{pendingUsers.length}</span>
+        {pendingUsers.length>0?<span style={{position:'absolute',top:-4,right:-4,width:18,height:18,borderRadius:9,background:'#ef4444',color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 2px 6px rgba(239,68,68,.4)'}}>{pendingUsers.length}</span>:null}
       </button>}
       {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
       {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:8,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
@@ -2666,7 +2678,8 @@ function App(){
             <p style={{margin:0,fontSize:18}}>{t.emoji}</p>
             <p style={{margin:'2px 0',fontSize:10,fontWeight:700,color:enabled?t.color:'var(--text3)'}}>{t.label}</p>
             <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>$/hr</label>
-            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':Math.max(0,+e.target.value);setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px',marginBottom:4}} disabled={!enabled}/>
+            <div style={{position:'relative'}}><span style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',fontSize:11,color:'var(--text3)',pointerEvents:'none'}}>$</span>
+            <input type="number" min="0" value={(cfg.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(cfg.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':Math.max(0,+e.target.value);setCfg(s=>({...s,payRates:r}))}} style={{textAlign:'center',fontSize:13,padding:'6px 6px 6px 18px',marginBottom:4}} disabled={!enabled}/></div>
             <label style={{fontSize:8,color:'var(--text3)',fontWeight:700}}>Min appts</label>
             <input type="number" min="0" value={(cfg.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(cfg.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':Math.max(0,+e.target.value);
               setCfg(s=>({...s,tierMins:m}))}} style={{textAlign:'center',fontSize:12,padding:'6px'}} disabled={i===0||!enabled}/>
@@ -2735,9 +2748,12 @@ function App(){
               {TIER_META.map((t,i)=><div key={i} style={{background:'var(--bg)',border:'1px solid '+t.color+'20',borderRadius:8,padding:'4px',textAlign:'center'}}>
                 <span style={{fontSize:12}}>{t.emoji}</span>
                 <p style={{margin:0,fontSize:8,fontWeight:700,color:t.color}}>{t.label}</p>
-                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':+e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} placeholder="$/hr" style={{fontSize:10,textAlign:'center',padding:'4px',marginTop:2}}/>
+                <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>$/hr</label>
+                <div style={{position:'relative'}}><span style={{position:'absolute',left:4,top:'50%',transform:'translateY(-50%)',fontSize:9,color:'var(--text3)',pointerEvents:'none'}}>$</span>
+                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':+e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} style={{fontSize:10,textAlign:'center',padding:'4px 4px 4px 14px',marginTop:1}}/></div>
+                <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>Min appts</label>
                 <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':+e.target.value;
-                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} placeholder="Min" style={{fontSize:9,textAlign:'center',padding:'3px',marginTop:2}} disabled={i===0}/>
+                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} style={{fontSize:9,textAlign:'center',padding:'3px',marginTop:1}} disabled={i===0}/>
               </div>)}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
@@ -2885,14 +2901,20 @@ function App(){
       </div>}
 
       {/* WhatsApp Templates (Main) */}
-      {role==='main'&&<div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#25d366'}}>💬 WhatsApp Templates</h3>
-        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Create message templates for admins to use. Placeholders: {'{{name}}, {{date}}, {{time}}, {{admin}}, {{company}}'}</p>
-        {waTemplates.map((t,i)=><div key={t.id||i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
-          <span className="pill" style={{background:'rgba(37,211,102,.1)',color:'#25d366'}}>{t.category}</span>
-          <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{t.name}</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:200}}>{t.template}</p></div>
-          {t.is_default&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>Default</span>}
+      {<div className="card" style={{marginBottom:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates</h3>
+          {waTemplates.length>0&&<button onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>Delete All</button>}
+        </div>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Message templates for WhatsApp. Placeholders: {'{{name}}, {{date}}, {{time}}, {{admin}}, {{company}}'}</p>
+        {waTemplates.map((t,i)=><div key={t.id||i} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+          <span className="pill" style={{background:'rgba(37,211,102,.1)',color:'#25d366',flexShrink:0}}>{t.category}</span>
+          <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{t.name}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.template}</p></div>
+          <div style={{display:'flex',gap:4,flexShrink:0}}>
+            <button onClick={()=>{setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Editing — make changes and save')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>Edit</button>
+            <button onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Deleted')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>×</button>
+          </div>
         </div>)}
         <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
           <input value={newWA.name} onChange={e=>setNewWA(p=>({...p,name:e.target.value}))} placeholder="Template name" style={{marginBottom:6,fontSize:12}}/>
@@ -2919,30 +2941,60 @@ function App(){
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>
     </div>}
 
-    {/* ═══ APPROVAL MODAL ═══ */}
+    {/* ═══ USER MANAGEMENT MODAL ═══ */}
     {showApprovalModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowApprovalModal(false)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:440,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:500,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
-          <h3 style={{margin:0,fontSize:18,fontWeight:800,color:'#f1f5f9'}}>👥 Pending Approvals</h3>
-          <span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:11}}>{pendingUsers.length} pending</span>
-        </div>
-        {pendingUsers.length===0&&<div style={{textAlign:'center',padding:'24px 0'}}><p style={{color:'var(--green)',fontSize:14,fontWeight:600}}>✓ All caught up!</p><p style={{color:'var(--text3)',fontSize:11}}>No pending approvals</p></div>}
-        {pendingUsers.map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:10,padding:'14px',borderRadius:14,background:'var(--bg3)',border:'1px solid var(--border)',marginBottom:8}}>
-          <div style={{width:40,height:40,borderRadius:12,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:800,color:'#fff',flexShrink:0}}>{(u.full_name||u.email||'?').charAt(0).toUpperCase()}</div>
-          <div style={{flex:1,minWidth:0}}>
-            <p style={{margin:0,fontSize:14,fontWeight:700,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.full_name||'No name'}</p>
-            <p style={{margin:0,fontSize:11,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.email}</p>
-            <div style={{display:'flex',gap:4,marginTop:2}}>
-              <span className="pill" style={{background:'var(--bg)',color:'var(--text3)',fontSize:8}}>{u.autodial_role||u.role||'admin'}</span>
-              {u.created_at&&<span style={{fontSize:9,color:'var(--text3)'}}>{new Date(u.created_at).toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</span>}
-            </div>
+          <h3 style={{margin:0,fontSize:18,fontWeight:800,color:'#f1f5f9'}}>👥 User Management</h3>
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            {pendingUsers.length>0&&<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:10}}>{pendingUsers.length} pending</span>}
+            <button onClick={()=>{if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data);toast('Refreshed')}})}} style={{padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↻</button>
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0}}>
-            <button onClick={async()=>{try{await _SB.from('profiles').update({approved:true}).eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:true}:x));toast(u.full_name+' approved ✓')}catch(e){toast('Error','err')}}} style={{padding:'8px 16px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:700,border:'1px solid rgba(63,185,80,.2)'}}>✓ Approve</button>
-            <button onClick={async()=>{try{await _SB.from('profiles').delete().eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));toast(u.full_name+' rejected')}catch(e){toast('Error','err')}}} style={{padding:'6px 16px',borderRadius:8,background:'var(--bg)',color:'var(--text3)',fontSize:10,fontWeight:600,border:'1px solid var(--border)'}}>Reject</button>
+        </div>
+
+        {/* Pending approvals section */}
+        {pendingUsers.length>0&&<>
+          <p style={{margin:'0 0 8px',fontSize:11,fontWeight:700,color:'var(--red)'}}>⏳ PENDING APPROVAL</p>
+          {pendingUsers.map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:10,padding:'12px',borderRadius:14,background:'rgba(248,81,73,.05)',border:'1px solid rgba(248,81,73,.15)',marginBottom:8}}>
+            <div style={{width:36,height:36,borderRadius:10,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:800,color:'#fff',flexShrink:0}}>{(u.full_name||u.email||'?').charAt(0).toUpperCase()}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{u.full_name||'No name'}</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{u.email}</p>
+              <span className="pill" style={{background:'var(--bg)',color:'var(--amber)',fontSize:8,marginTop:2}}>Requested: {u.requested_role||u.autodial_role||'admin'}</span>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0}}>
+              <button onClick={async()=>{const role=u.requested_role||u.autodial_role||'admin';try{await _SB.from('profiles').update({approved:true,autodial_role:role,role:role}).eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));setUsersList(p=>{const exists=p.find(x=>x.id===u.id);if(exists)return p.map(x=>x.id===u.id?{...x,approved:true,autodial_role:role}:x);return[...p,{...u,approved:true,autodial_role:role}]});toast(u.full_name+' approved as '+role+' ✓')}catch(e){toast('Error','err')}}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>✓ Approve</button>
+              <button onClick={async()=>{if(!confirm('Reject '+u.full_name+'?'))return;try{await _SB.from('profiles').delete().eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));toast('Rejected')}catch(e){toast('Error','err')}}} style={{padding:'4px 14px',borderRadius:8,background:'var(--bg)',color:'var(--text3)',fontSize:9,fontWeight:600}}>Reject</button>
+            </div>
+          </div>)}
+          <div style={{borderBottom:'1px solid var(--border)',margin:'12px 0'}}/>
+        </>}
+
+        {/* All accounts section */}
+        <p style={{margin:'0 0 8px',fontSize:11,fontWeight:700,color:'var(--text2)'}}>ALL ACCOUNTS</p>
+        {usersList.filter(u=>u.approved&&!isCreator(u.email)).length===0&&<p style={{color:'var(--text3)',fontSize:11,textAlign:'center',padding:12}}>No approved accounts yet</p>}
+        {usersList.filter(u=>u.approved&&!isCreator(u.email)).map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:10,padding:'12px',borderRadius:14,background:'var(--bg3)',border:'1px solid var(--border)',marginBottom:6}}>
+          <div style={{width:36,height:36,borderRadius:10,background:'var(--gdim)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:800,color:'var(--green)',flexShrink:0}}>{(u.full_name||u.email||'?').charAt(0).toUpperCase()}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{u.full_name||u.email}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{u.email}</p>
+          </div>
+          {/* Role toggle */}
+          <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0,alignItems:'flex-end'}}>
+            <div style={{display:'flex',gap:3}}>
+              {['admin','main','both'].map(r=><button key={r} onClick={async()=>{try{await _SB.from('profiles').update({autodial_role:r,role:r}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,autodial_role:r,role:r}:x));toast(u.full_name+' → '+r)}catch(e){toast('Error','err')}}} style={{padding:'4px 8px',borderRadius:6,background:(u.autodial_role||u.role)=== r?'var(--adim)':'var(--bg)',color:(u.autodial_role||u.role)===r?'var(--accent2)':'var(--text3)',fontSize:9,fontWeight:700,border:'1px solid '+((u.autodial_role||u.role)===r?'var(--accent)':'var(--border)')}}>{r==='admin'?'📞':r==='main'?'👔':'🌟'} {r}</button>)}
+            </div>
+            <button onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}} style={{padding:'3px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>Revoke</button>
           </div>
         </div>)}
-        <button onClick={()=>setShowApprovalModal(false)} style={{width:'100%',padding:'12px',borderRadius:14,background:'var(--bg3)',color:'var(--text3)',fontSize:13,marginTop:8}}>Close</button>
+
+        {/* Creator's own entry */}
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'12px',borderRadius:14,background:'var(--bg)',border:'1px solid var(--border)',marginTop:8,opacity:.6}}>
+          <div style={{width:36,height:36,borderRadius:10,background:'linear-gradient(135deg,var(--gold),#d29922)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:'#fff',flexShrink:0}}>👑</div>
+          <div style={{flex:1}}><p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>{userName} (You)</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{myEmail} · Owner</p></div>
+        </div>
+
+        <button onClick={()=>setShowApprovalModal(false)} style={{width:'100%',padding:'12px',borderRadius:14,background:'var(--bg3)',color:'var(--text3)',fontSize:13,marginTop:12}}>Close</button>
       </div>
     </div>}
 
@@ -3260,8 +3312,8 @@ function App(){
   </div>}
 
   {/* Script panel toggle button (desktop only) */}
-  <button className={'script-toggle'+(scriptOpen?' open':'')} onClick={()=>setScriptOpen(p=>!p)} title={scriptOpen?'Hide script':'Show calling script'}>
-    {scriptOpen?'✕':'📋'}
+  <button className={'script-toggle'+(scriptOpen?' open':'')} onClick={()=>setScriptOpen(p=>!p)} title={scriptOpen?'Hide script':'Show calling script'} style={scriptOpen?{display:'none'}:{}}>
+    '📋'
   </button>
 
   </div>);
