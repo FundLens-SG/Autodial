@@ -2,14 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="AutoDial">
 <meta name="theme-color" content="#0b0f1a">
-<title>AutoDial Pro</title>
-<link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%20Pro%22%2C%22short_name%22%3A%22AutoDial%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b0f1a%22%2C%22theme_color%22%3A%22%236366f1%22%7D">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<title>AutoDial</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -17,273 +15,197 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script>
-if(!navigator.locks){navigator.locks={request:function(n,o,c){if(typeof o==='function'){c=o}return Promise.resolve(c({name:n}))}}}
-(function(){var w=console.warn;console.warn=function(){var m=arguments[0]||'';if(typeof m==='string'&&(m.includes('gotrue')||m.includes('lock:')))return;w.apply(console,arguments)};})();
-</script>
+<script>if(!navigator.locks)navigator.locks={request:(n,o,c)=>{if(typeof o==='function')c=o;return Promise.resolve(c({name:n}))}};
+(function(){var w=console.warn;console.warn=function(){if(typeof arguments[0]==='string'&&(arguments[0].includes('gotrue')||arguments[0].includes('lock:')))return;w.apply(console,arguments)}})();</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-:root{
---bg:#0b0f1a;--bg2:#111827;--bg3:#171f2e;--bg4:#1f2a3d;
---text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
---border:#1e2738;--border2:#2a3548;
---accent:#6366f1;--accent2:#818cf8;--accent-dim:rgba(99,102,241,.12);
---green:#34d399;--green-dim:rgba(52,211,153,.1);
---red:#ef4444;--red-dim:rgba(239,68,68,.1);
---blue:#3b82f6;--blue-dim:rgba(59,130,246,.1);
---amber:#f59e0b;--amber-dim:rgba(245,158,11,.1);
-}
+:root{--bg:#0b0f1a;--bg2:#111827;--bg3:#171f2e;--bg4:#1f2a3d;--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#1e2738;--border2:#2a3548;--accent:#6366f1;--accent2:#818cf8;--adim:rgba(99,102,241,.12);--green:#34d399;--gdim:rgba(52,211,153,.1);--red:#ef4444;--rdim:rgba(239,68,68,.1);--blue:#3b82f6;--bdim:rgba(59,130,246,.1);--amber:#f59e0b;--amdim:rgba(245,158,11,.1);--gold:#fbbf24;--golddim:rgba(251,191,36,.1)}
 html,body{height:100%;font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden}
-#root{min-height:100%}
 ::-webkit-scrollbar{width:0}
-input,select,textarea{font-family:inherit;background:var(--bg);color:var(--text);border:1px solid var(--border2);border-radius:10px;padding:11px 14px;font-size:14px;outline:none;width:100%;box-sizing:border-box;transition:border .2s}
+input,select{font-family:inherit;background:var(--bg);color:var(--text);border:1px solid var(--border2);border-radius:10px;padding:11px 14px;font-size:14px;outline:none;width:100%;box-sizing:border-box}
 input:focus,select:focus{border-color:var(--accent)}
 input::placeholder{color:var(--text3)}
 button{font-family:inherit;cursor:pointer;border:none;transition:all .15s}
 .mono{font-family:'JetBrains Mono',monospace}
 @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.06);opacity:.7}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-@keyframes spin{to{transform:rotate(360deg)}}
-.fi{animation:fadeIn .2s ease-out}
-
-/* Auth */
-#auth-gate{position:fixed;inset:0;z-index:10000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
-.ac{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;max-width:400px;width:100%;padding:32px;box-shadow:0 24px 64px rgba(0,0,0,.4)}
-.ac h2{font-size:22px;font-weight:700;color:var(--accent2);margin-bottom:2px}
-.ac .sub{font-size:13px;color:var(--text3);margin-bottom:20px}
-.ac .f{margin-bottom:14px}
-.ac label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px}
-.bp{width:100%;padding:13px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#8b5cf6);color:#fff;font-size:15px;font-weight:700;box-shadow:0 6px 20px rgba(99,102,241,.3)}
-.bs{width:100%;padding:11px;border-radius:10px;background:transparent;color:var(--text2);border:1px solid var(--border2)!important;font-size:13px;font-weight:600;margin-top:8px}
-.amsg{font-size:12px;padding:10px;border-radius:8px;margin-bottom:12px}
-.amsg-e{background:var(--red-dim);color:var(--red);border:1px solid rgba(239,68,68,.2)}
-.amsg-i{background:var(--green-dim);color:var(--green);border:1px solid rgba(52,211,153,.2)}
-
-/* Toast */
-.tw{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;pointer-events:none}
-.toast{padding:10px 18px;border-radius:10px;font-size:12px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.35);animation:fadeIn .25s;backdrop-filter:blur(12px);margin-top:6px}
-.t-ok{background:var(--green-dim);border:1px solid rgba(52,211,153,.3);color:var(--green)}
-.t-err{background:var(--red-dim);border:1px solid rgba(239,68,68,.25);color:var(--red)}
-.t-info{background:var(--accent-dim);border:1px solid rgba(99,102,241,.25);color:var(--accent2)}
-
-/* Card */
+@keyframes glow{0%,100%{box-shadow:0 0 20px rgba(251,191,36,.3)}50%{box-shadow:0 0 40px rgba(251,191,36,.6)}}
+@keyframes confetti{0%{transform:translateY(0) rotate(0);opacity:1}100%{transform:translateY(-200px) rotate(720deg);opacity:0}}
+@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes celebrate{0%{transform:scale(.8);opacity:0}50%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+@keyframes firePulse{0%,100%{text-shadow:0 0 10px rgba(251,191,36,.5)}50%{text-shadow:0 0 30px rgba(251,191,36,.8),0 0 60px rgba(251,191,36,.4)}}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px}
 .pill{display:inline-block;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;white-space:nowrap}
+.fi{animation:fadeIn .2s ease-out}
+#auth-gate{position:fixed;inset:0;z-index:10000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
+.ac{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;max-width:400px;width:100%;padding:32px}
+.bp{width:100%;padding:13px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#8b5cf6);color:#fff;font-size:15px;font-weight:700}
+.bs{width:100%;padding:11px;border-radius:10px;background:transparent;color:var(--text2);border:1px solid var(--border2)!important;font-size:13px;font-weight:600;margin-top:8px}
+.tw{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;pointer-events:none}
+.toast{padding:10px 18px;border-radius:10px;font-size:12px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.35);animation:fadeIn .25s;margin-top:6px}
+.t-ok{background:var(--gdim);border:1px solid rgba(52,211,153,.3);color:var(--green)}
+.t-err{background:var(--rdim);border:1px solid rgba(239,68,68,.25);color:var(--red)}
 </style>
 </head>
 <body>
-
-<div id="auth-gate">
-  <div class="ac">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(99,102,241,.3)">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
-      </div>
-      <div><h2>AutoDial Pro</h2><div class="sub">Sign in to start</div></div>
+<div id="auth-gate"><div class="ac">
+  <div style="text-align:center;margin-bottom:20px">
+    <div style="width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px;box-shadow:0 8px 30px rgba(99,102,241,.3)">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
     </div>
-    <div id="auth-message" style="display:none"></div>
-    <div id="auth-login">
-      <div class="f"><label>Email</label><input type="email" id="auth-email" placeholder="you@example.com"></div>
-      <div class="f"><label>Password</label><input type="password" id="auth-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')authLogin()"></div>
-      <button class="bp" onclick="authLogin()">Sign In</button>
-      <button class="bs" onclick="authShow('signup')">Create Account</button>
-    </div>
-    <div id="auth-signup" style="display:none">
-      <div class="f"><label>Full Name</label><input type="text" id="auth-sname" placeholder="Your name"></div>
-      <div class="f"><label>Email</label><input type="email" id="auth-semail" placeholder="you@example.com"></div>
-      <div class="f"><label>Password</label><input type="password" id="auth-spass" placeholder="Min 6 chars"></div>
-      <button class="bp" onclick="authSignup()">Create Account</button>
-      <button class="bs" onclick="authShow('login')">← Back</button>
-    </div>
-    <div id="auth-pending" style="display:none;text-align:center;padding:20px 0">
-      <div style="font-size:40px;margin-bottom:12px">⏳</div>
-      <div style="font-size:16px;font-weight:600;color:var(--accent2);margin-bottom:6px">Pending Approval</div>
-      <div style="font-size:13px;color:var(--text3)">Awaiting admin approval.</div>
-      <button class="bs" onclick="authLogout()" style="margin-top:16px">Sign Out</button>
-    </div>
+    <h2 style="font-size:24px;font-weight:800;color:#f1f5f9">AutoDial</h2>
+    <p style="font-size:13px;color:var(--text3)">Sign in to start</p>
   </div>
-</div>
-
+  <div id="auth-message" style="display:none;font-size:12px;padding:10px;border-radius:8px;margin-bottom:12px"></div>
+  <div id="auth-login">
+    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Email</label><input type="email" id="auth-email" placeholder="you@example.com"></div>
+    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Password</label><input type="password" id="auth-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')authLogin()"></div>
+    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">I am a…</label>
+      <div style="display:flex;gap:8px" id="role-pick">
+        <button onclick="document.querySelectorAll('#role-pick button').forEach(b=>b.style.background='var(--bg3)');this.style.background='var(--adim)';this.style.borderColor='var(--accent)';window._role='admin'" style="flex:1;padding:12px;border-radius:10px;background:var(--bg3);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--border2)">📞 Admin<br><span style="font-size:10px;color:var(--text3);font-weight:400">Telemarketer</span></button>
+        <button onclick="document.querySelectorAll('#role-pick button').forEach(b=>b.style.background='var(--bg3)');this.style.background='var(--adim)';this.style.borderColor='var(--accent)';window._role='main'" style="flex:1;padding:12px;border-radius:10px;background:var(--bg3);color:var(--text);font-size:13px;font-weight:600;border:2px solid var(--border2)">👔 Main<br><span style="font-size:10px;color:var(--text3);font-weight:400">Manager</span></button>
+      </div>
+    </div>
+    <button class="bp" onclick="authLogin()">Sign In</button>
+    <button class="bs" onclick="authShow('signup')">Create Account</button>
+  </div>
+  <div id="auth-signup" style="display:none">
+    <div style="margin-bottom:12px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Full Name</label><input type="text" id="auth-sname"></div>
+    <div style="margin-bottom:12px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Email</label><input type="email" id="auth-semail"></div>
+    <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Password</label><input type="password" id="auth-spass" placeholder="Min 6 chars"></div>
+    <button class="bp" onclick="authSignup()">Create Account</button>
+    <button class="bs" onclick="authShow('login')">← Back</button>
+  </div>
+  <div id="auth-pending" style="display:none;text-align:center;padding:20px"><div style="font-size:40px;margin-bottom:12px">⏳</div><p style="color:var(--accent2);font-weight:600">Pending Approval</p><button class="bs" onclick="authLogout()">Sign Out</button></div>
+</div></div>
 <div id="root"></div>
 <div id="toast-area" class="tw"></div>
 
 <script>
-// ══════════════════════════════════════════
-//  SUPABASE AUTH (same instance as PolicyLens)
-// ══════════════════════════════════════════
-var SB_URL='https://mgbxxwoasrwlraffcvab.supabase.co';
-var SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nYnh4d29hc3J3bHJhZmZjdmFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODIzMjMsImV4cCI6MjA5MDM1ODMyM30.kJoq_dded4cmW56ymY3NmvmhNxYKFKrwOxbSJvBIfc4';
-var ADMIN_EMAILS=['chungakwanc@gmail.com'];
-var _SB=null,_user=null,_prof=null;
+var SB_URL='https://mgbxxwoasrwlraffcvab.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nYnh4d29hc3J3bHJhZmZjdmFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODIzMjMsImV4cCI6MjA5MDM1ODMyM30.kJoq_dded4cmW56ymY3NmvmhNxYKFKrwOxbSJvBIfc4',ADMIN_EMAILS=['chungakwanc@gmail.com'];
+var _SB=null,_user=null,_prof=null;window._role='admin';
 try{if(window.supabase)_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'}})}catch(e){}
-
-function authMsg(t,type){var e=document.getElementById('auth-message');e.className='amsg amsg-'+(type||'e');e.textContent=t;e.style.display='block'}
+function authMsg(t,type){var e=document.getElementById('auth-message');e.style.display='block';e.style.background=type==='i'?'var(--gdim)':'var(--rdim)';e.style.color=type==='i'?'var(--green)':'var(--red)';e.style.border='1px solid '+(type==='i'?'rgba(52,211,153,.2)':'rgba(239,68,68,.2)');e.textContent=t}
 function authClear(){document.getElementById('auth-message').style.display='none'}
 function authShow(v){authClear();['login','signup','pending'].forEach(s=>{var el=document.getElementById('auth-'+s);if(el)el.style.display=s===v?'':'none'})}
 function toast(m,t){var e=document.createElement('div');e.className='toast t-'+(t||'ok');e.textContent=m;document.getElementById('toast-area').appendChild(e);setTimeout(()=>{e.style.opacity='0';e.style.transition='opacity .3s';setTimeout(()=>e.remove(),300)},3000)}
 window.toast=toast;
-
-async function authLogin(){
-  authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
-  if(!e||!p)return authMsg('Enter email and password');
-  authMsg('Signing in…','i');
-  try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);finishLogin(e)}catch(err){authMsg(err.message)}
-}
-function finishLogin(email){if(ADMIN_EMAILS.includes(email)){_prof={email,full_name:'Admin',approved:true,role:'admin'};_SB.auth.getSession().then(s=>{_user=s?.data?.session?.user||{email}}).catch(()=>{});authGrant();return}authCheck()}
-async function authSignup(){
-  authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
-  if(!n||!e||!p)return authMsg('Fill all fields');if(p.length<6)return authMsg('Min 6 chars');
-  authMsg('Creating…','i');
-  try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);
-  if(r.data?.user){var isA=ADMIN_EMAILS.includes(e);await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:isA,role:isA?'admin':'user'}).catch(()=>{});if(isA){_user=r.data.user;_prof={email:e,full_name:n,approved:true};authGrant();return}}
-  authMsg('Created! Awaiting approval.','i');setTimeout(()=>authShow('pending'),1500)}catch(err){authMsg(err.message)}
-}
+async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;if(!e||!p)return authMsg('Enter email and password');if(!window._role)return authMsg('Select Admin or Main');authMsg('Signing in…','i');try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);_SB.auth.getSession().then(s=>{_user=s?.data?.session?.user||{email:e}});_prof={email:e,role:window._role};authGrant()}catch(err){authMsg(err.message)}}
+async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;if(!n||!e||!p)return authMsg('Fill all fields');authMsg('Creating…','i');try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);authMsg('Created! Sign in now.','i');setTimeout(()=>authShow('login'),1500)}catch(err){authMsg(err.message)}}
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
-async function authCheck(){
-  try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}_user=s.data.session.user;
-  var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof=p.data;if(!_prof.approved&&!ADMIN_EMAILS.includes(_prof.email)){authShow('pending');return}}authGrant()}catch(e){authGrant()}
-}
 function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(!window._mounted){window._mounted=true;initApp()}}
+async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}_user=s.data.session.user;var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data)_prof=p.data;var savedRole=localStorage.getItem('autodial_role');if(savedRole){window._role=savedRole;authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}catch(e){document.getElementById('auth-gate').style.display='flex'}}
 if(_SB)authCheck();else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};setTimeout(()=>{if(!window._mounted){window._mounted=true;initApp()}},100)}
 
-// ══════════════════════════════════════════
-//  GOOGLE API MANAGER
-// ══════════════════════════════════════════
+// Google API
 var GAPI_SCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events';
-var _gToken=null;
-var GOOGLE_CLIENT_ID=localStorage.getItem('autodial_gcid')||'';
+var _gToken=null,GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com';
+window.gConnect=function(cb){try{var c=google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GAPI_SCOPES,callback:r=>{if(r.error){toast('Google error','err');return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(cb)cb()}});c.requestAccessToken()}catch(e){toast(e.message,'err')}};
+window.gF=async(url,opts)=>{var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google first');var r=await fetch(url,{...opts,headers:{...opts?.headers,Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
+window.gSheets={async meta(id){var r=await gF(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);return(await r.json()).sheets?.map(s=>({id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}))||[]},async vals(id,range){var r=await gF(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}`);return(await r.json()).values||[]},async put(id,range,val){await gF(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
+window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(e=>({email:e}));return await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json()},async events(min,max){return(await(await gF(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${min}&timeMax=${max}&singleEvents=true&orderBy=startTime&maxResults=50`)).json()).items||[]}};
 
-window.initGoogleAuth=function(clientId){
-  GOOGLE_CLIENT_ID=clientId;
-  localStorage.setItem('autodial_gcid',clientId);
+// ═══ GEMINI AI — 1 call per sheet import ═══
+window.geminiKey=function(){return localStorage.getItem('autodial_gemini')||localStorage.getItem('geminiKey')||''};
+
+window.aiAnalyzeSheet=async function(headers,allRows){
+  var key=geminiKey();if(!key)return null;
+  // Send ALL rows for individual analysis (100-150 rows = well within limits)
+  var rowsText=allRows.map(function(r,i){return'Row '+(i+1)+': '+JSON.stringify(r)}).join('\n');
+  var prompt='You are a data analyst for a Singapore insurance cold-calling team. Given spreadsheet headers and ALL rows, return a JSON mapping.\n\nHEADERS: '+JSON.stringify(headers)+'\n\nALL ROWS:\n'+rowsText+'\n\nReturn ONLY valid JSON:\n{"columns":{"phone":<0-based index or -1>,"first_name":<idx>,"last_name":<idx>,"full_name":<idx>,"email":<idx>,"age":<idx>,"race":<idx>,"income":<idx>,"savings":<idx>,"birthday":<idx>,"company":<idx>,"gender":<idx>,"status":<idx>},"statuses":[{"row":1,"status":"pending|np|cb|ni|set","np_count":0,"notes":"","cb_date":"","cb_time":""},...one entry per row with a status/remarks value]}\n\nStatus rules: empty/blank/pending=pending. NP/no pick/no answer/didnt pick up/not reachable=np(extract NPxN count). CB/callback/call back/reschedule/any future date=cb(extract date+time). NI/not interested/dont want/no need/cannot afford=ni. Set/appt/appointment/meeting location+time/confirmed=set(extract date+time+location into notes). "called back but no answer"=np. "friday 20 mar 5pm @ Hougang Mall"=set with notes. "works in airport cannot meet"=ni. "Transaction ID" with 8-digit numbers=phone. "Residential Status"=race. Only include rows that HAVE a status/remarks value in the statuses array. No markdown fences.';
+  try{var r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:8000,temperature:0.1}})});
+  var d=await r.json();if(d.error){console.warn('[AI]',d.error.message);return null}
+  var text=(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+  return JSON.parse(text)}catch(e){console.warn('[AI]',e.message);return null}
 };
 
-window.googleSignIn=function(callback){
-  if(!GOOGLE_CLIENT_ID){toast('Set Google Client ID in Settings','err');return}
-  try{
-    var client=google.accounts.oauth2.initTokenClient({client_id:GOOGLE_CLIENT_ID,scope:GAPI_SCOPES,callback:function(resp){
-      if(resp.error){toast('Google auth failed: '+resp.error,'err');return}
-      _gToken=resp.access_token;localStorage.setItem('autodial_gtoken',_gToken);
-      toast('Google connected!','ok');if(callback)callback(_gToken);
-    }});
-    client.requestAccessToken();
-  }catch(e){toast('Google auth error: '+e.message,'err')}
-};
-
-window.gFetch=async function(url,opts){
-  var t=_gToken||localStorage.getItem('autodial_gtoken');
-  if(!t)throw new Error('Not connected to Google');
-  var r=await fetch(url,{...opts,headers:{...opts?.headers,'Authorization':'Bearer '+t,'Content-Type':'application/json'}});
-  if(r.status===401){_gToken=null;localStorage.removeItem('autodial_gtoken');throw new Error('Google session expired. Reconnect.')}
-  return r;
-};
-
-// Sheets API helpers
-window.gSheets={
-  async getMeta(sheetId){
-    var r=await gFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`);
-    return(await r.json()).sheets?.map(s=>({id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}))||[];
-  },
-  async getValues(sheetId,range){
-    var r=await gFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}`);
-    return(await r.json()).values||[];
-  },
-  async updateCell(sheetId,range,value){
-    await gFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,{
-      method:'PUT',body:JSON.stringify({values:[[value]]})
-    });
-  },
-  async updateRange(sheetId,range,values){
-    await gFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,{
-      method:'PUT',body:JSON.stringify({values})
-    });
-  }
-};
-
-// Calendar API helpers
-window.gCal={
-  async createEvent(summary,description,startISO,endISO,attendees){
-    var body={summary,description,start:{dateTime:startISO,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:endISO,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};
-    if(attendees?.length)body.attendees=attendees.map(e=>({email:e}));
-    var r=await gFetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(body)});
-    return await r.json();
-  },
-  async getEvents(dateMin,dateMax){
-    var r=await gFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${dateMin}&timeMax=${dateMax}&singleEvents=true&orderBy=startTime&maxResults=50`);
-    return(await r.json()).items||[];
-  },
-  async getFreeBusy(dateMin,dateMax){
-    var r=await gFetch('https://www.googleapis.com/calendar/v3/freeBusy',{
-      method:'POST',body:JSON.stringify({timeMin:dateMin,timeMax:dateMax,items:[{id:'primary'}]})
-    });
-    var d=await r.json();return d.calendars?.primary?.busy||[];
-  }
-};
+window.aiParseSheet=async function(rows,headers){
+  var ai=await aiAnalyzeSheet(headers,rows);
+  if(!ai||!ai.columns||ai.columns.phone===-1)return null;
+  var c=ai.columns,aiSt={};
+  if(ai.statuses)ai.statuses.forEach(function(s){aiSt[s.row-1]=s});
+  var leads=[];
+  for(var ri=0;ri<rows.length;ri++){var r=rows[ri];var ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
+    var fn='',ln='';if(c.first_name!==-1)fn=String(r[c.first_name]||'').trim();if(c.last_name!==-1)ln=String(r[c.last_name]||'').trim();if(!fn&&c.full_name!==-1)fn=String(r[c.full_name]||'').trim();var name=(fn+' '+ln).trim()||ph;
+    var st={s:'pending',n:'',np:0,cbd:'',cbt:''};
+    if(aiSt[ri]){var a=aiSt[ri];st={s:a.status||'pending',n:a.notes||'',np:a.np_count||0,cbd:a.cb_date||'',cbt:a.cb_time||''}}
+    leads.push({id:Date.now()+Math.random(),name,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:c.age!==-1?String(r[c.age]||'').trim():'',race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',savings:c.savings!==-1?String(r[c.savings]||'').trim():'',birthday:c.birthday!==-1?String(r[c.birthday]||'').trim():'',company:c.company!==-1?String(r[c.company]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status:st.s,npCount:st.np||0,cbDate:st.cbd||'',cbTime:st.cbt||'',cbHistory:[],calledAt:null,notes:st.n||'',sheetRow:ri+2,statusCol:c.status!=null?c.status:-1})}
+  return{leads,count:leads.length,aiUsed:true}};
 </script>
 
 <script type="text/babel">
 const{useState,useEffect,useRef,useCallback}=React;
-const isMobile=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const LS='autodial_v2_'+(window._user?.id||'local');
+const isMob=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const LS=k=>'ad_'+k+'_'+(window._user?.id||'l');
 
-// ─── Persistence ───
-const load=()=>{try{return JSON.parse(localStorage.getItem(LS))||{}}catch{return{}}};
-const save=(d)=>{try{localStorage.setItem(LS,JSON.stringify(d))}catch(e){}};
+const load=k=>{try{return JSON.parse(localStorage.getItem(LS(k)))}catch{return null}};
+const save=(k,v)=>{try{localStorage.setItem(LS(k),JSON.stringify(v))}catch{}};
 
-// ─── Column detection ───
-const RE={first:/^(first[_\s]?name|fname|first|firstname)$/i,last:/^(last[_\s]?name|lname|last|lastname|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|lead[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|phone[_\s]?number|mobile[_\s]?number|contact[_\s]?number|number|whatsapp|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|nationality|residential[_\s]?status)$/i,income:/^(income|monthly[_\s]?income|salary)$/i,savings:/^(savings?|monthly[_\s]?savings?)$/i,birthday:/^(birthday|dob|date[_\s]?of[_\s]?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation|title)$/i,status:/^(status|remarks|notes|remark|result)$/i};
+// Column detection
+const RE={first:/^(first[_\s]?name|fname|first|firstname)$/i,last:/^(last[_\s]?name|lname|last|lastname|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|lead[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|phone[_\s]?number|mobile[_\s]?number|contact[_\s]?number|number|whatsapp)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|nationality|residential)$/i,income:/^(income|monthly[_\s]?income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|remarks|notes|result)$/i};
 const mc=(h,r)=>h.findIndex(x=>r.test(x.trim()));
-const isPhV=v=>v&&/^\d{7,15}$/.test(String(v).replace(/[\s\-().+]/g,''));
-
-// Status detection from sheet values
-function detectStatus(val){
-  if(!val)return{status:'pending',notes:''};
-  const v=String(val).trim().toLowerCase();
-  if(/^ni$|not\s*interested/i.test(v))return{status:'ni',notes:''};
-  if(/^(appt|set)\b/i.test(v))return{status:'set',notes:val};
-  if(/^np\s*x?\s*(\d)/i.test(v)){const m=v.match(/(\d)/);return{status:'np',notes:val,npCount:parseInt(m?.[1]||'1')}}
-  if(/^np$/i.test(v))return{status:'np',notes:'',npCount:1};
-  if(/^cb|callback/i.test(v))return{status:'cb',notes:val};
-  if(v&&v!=='pending'&&v!=='—'&&v!=='-')return{status:'pending',notes:val};
-  return{status:'pending',notes:''};
-}
+const isP=v=>v&&/^\d{7,15}$/.test(String(v).replace(/[\s\-().+]/g,''));
+function detectSt(v){if(!v)return{s:'pending',n:''};const l=String(v).trim().toLowerCase();if(/^ni$|not.?interested/i.test(l))return{s:'ni',n:''};if(/^(appt|set)/i.test(l))return{s:'set',n:v};if(/^np\s*x?\s*(\d)/i.test(l)){const m=l.match(/(\d)/);return{s:'np',n:v,np:parseInt(m?.[1]||1)}}if(/^np$/i.test(l))return{s:'np',n:'',np:1};if(/^cb|callback/i.test(l))return{s:'cb',n:v};return{s:'pending',n:v!=='pending'&&v!=='—'&&v!=='-'?v:''}}
 
 function parseSheet(rows,headers){
   const c={};for(const[k,r]of Object.entries(RE))c[k]=mc(headers,r);
-  if(c.phone===-1){for(let i=0;i<headers.length;i++){if(rows.slice(0,15).filter(r=>isPhV(r[i])).length>=Math.min(3,rows.length)){c.phone=i;break}}}
+  if(c.phone===-1)for(let i=0;i<headers.length;i++){if(rows.slice(0,15).filter(r=>isP(r[i])).length>=3){c.phone=i;break}}
   if(c.phone===-1)return{leads:[],error:'No phone column found.'};
-  if(c.name===-1&&c.first===-1){for(let i=0;i<headers.length;i++){if(Object.values(c).includes(i))continue;if(rows.slice(0,10).filter(r=>r[i]&&/[a-zA-Z]/.test(String(r[i]))).length>=3){c.name=i;break}}}
+  if(c.name===-1&&c.first===-1)for(let i=0;i<headers.length;i++){if(Object.values(c).includes(i))continue;if(rows.slice(0,10).filter(r=>r[i]&&/[a-zA-Z]/.test(String(r[i]))).length>=3){c.name=i;break}}
   const leads=[];
-  for(let ri=0;ri<rows.length;ri++){
-    const r=rows[ri];const phone=String(r[c.phone]||'').trim();if(!phone||phone.length<5)continue;
+  for(let ri=0;ri<rows.length;ri++){const r=rows[ri];const ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn=c.first!==-1?String(r[c.first]||'').trim():'',ln=c.last!==-1?String(r[c.last]||'').trim():'';
-    if(!fn&&c.name!==-1)fn=String(r[c.name]||'').trim();
-    const name=(fn+' '+ln).trim()||phone;
-    const raw=c.status!==-1?String(r[c.status]||''):'';
-    const det=detectStatus(raw);
-    leads.push({id:Date.now()+Math.random(),name,phone,email:c.email!==-1?String(r[c.email]||'').trim():'',age:c.age!==-1?String(r[c.age]||'').trim():'',race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',savings:c.savings!==-1?String(r[c.savings]||'').trim():'',birthday:c.birthday!==-1?String(r[c.birthday]||'').trim():'',company:c.company!==-1?String(r[c.company]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status:det.status,npCount:det.npCount||0,cbDate:'',cbTime:'',cbHistory:[],calledAt:null,notes:det.notes,sheetRow:ri+2,statusCol:c.status!==-1?c.status:-1});
-  }
-  return{leads,error:null,count:leads.length,statusCol:c.status};
+    if(!fn&&c.name!==-1)fn=String(r[c.name]||'').trim();const name=(fn+' '+ln).trim()||ph;
+    const d=detectSt(c.status!==-1?String(r[c.status]||''):'');
+    leads.push({id:Date.now()+Math.random(),name,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:c.age!==-1?String(r[c.age]||'').trim():'',race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',status:d.s,npCount:d.np||0,cbDate:'',cbTime:'',cbHistory:[],calledAt:null,notes:d.n,sheetRow:ri+2,statusCol:c.status!==-1?c.status:-1})}
+  return{leads,error:null,count:leads.length}
 }
 
-// ─── Status config ───
-const ST={pending:{c:'#94a3b8',l:'Pending',bg:'rgba(148,163,184,.08)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amber-dim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--blue-dim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--red-dim)'},set:{c:'var(--green)',l:'Set',bg:'var(--green-dim)'}};
-const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length>0?`CB→NP×${np}`:`NP×${np}`;if(s==='ni'&&np>=5)l='NI (auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
+const ST={pending:{c:'#94a3b8',l:'Pending',bg:'rgba(148,163,184,.08)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
+const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?`CB→NP×${np}`:`NP×${np}`;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
+
+// ═══ PAY TIERS ═══
+const TIERS=[{min:0,label:'Bronze 🥉',color:'#cd7f32'},{min:30,label:'Silver 🥈',color:'#c0c0c0'},{min:60,label:'Gold 🥇',color:'#fbbf24'}];
+function getTier(totalSets){for(let i=TIERS.length-1;i>=0;i--)if(totalSets>=TIERS[i].min)return{...TIERS[i],idx:i};return{...TIERS[0],idx:0}}
+function getNextTier(totalSets){const cur=getTier(totalSets);if(cur.idx<TIERS.length-1)return TIERS[cur.idx+1];return null}
+
+// ═══ CONFETTI ═══
+function Confetti({show}){
+  if(!show)return null;
+  const colors=['#fbbf24','#34d399','#6366f1','#ef4444','#3b82f6','#f59e0b','#ec4899'];
+  return<div style={{position:'fixed',inset:0,pointerEvents:'none',zIndex:9999}}>
+    {Array.from({length:40}).map((_,i)=><div key={i} style={{position:'absolute',left:`${Math.random()*100}%`,top:'50%',width:8+Math.random()*8,height:8+Math.random()*8,background:colors[i%colors.length],borderRadius:Math.random()>.5?'50%':'2px',animation:`confetti ${1+Math.random()*2}s ease-out forwards`,animationDelay:`${Math.random()*.5}s`}}/>)}
+  </div>
+}
+
+// ═══ MILESTONE POPUP ═══
+function MilestonePopup({show,title,sub,emoji,onClose}){
+  if(!show)return null;
+  return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:20}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} style={{background:'var(--bg2)',border:'2px solid var(--gold)',borderRadius:20,padding:'40px 30px',textAlign:'center',maxWidth:360,width:'100%',animation:'celebrate .5s ease-out',boxShadow:'0 0 60px rgba(251,191,36,.2)'}}>
+      <div style={{fontSize:64,marginBottom:16}}>{emoji}</div>
+      <h2 style={{fontSize:22,fontWeight:800,color:'var(--gold)',marginBottom:8,animation:'firePulse 2s infinite'}}>{title}</h2>
+      <p style={{fontSize:14,color:'var(--text2)',lineHeight:1.5,marginBottom:20}}>{sub}</p>
+      <button onClick={onClose} style={{padding:'12px 32px',borderRadius:10,background:'linear-gradient(135deg,var(--gold),#f59e0b)',color:'#0b0f1a',fontSize:15,fontWeight:700}}>LET'S GO! 🔥</button>
+    </div>
+  </div>
+}
 
 // ══════════════════════════════════════════
 //  MAIN APP
 // ══════════════════════════════════════════
 function App(){
-  const stored=load();
+  const role=window._role||'admin';
+  localStorage.setItem('autodial_role',role);
+  const stored=load('data')||{};
   const[leads,setLeads]=useState(stored.leads||[]);
-  const[settings,setSettings]=useState(stored.settings||{delay:10,gcid:'',sheetId:'',sheetTab:''});
+  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,12,18],sessionDur:5,mThresh:2,nThresh:4});
   const[running,setRunning]=useState(false);
   const[curIdx,setCurIdx]=useState(-1);
   const[countdown,setCountdown]=useState(0);
   const[phase,setPhase]=useState('idle');
-  const[tab,setTab]=useState('dialer');
-  const[msg,setMsg]=useState(null);
+  const[tab,setTab]=useState(role==='admin'?'dial':'leads');
   const[search,setSearch]=useState('');
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);
@@ -293,408 +215,423 @@ function App(){
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);
   const[newF,setNewF]=useState({name:'',phone:''});
-  const[gConnected,setGConnected]=useState(!!localStorage.getItem('autodial_gtoken'));
-  const[sheetTabs,setSheetTabs]=useState([]);
-  const[sheetLoading,setSheetLoading]=useState(false);
-  const[calEvents,setCalEvents]=useState([]);
-  const[calLoading,setCalLoading]=useState(false);
-  const fileRef=useRef(null);
-  const cdRef=useRef(null);
+  const[gOk,setGOk]=useState(!!localStorage.getItem('ad_gt'));
+  const[sTabs,setSTabs]=useState([]);
+  const[sLoad,setSLoad]=useState(false);
+  // Session tracking (Admin)
+  const[session,setSession]=useState(null); // {startTime,dialed,np,ni,cb,sets,ended}
+  const[totalSets,setTotalSets]=useState(load('totalSets')||0);
+  const[milestone,setMilestone]=useState(null);
+  const[confetti,setConfetti]=useState(false);
+  const[sessionLog,setSessionLog]=useState(load('sessions')||[]);
+  const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
+  const[elapsed,setElapsed]=useState(0);
 
-  useEffect(()=>{save({leads,settings})},[leads,settings]);
+  useEffect(()=>{save('data',{leads,cfg})},[leads,cfg]);
+  useEffect(()=>{save('totalSets',totalSets)},[totalSets]);
+  useEffect(()=>{save('sessions',sessionLog)},[sessionLog]);
+
+  // Session timer
+  useEffect(()=>{
+    if(session&&!session.ended){timerRef.current=setInterval(()=>setElapsed(Math.floor((Date.now()-session.startTime)/1000)),1000);return()=>clearInterval(timerRef.current)}
+  },[session]);
 
   const pending=leads.filter(l=>l.status==='pending'||l.status==='cb');
-  const active=leads.filter(l=>l.status!=='pending');
   const cur=curIdx>=0&&curIdx<leads.length?leads[curIdx]:null;
-  const progress=leads.length>0?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
+  const progress=leads.length?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
+  const tier=getTier(totalSets);const nextTier=getNextTier(totalSets);
   const userName=window._prof?.full_name||window._prof?.email||'User';
+  const hourlyRate=cfg.payRates[tier.idx]||cfg.payRates[0];
 
-  const dial=useCallback(ph=>{if(isMobile)window.location.href=`tel:${ph.replace(/[^+\d]/g,'')}`},[]);
+  const dial=useCallback(ph=>{if(isMob)window.location.href=`tel:${ph.replace(/[^+\d]/g,'')}`},[]);
 
-  // ─── Write status back to Google Sheet ───
-  const syncStatusToSheet=useCallback(async(lead,newStatus)=>{
-    if(!settings.sheetId||lead.statusCol===-1||!lead.sheetRow)return;
-    if(!localStorage.getItem('autodial_gtoken'))return;
-    try{
-      const colLetter=String.fromCharCode(65+lead.statusCol);
-      const range=`${settings.sheetTab||'Sheet1'}!${colLetter}${lead.sheetRow}`;
-      let val=newStatus.toUpperCase();
-      if(newStatus==='np')val=`NP x${(lead.npCount||0)+1}`;
-      if(newStatus==='cb')val=`CB ${lead.cbDate||''} ${lead.cbTime||''}`.trim();
-      if(newStatus==='set')val='appt set';
-      await gSheets.updateCell(settings.sheetId,range,val);
-    }catch(e){console.warn('Sheet sync failed:',e.message)}
-  },[settings]);
+  const syncSheet=useCallback(async(lead,st)=>{
+    if(!cfg.sheetId||lead.statusCol===-1||!lead.sheetRow||!localStorage.getItem('ad_gt'))return;
+    try{const col=String.fromCharCode(65+lead.statusCol);let v=st.toUpperCase();if(st==='np')v=`NP x${(lead.npCount||0)+1}`;if(st==='cb')v=`CB ${lead.cbDate||''} ${lead.cbTime||''}`.trim();if(st==='set')v='appt set';await gSheets.put(cfg.sheetId,`${cfg.sheetTab||'Sheet1'}!${col}${lead.sheetRow}`,v)}catch(e){}
+  },[cfg]);
+
+  // ─── Start Session (Admin) ───
+  const startSession=()=>{
+    setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false});
+    setElapsed(0);
+    toast('Session started! Let\'s go! 🔥');
+  };
+  const endSession=()=>{
+    if(!session)return;
+    const s={...session,ended:true,endTime:Date.now(),elapsed};
+    // Check if full session earned
+    const fullSessionEarned=s.sets>=cfg.mThresh;
+    const bonusEarned=s.sets>=cfg.nThresh;
+    const hours=fullSessionEarned?cfg.sessionDur:(elapsed/3600);
+    const pay=hours*hourlyRate*(bonusEarned?1.5:1);
+    s.pay=pay;s.fullSession=fullSessionEarned;s.bonus=bonusEarned;s.hourlyRate=hourlyRate;s.tier=tier.label;
+    setSession(s);
+    setSessionLog(p=>[s,...p]);
+    setRunning(false);setPhase('idle');clearTimeout(cdRef.current);
+  };
 
   // ─── Outcome ───
   const applyOutcome=useCallback((status,extra={})=>{
     const idx=curIdx;
     setLeads(prev=>prev.map((l,i)=>{
-      if(i!==idx)return l;
-      const now=new Date().toLocaleString();
-      let u={...l,calledAt:now,...extra};
-      if(status==='np'){
-        const wasCb=l.status==='cb';const nc=(l.npCount||0)+1;
-        u.npCount=nc;u.status=nc>=5?'ni':'np';
-        if(wasCb&&l.cbDate){u.cbHistory=[...(l.cbHistory||[]),{date:`${l.cbDate} ${l.cbTime}`,result:'NP'}];u.notes=`CB ${l.cbDate} ${l.cbTime} → NP×${nc}`}
-        syncStatusToSheet(u,nc>=5?'ni':'np');
-      }else if(status==='cb'){
-        u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';u.notes=`CB ${extra.cbDate} ${extra.cbTime}`;
-        syncStatusToSheet(u,'cb');
-      }else if(status==='set'){
-        u.status='set';syncStatusToSheet(u,'set');
-      }else if(status==='ni'){
-        u.status='ni';syncStatusToSheet(u,'ni');
-      }else{u.status=status}
+      if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
+      if(status==='np'){const wasCb=l.status==='cb';const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=5?'ni':'np';if(wasCb&&l.cbDate){u.cbHistory=[...(l.cbHistory||[]),{date:`${l.cbDate} ${l.cbTime}`,result:'NP'}]}syncSheet(u,nc>=5?'ni':'np')}
+      else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
+      else if(status==='set'){u.status='set';syncSheet(u,'set')}
+      else if(status==='ni'){u.status='ni';syncSheet(u,'ni')}
+      else u.status=status;
       return u;
     }));
-  },[curIdx,syncStatusToSheet]);
+    // Update session stats
+    if(session&&!session.ended){
+      setSession(prev=>{
+        const s={...prev,dialed:prev.dialed+1};
+        if(status==='np')s.np=prev.np+1;if(status==='ni')s.ni=prev.ni+1;if(status==='cb')s.cb=prev.cb+1;
+        if(status==='set'){
+          s.sets=prev.sets+1;
+          const newTotal=totalSets+1;setTotalSets(newTotal);
+          // Check milestones
+          if(s.sets===cfg.mThresh){
+            setConfetti(true);setTimeout(()=>setConfetti(false),3000);
+            setMilestone({title:'FULL SESSION EARNED! 🎉',sub:`You hit ${cfg.mThresh} appointments! Your full ${cfg.sessionDur}-hour session is now logged.\n\nBut why stop? Push for ${cfg.nThresh} appts to unlock the 1.5× BONUS!`,emoji:'🏆'});
+          }else if(s.sets===cfg.nThresh){
+            setConfetti(true);setTimeout(()=>setConfetti(false),4000);
+            setMilestone({title:'1.5× BONUS UNLOCKED! 💰',sub:`INCREDIBLE! ${cfg.nThresh} appointments! Your entire session pay is now multiplied by 1.5×!\n\nYou're on FIRE — keep going!`,emoji:'🔥'});
+          }
+          // Tier promotion check
+          if(TIERS.some(t=>t.min===newTotal)){
+            setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION! 🚀',sub:`You've reached ${getTier(newTotal).label}!\nYour hourly rate is now $${cfg.payRates[getTier(newTotal).idx]}/hr!`,emoji:'⭐'})},1500);
+          }
+        }
+        return s;
+      });
+    }
+  },[curIdx,session,totalSets,cfg,syncSheet]);
 
   const moveNext=useCallback(()=>{
-    const idx=curIdx;
-    setLeads(prev=>{
-      const n=prev.findIndex((l,i)=>i>idx&&(l.status==='pending'||l.status==='cb'));
-      if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return prev}
-      setCurIdx(n);setPhase('waiting');setCountdown(settings.delay);return prev;
-    });
-  },[curIdx,settings.delay]);
+    setLeads(prev=>{const n=prev.findIndex((l,i)=>i>curIdx&&(l.status==='pending'||l.status==='cb'));if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return prev}setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);return prev});
+  },[curIdx,cfg.delay]);
 
   const handleOutcome=useCallback((status,extra={})=>{
-    if(status==='set'){
-      applyOutcome(status,extra);
-      setShowAppt(true);setApptDate('');setApptTime('');setApptInvite('');
-      setTimeout(moveNext,150);return;
-    }
+    if(status==='set'){applyOutcome(status,extra);setShowAppt(true);setApptDate('');setApptTime('');setApptInvite('');setTimeout(moveNext,150);return}
     applyOutcome(status,extra);setTimeout(moveNext,150);
   },[applyOutcome,moveNext]);
 
-  // Countdown
   useEffect(()=>{
     if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}
   },[phase,countdown,running,cur,dial]);
 
-  const startDial=()=>{const f=leads.findIndex(l=>l.status==='pending'||l.status==='cb');if(f===-1)return;setCurIdx(f);setRunning(true);setPhase('calling');setTab('dialer');setTimeout(()=>dial(leads[f].phone),500)};
+  const startDial=()=>{if(!session||session.ended)startSession();const f=leads.findIndex(l=>l.status==='pending'||l.status==='cb');if(f===-1)return;setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500)};
   const pauseDial=()=>{setRunning(false);setPhase('idle');clearTimeout(cdRef.current)};
 
-  // ─── Google connection ───
-  const connectGoogle=()=>{
-    if(!settings.gcid){toast('Enter Google Client ID in Settings first','err');setTab('settings');return}
-    window.initGoogleAuth(settings.gcid);
-    window.googleSignIn(()=>setGConnected(true));
-  };
-
-  // ─── Fetch sheet tabs ───
-  const fetchSheetTabs=async()=>{
-    const m=settings.sheetId?.match(/\/d\/([a-zA-Z0-9_-]+)/)||settings.sheetId?.match(/^([a-zA-Z0-9_-]{20,})$/);
-    if(!m){toast('Invalid sheet URL','err');return}
-    const id=m[1];setSettings(s=>({...s,sheetId:id}));
-    setSheetLoading(true);
-    try{const tabs=await gSheets.getMeta(id);setSheetTabs(tabs);toast(`Found ${tabs.length} tab(s)`,'ok')}catch(e){toast(e.message,'err')}
-    setSheetLoading(false);
-  };
-
-  // ─── Fetch leads from selected tab ───
-  const fetchLeadsFromSheet=async()=>{
-    if(!settings.sheetId||!settings.sheetTab)return;
-    setSheetLoading(true);setMsg({t:'info',m:'Fetching sheet…'});
-    try{
-      const vals=await gSheets.getValues(settings.sheetId,settings.sheetTab);
-      if(vals.length<2){setMsg({t:'err',m:'Sheet empty'});setSheetLoading(false);return}
-      const r=parseSheet(vals.slice(1),vals[0].map(String));
-      if(r.error){setMsg({t:'err',m:r.error});setSheetLoading(false);return}
-      setLeads(r.leads);
-      setMsg({t:'ok',m:`✓ ${r.count} leads loaded · Status detected from column`});
-      toast(`${r.count} leads imported`);
-    }catch(e){setMsg({t:'err',m:e.message})}
-    setSheetLoading(false);
-  };
-
-  // ─── File upload ───
-  const handleFile=async e=>{
-    const file=e.target.files?.[0];if(!file)return;
-    try{const ext=file.name.split('.').pop().toLowerCase();let h,r;
-    if(['csv','tsv','txt'].includes(ext)){const p=Papa.parse(await file.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}
-    else if(['xlsx','xls'].includes(ext)){const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
-    else{toast('Use CSV or Excel','err');return}
-    const res=parseSheet(r,h);if(res.error){toast(res.error,'err');return}
-    setLeads(p=>[...p,...res.leads]);toast(`${res.count} leads imported`)}catch(err){toast(err.message,'err')}
-    if(fileRef.current)fileRef.current.value='';
-  };
-
-  // ─── Calendar ───
-  const fetchCalendar=async()=>{
-    setCalLoading(true);
-    try{
-      const now=new Date();const end=new Date(now);end.setDate(end.getDate()+1);
-      const events=await gCal.getEvents(now.toISOString(),end.toISOString());
-      setCalEvents(events);
-    }catch(e){toast(e.message,'err')}
-    setCalLoading(false);
-  };
-
-  const createAppt=async()=>{
-    if(!apptDate||!apptTime)return;
-    const lead=cur||leads[curIdx];if(!lead)return;
-    const start=new Date(`${apptDate}T${apptTime}`);
-    const end=new Date(start.getTime()+60*60*1000);
-    try{
-      const attendees=apptInvite?apptInvite.split(',').map(s=>s.trim()).filter(Boolean):[];
-      await gCal.createEvent(`Meeting: ${lead.name}`,`AutoDial appointment\nPhone: ${lead.phone}\nEmail: ${lead.email}`,start.toISOString(),end.toISOString(),attendees);
-      toast('Calendar event created!');setShowAppt(false);
-    }catch(e){toast(e.message,'err')}
-  };
-
-  const exportCSV=()=>{
-    const d=leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Age:l.age,Race:l.race,Income:l.income,Status:l.status.toUpperCase(),NP:l.npCount,CB:l.cbDate?`${l.cbDate} ${l.cbTime}`:'',Called:l.calledAt||'',Notes:l.notes}));
-    const csv=Papa.unparse(d);const blob=new Blob([csv],{type:'text/csv'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`autodial-${new Date().toISOString().slice(0,10)}.csv`;a.click();
-  };
-
-  const addLead=()=>{if(!newF.name||!newF.phone)return;setLeads(p=>[...p,{id:Date.now(),name:newF.name.trim(),phone:newF.phone.trim(),email:'',age:'',race:'',income:'',savings:'',birthday:'',company:'',gender:'',status:'pending',npCount:0,cbDate:'',cbTime:'',cbHistory:[],calledAt:null,notes:'',sheetRow:0,statusCol:-1}]);setNewF({name:'',phone:''});setShowAdd(false)};
-
-  const histLeads=leads.filter(l=>{if(l.status==='pending')return false;if(histF!=='all'&&l.status!==histF)return false;if(search){const s=search.toLowerCase();return l.name.toLowerCase().includes(s)||l.phone.includes(s)||(l.notes||'').toLowerCase().includes(s)}return true});
+  const connectG=()=>gConnect(()=>setGOk(true));
+  const fetchTabs=async()=>{const m=cfg.sheetId?.match(/\/d\/([a-zA-Z0-9_-]+)/)||cfg.sheetId?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m){toast('Bad URL','err');return}const id=m[1];setCfg(s=>({...s,sheetId:id}));setSLoad(true);try{setSTabs(await gSheets.meta(id));toast('Tabs loaded')}catch(e){toast(e.message,'err')}setSLoad(false)};
+  const fetchLeads=async()=>{if(!cfg.sheetId||!cfg.sheetTab)return;setSLoad(true);try{const v=await gSheets.vals(cfg.sheetId,cfg.sheetTab);if(v.length<2){toast('Empty','err');setSLoad(false);return}
+    const headers=v[0].map(String);const rows=v.slice(1);
+    // Try AI analysis first (1 API call)
+    toast('Analyzing with AI…','info');
+    const aiResult=await aiParseSheet(rows,headers);
+    if(aiResult&&aiResult.leads.length>0){setLeads(aiResult.leads);toast(`✨ ${aiResult.count} leads loaded (AI-powered)`);setSLoad(false);return}
+    // Fallback to regex
+    const r=parseSheet(rows,headers);if(r.error){toast(r.error,'err');setSLoad(false);return}setLeads(r.leads);toast(`${r.count} leads loaded`)}catch(e){toast(e.message,'err')}setSLoad(false)};
+  const handleFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const ext=f.name.split('.').pop().toLowerCase();let h,r;if(['csv','tsv','txt'].includes(ext)){const p=Papa.parse(await f.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}else{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
+    const aiResult=await aiParseSheet(r,h);
+    if(aiResult&&aiResult.leads.length>0){setLeads(p=>[...p,...aiResult.leads]);toast(`✨ ${aiResult.count} leads imported (AI)`);return}
+    const res=parseSheet(r,h);if(res.error){toast(res.error,'err');return}setLeads(p=>[...p,...res.leads]);toast(`${res.count} leads imported`)}catch(err){toast(err.message,'err')}if(fileRef.current)fileRef.current.value=''};
+  const exportCSV=()=>{const d=leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes}));const csv=Papa.unparse(d);const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`autodial-${new Date().toISOString().slice(0,10)}.csv`;a.click()};
+  const addLead=()=>{if(!newF.name||!newF.phone)return;setLeads(p=>[...p,{id:Date.now(),name:newF.name.trim(),phone:newF.phone.trim(),email:'',age:'',race:'',income:'',status:'pending',npCount:0,cbDate:'',cbTime:'',cbHistory:[],calledAt:null,notes:'',sheetRow:0,statusCol:-1}]);setNewF({name:'',phone:''});setShowAdd(false)};
+  const fmtTime=s=>`${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+  const histLeads=leads.filter(l=>{if(l.status==='pending')return false;if(histF!=='all'&&l.status!==histF)return false;if(search){const s=search.toLowerCase();return l.name.toLowerCase().includes(s)||l.phone.includes(s)}return true});
   const detailLead=leads.find(l=>l.id===detailId);
+
+  // Admin tabs
+  const adminTabs=[['dial','📞'],['stats','🏆'],['history','📊'],['leads','📋'],['settings','⚙️']];
+  const mainTabs=[['leads','📋'],['tracking','📊'],['settings','⚙️']];
+  const tabs=role==='admin'?adminTabs:mainTabs;
 
   return(
   <div style={{minHeight:'100vh',background:'var(--bg)',maxWidth:520,margin:'0 auto'}}>
+    <Confetti show={confetti}/>
+    <MilestonePopup show={!!milestone} {...(milestone||{})} onClose={()=>setMilestone(null)}/>
+
     {/* Header */}
-    <div style={{padding:'14px 16px 8px',display:'flex',alignItems:'center',gap:10}}>
-      <div style={{width:32,height:32,borderRadius:9,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>
+    <div style={{padding:'12px 16px 6px',display:'flex',alignItems:'center',gap:10}}>
+      <div style={{width:32,height:32,borderRadius:9,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center'}}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
       </div>
       <div style={{flex:1}}>
-        <h1 style={{fontSize:17,fontWeight:700,color:'#f1f5f9',margin:0}}>AutoDial Pro</h1>
-        <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{userName} · {pending.length} queued · {isMobile?'📱':'💻'} {gConnected&&<span style={{color:'var(--green)'}}>● Google</span>}</p>
+        <h1 style={{fontSize:16,fontWeight:700,color:'#f1f5f9',margin:0}}>AutoDial <span style={{fontSize:10,color:role==='admin'?'var(--amber)':'var(--accent2)',fontWeight:600}}>{role==='admin'?'ADMIN':'MAIN'}</span></h1>
+        <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{userName} {session&&!session.ended&&<span style={{color:'var(--green)'}}>● LIVE {fmtTime(elapsed)}</span>}</p>
       </div>
-      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{padding:'5px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:11,fontWeight:600,border:'1px solid var(--border)'}}>Out</button>
+      {role==='admin'&&<div style={{textAlign:'right'}}>
+        <p style={{margin:0,fontSize:12,fontWeight:800,color:tier.color}}>{tier.label}</p>
+        <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>${hourlyRate}/hr</p>
+      </div>}
+      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600,border:'1px solid var(--border)'}}>Out</button>
     </div>
-    <div style={{margin:'0 16px 6px',height:3,borderRadius:2,background:'var(--border)',overflow:'hidden'}}>
-      <div style={{height:'100%',width:`${progress}%`,background:'linear-gradient(90deg,var(--accent),#a78bfa)',transition:'width .4s'}}/>
-    </div>
+    <div style={{margin:'0 16px 4px',height:3,borderRadius:2,background:'var(--border)',overflow:'hidden'}}><div style={{height:'100%',width:`${progress}%`,background:'linear-gradient(90deg,var(--accent),#a78bfa)',transition:'width .4s'}}/></div>
 
     {/* Tabs */}
-    <div style={{display:'flex',padding:'0 12px',gap:2,marginBottom:10}}>
-      {[['dialer','📞 Dial'],['leads','📋 Leads'],['history','📊 History'],['calendar','📅 Cal'],['settings','⚙️']].map(([k,v])=>(
-        <button key={k} onClick={()=>{setTab(k);if(k==='calendar'&&gConnected)fetchCalendar()}} style={{flex:1,padding:'8px 0',borderRadius:8,background:tab===k?'var(--accent-dim)':'transparent',color:tab===k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:600}}>{v}</button>
-      ))}
+    <div style={{display:'flex',padding:'0 12px',gap:2,marginBottom:8}}>
+      {tabs.map(([k,v])=><button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'8px 0',borderRadius:8,background:tab===k?'var(--adim)':'transparent',color:tab===k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:600}}>{v} {k.charAt(0).toUpperCase()+k.slice(1)}</button>)}
     </div>
 
-    {/* ═══ DIALER ═══ */}
-    {tab==='dialer'&&<div style={{padding:'0 16px'}}>
-      <div className="card" style={{textAlign:'center',marginBottom:12,minHeight:160,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:phase==='calling'?'var(--accent-dim)':'var(--bg2)',borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
+    {/* ═══ ADMIN: DIALER ═══ */}
+    {tab==='dial'&&role==='admin'&&<div style={{padding:'0 16px'}}>
+      {/* Session bar */}
+      {session&&!session.ended&&<div className="card" style={{marginBottom:10,background:'linear-gradient(135deg,rgba(99,102,241,.08),rgba(139,92,246,.05))',borderColor:'rgba(99,102,241,.2)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <span className="mono" style={{fontSize:20,fontWeight:700,color:'var(--accent2)'}}>{fmtTime(elapsed)}</span>
+          <button onClick={endSession} style={{padding:'6px 14px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:11,fontWeight:700}}>End Session</button>
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:8}}>
+          {[['Dialed',session.dialed,'var(--text2)'],['Set',session.sets,'var(--green)'],['NP',session.np,'var(--amber)'],['CB',session.cb,'var(--blue)'],['NI',session.ni,'var(--red)']].map(([l,v,c])=>
+            <div key={l} style={{flex:1,textAlign:'center',padding:'6px 0',borderRadius:6,background:'var(--bg)'}}>
+              <p style={{margin:0,fontSize:16,fontWeight:800,color:c}}>{v}</p><p style={{margin:0,fontSize:8,color:'var(--text3)',fontWeight:600}}>{l}</p>
+            </div>
+          )}
+        </div>
+        {/* M/N progress */}
+        <div style={{marginBottom:4}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
+            <span>Full session: {session.sets}/{cfg.mThresh} appts</span>
+            {session.sets>=cfg.mThresh&&<span style={{color:'var(--green)',fontWeight:700}}>✓ EARNED</span>}
+          </div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:`${Math.min(100,(session.sets/cfg.mThresh)*100)}%`,background:session.sets>=cfg.mThresh?'var(--green)':'var(--accent)',transition:'width .5s'}}/></div>
+        </div>
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
+            <span>1.5× Bonus: {session.sets}/{cfg.nThresh} appts</span>
+            {session.sets>=cfg.nThresh&&<span style={{color:'var(--gold)',fontWeight:700,animation:'firePulse 2s infinite'}}>🔥 ACTIVE</span>}
+          </div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:`${Math.min(100,(session.sets/cfg.nThresh)*100)}%`,background:session.sets>=cfg.nThresh?'var(--gold)':'var(--amber)',transition:'width .5s'}}/></div>
+        </div>
+      </div>}
+
+      {/* Call card */}
+      <div className="card" style={{textAlign:'center',marginBottom:10,minHeight:140,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:phase==='calling'?'var(--adim)':'var(--bg2)',borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
         {cur&&running?(
           <>
-            {phase==='calling'?<div style={{width:64,height:64,borderRadius:'50%',border:'2px solid rgba(99,102,241,.4)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12,animation:'pulse 2s infinite'}}><div style={{width:46,height:46,borderRadius:'50%',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:19,fontWeight:700,color:'#fff'}}>{cur.name.charAt(0)}</div></div>
-            :<div style={{width:64,height:64,borderRadius:'50%',background:'var(--bg3)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12,fontSize:24,fontWeight:700,color:'var(--accent2)'}}>{countdown}</div>}
-            <p style={{margin:0,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.12em',color:'var(--accent)',marginBottom:4}}>{phase==='calling'?'Calling':'Next in'}</p>
-            <h2 style={{margin:'0 0 2px',fontSize:20,fontWeight:700,color:'#f1f5f9'}}>{cur.name}</h2>
-            <p className="mono" style={{margin:0,fontSize:14,color:'var(--text3)'}}>{cur.phone}</p>
-            <div style={{display:'flex',gap:5,marginTop:6,flexWrap:'wrap',justifyContent:'center'}}>
-              {cur.age&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>Age {cur.age}</span>}
-              {cur.race&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>{cur.race}</span>}
-              {cur.income&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)'}}>${cur.income}</span>}
-            </div>
-            {cur.npCount>0&&<p style={{margin:'4px 0 0',fontSize:10,color:'var(--amber)'}}>Previously NP ×{cur.npCount}</p>}
-            {phase==='calling'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,marginTop:14,width:'100%'}}>
-              <button onClick={()=>handleOutcome('np')} style={{padding:'12px 0',borderRadius:10,background:'var(--amber-dim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP{cur.npCount>0?` (×${cur.npCount+1})`:''}</button>
-              <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',borderRadius:10,background:'var(--blue-dim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
-              <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',borderRadius:10,background:'var(--red-dim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
-              <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',borderRadius:10,background:'var(--green-dim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set ✓</button>
-              <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip →</button>
+            {phase==='calling'?<div style={{width:60,height:60,borderRadius:'50%',border:'2px solid rgba(99,102,241,.4)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:10,animation:'pulse 2s infinite'}}><div style={{width:44,height:44,borderRadius:'50%',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:700,color:'#fff'}}>{cur.name.charAt(0)}</div></div>
+            :<div style={{width:60,height:60,borderRadius:'50%',background:'var(--bg3)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:10,fontSize:22,fontWeight:700,color:'var(--accent2)'}}>{countdown}</div>}
+            <p style={{margin:0,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.12em',color:'var(--accent)',marginBottom:2}}>{phase==='calling'?'Calling':'Next in'}</p>
+            <h2 style={{margin:'0 0 2px',fontSize:18,fontWeight:700,color:'#f1f5f9'}}>{cur.name}</h2>
+            <p className="mono" style={{margin:0,fontSize:13,color:'var(--text3)'}}>{cur.phone}</p>
+            {cur.age&&<span className="pill" style={{background:'var(--bg3)',color:'var(--text3)',marginTop:4}}>Age {cur.age} {cur.race?`· ${cur.race}`:''} {cur.income?`· $${cur.income}`:''}</span>}
+            {cur.npCount>0&&<p style={{margin:'3px 0 0',fontSize:10,color:'var(--amber)'}}>NP ×{cur.npCount}</p>}
+            {phase==='calling'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginTop:12,width:'100%'}}>
+              <button onClick={()=>handleOutcome('np')} style={{padding:'11px 0',borderRadius:10,background:'var(--amdim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP</button>
+              <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'11px 0',borderRadius:10,background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
+              <button onClick={()=>handleOutcome('ni')} style={{padding:'11px 0',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
+              <button onClick={()=>handleOutcome('set')} style={{padding:'11px 0',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set ✓</button>
+              <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'8px 0',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:11,fontWeight:600}}>Skip →</button>
             </div>}
           </>
         ):(
-          <><div style={{width:56,height:56,borderRadius:'50%',background:'var(--bg3)',border:'1px dashed var(--border2)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:10,color:'var(--text3)',fontSize:22}}>📞</div>
-          <p style={{margin:0,fontSize:13,color:'var(--text3)'}}>{pending.length>0?'Ready to dial':'Connect Google Sheets or upload leads'}</p></>
+          <p style={{color:'var(--text3)',fontSize:13}}>{pending.length>0?'Ready':'No leads'}</p>
         )}
       </div>
-      <div className="card" style={{marginBottom:12,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+
+      <div className="card" style={{marginBottom:10,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
         <span style={{fontSize:12,color:'var(--text3)'}}>Delay</span>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <button onClick={()=>setSettings(s=>({...s,delay:Math.max(3,s.delay-5)}))} style={{width:28,height:28,borderRadius:7,background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>−</button>
-          <span className="mono" style={{fontSize:14,fontWeight:700,color:'var(--accent2)',minWidth:32,textAlign:'center'}}>{settings.delay}s</span>
-          <button onClick={()=>setSettings(s=>({...s,delay:Math.min(60,s.delay+5)}))} style={{width:28,height:28,borderRadius:7,background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>+</button>
+          <button onClick={()=>setCfg(s=>({...s,delay:Math.max(3,s.delay-5)}))} style={{width:28,height:28,borderRadius:7,background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>−</button>
+          <span className="mono" style={{fontSize:14,fontWeight:700,color:'var(--accent2)',minWidth:32,textAlign:'center'}}>{cfg.delay}s</span>
+          <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+5)}))} style={{width:28,height:28,borderRadius:7,background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>+</button>
         </div>
       </div>
-      <button onClick={running?pauseDial:startDial} disabled={pending.length===0} style={{width:'100%',padding:'14px',borderRadius:12,background:running?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:15,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8,opacity:pending.length===0?.4:1,marginBottom:10}}>
+
+      <button onClick={running?pauseDial:startDial} disabled={pending.length===0} style={{width:'100%',padding:'14px',borderRadius:12,background:running?'linear-gradient(135deg,#dc2626,#ef4444)':'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:15,fontWeight:700,opacity:pending.length===0?.4:1,marginBottom:8}}>
         {running?'⏸ Pause':'▶ Start ('+pending.length+')'}
       </button>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5,marginBottom:14}}>
-        {[['NP','var(--amber)','var(--amber-dim)','np'],['CB','var(--blue)','var(--blue-dim)','cb'],['NI','var(--red)','var(--red-dim)','ni'],['Set','var(--green)','var(--green-dim)','set']].map(([l,c,bg,k])=>(
-          <div key={k} style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:bg}}><p style={{margin:0,fontSize:16,fontWeight:700,color:c}}>{leads.filter(x=>x.status===k).length}</p><p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:600}}>{l}</p></div>
-        ))}
-      </div>
-      <p style={{fontSize:10,fontWeight:700,textTransform:'uppercase',color:'var(--text3)',marginBottom:6}}>Queue</p>
-      {pending.slice(0,5).map((l,i)=><div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 0',borderBottom:'1px solid var(--border)',opacity:.5+.5/(i+1)}}>
-        <div style={{width:30,height:30,borderRadius:7,background:l.status==='cb'?'var(--blue-dim)':'var(--accent-dim)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:l.status==='cb'?'var(--blue)':'var(--accent)',flexShrink:0}}>{l.name.charAt(0)}</div>
-        <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1'}}>{l.name}</p><p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{l.phone}</p></div>
-        {l.status==='cb'&&<Badge s="cb" np={0}/>}
-      </div>)}
+
+      {/* Session summary (ended) */}
+      {session?.ended&&<div className="card" style={{marginBottom:10,borderColor:session.bonus?'var(--gold)':'var(--green)',animation:session.bonus?'glow 2s infinite':'none'}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:'#f1f5f9',marginBottom:8}}>Session Complete</h3>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:10}}>
+          <div style={{padding:8,borderRadius:8,background:'var(--bg3)'}}><p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Duration</p><p className="mono" style={{margin:0,fontSize:14,color:'var(--text)'}}>{fmtTime(session.elapsed)}</p></div>
+          <div style={{padding:8,borderRadius:8,background:'var(--bg3)'}}><p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Dialed</p><p style={{margin:0,fontSize:14,fontWeight:700,color:'var(--text)'}}>{session.dialed}</p></div>
+          <div style={{padding:8,borderRadius:8,background:'var(--gdim)'}}><p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Appts Set</p><p style={{margin:0,fontSize:14,fontWeight:700,color:'var(--green)'}}>{session.sets}</p></div>
+          <div style={{padding:8,borderRadius:8,background:session.bonus?'var(--golddim)':'var(--bg3)'}}><p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Earnings</p><p style={{margin:0,fontSize:14,fontWeight:800,color:session.bonus?'var(--gold)':'var(--text)'}}>${session.pay?.toFixed(2)} {session.bonus?'🔥1.5×':''}</p></div>
+        </div>
+        <div style={{display:'flex',gap:6,fontSize:11,color:'var(--text3)'}}>
+          <span>NP:{session.np}</span><span>CB:{session.cb}</span><span>NI:{session.ni}</span>
+          <span style={{color:session.fullSession?'var(--green)':'var(--text3)'}}>Full: {session.fullSession?'✓':'✗'}</span>
+        </div>
+        <button onClick={()=>setSession(null)} style={{width:'100%',marginTop:10,padding:'10px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>New Session</button>
+      </div>}
       <div style={{height:80}}/>
     </div>}
 
-    {/* ═══ LEADS ═══ */}
+    {/* ═══ ADMIN: STATS ═══ */}
+    {tab==='stats'&&role==='admin'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      <div className="card" style={{marginBottom:12,textAlign:'center',borderColor:tier.color+'40',background:`linear-gradient(135deg,${tier.color}08,transparent)`}}>
+        <p style={{fontSize:48,margin:'0 0 4px'}}>{tier.idx===2?'🥇':tier.idx===1?'🥈':'🥉'}</p>
+        <h2 style={{fontSize:22,fontWeight:800,color:tier.color,margin:'0 0 2px'}}>{tier.label}</h2>
+        <p className="mono" style={{fontSize:16,color:'var(--text)',margin:'0 0 8px'}}>${hourlyRate}/hr</p>
+        <p style={{fontSize:28,fontWeight:800,color:'#f1f5f9',margin:'0 0 4px'}}>{totalSets}</p>
+        <p style={{fontSize:12,color:'var(--text3)'}}>Total Appointments Set</p>
+        {nextTier&&<div style={{marginTop:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
+            <span>Next: {nextTier.label}</span><span>{totalSets}/{nextTier.min}</span>
+          </div>
+          <div style={{height:8,borderRadius:4,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:4,width:`${(totalSets/nextTier.min)*100}%`,background:`linear-gradient(90deg,${tier.color},${nextTier.color})`,transition:'width .5s'}}/></div>
+        </div>}
+      </div>
+      <h3 style={{fontSize:14,fontWeight:700,color:'#f1f5f9',marginBottom:8}}>Session History</h3>
+      {sessionLog.map((s,i)=>{
+        const d=new Date(s.startTime);
+        return<div key={i} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+            <span style={{fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString()} {d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
+            <span className="mono" style={{fontSize:11,color:'var(--text3)'}}>{fmtTime(s.elapsed)}</span>
+          </div>
+          <div style={{display:'flex',gap:8,fontSize:11,color:'var(--text3)'}}>
+            <span>Dialed:{s.dialed}</span><span style={{color:'var(--green)'}}>Set:{s.sets}</span><span>NP:{s.np}</span><span>CB:{s.cb}</span><span>NI:{s.ni}</span>
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',marginTop:4,fontSize:11}}>
+            <span style={{color:s.tier?.includes('Gold')?'var(--gold)':s.tier?.includes('Silver')?'#c0c0c0':'#cd7f32',fontWeight:600}}>{s.tier}</span>
+            <span style={{fontWeight:700,color:s.bonus?'var(--gold)':'var(--text)'}}>${s.pay?.toFixed(2)} {s.bonus?'🔥1.5×':''}{s.fullSession&&!s.bonus?' ✓Full':''}</span>
+          </div>
+        </div>
+      })}
+      {sessionLog.length===0&&<p style={{fontSize:12,color:'var(--text3)',textAlign:'center',padding:20}}>Complete sessions to see history</p>}
+    </div>}
+
+    {/* ═══ HISTORY (both roles) ═══ */}
+    {tab==='history'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" style={{marginBottom:8}}/>
+      <div style={{display:'flex',gap:4,marginBottom:10,flexWrap:'wrap'}}>
+        {[['all','All','var(--accent2)'],['np','NP','var(--amber)'],['cb','CB','var(--blue)'],['ni','NI','var(--red)'],['set','Set','var(--green)']].map(([k,v,c])=>(
+          <button key={k} onClick={()=>setHistF(k)} style={{padding:'5px 12px',borderRadius:16,fontSize:10,fontWeight:700,background:histF===k?'var(--bg3)':'transparent',color:histF===k?c:'var(--text3)'}}>{v}({k==='all'?leads.filter(l=>l.status!=='pending').length:leads.filter(l=>l.status===k).length})</button>
+        ))}
+      </div>
+      <button onClick={exportCSV} style={{width:'100%',padding:'10px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginBottom:10}}>⬇ Export CSV</button>
+      {histLeads.map(l=><div key={l.id} className="card" style={{marginBottom:5,padding:'8px 10px',cursor:'pointer'}} onClick={()=>setDetailId(l.id)}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <div style={{width:28,height:28,borderRadius:7,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,color:ST[l.status]?.c}}>{l.name.charAt(0)}</div>
+          <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p><div style={{display:'flex',gap:4,marginTop:1}}><span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span><Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div></div>
+        </div>
+      </div>)}
+    </div>}
+
+    {/* ═══ LEADS (both) ═══ */}
     {tab==='leads'&&<div style={{padding:'0 16px',paddingBottom:100}}>
-      {/* Google Sheets connection */}
       <div className="card" style={{marginBottom:10}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <p style={{margin:0,fontSize:13,fontWeight:600,color:'var(--accent2)'}}>📊 Google Sheets</p>
-          {!gConnected&&<button onClick={connectGoogle} style={{padding:'5px 12px',borderRadius:7,background:'var(--accent-dim)',color:'var(--accent2)',fontSize:11,fontWeight:600}}>Connect Google</button>}
-          {gConnected&&<span className="pill" style={{background:'var(--green-dim)',color:'var(--green)'}}>Connected</span>}
+          {!gOk?<button onClick={connectG} style={{padding:'5px 12px',borderRadius:7,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:600}}>Connect</button>
+          :<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Connected</span>}
         </div>
-        {gConnected&&<>
-          <input value={settings.sheetId||''} onChange={e=>setSettings(s=>({...s,sheetId:e.target.value}))} placeholder="Paste Google Sheet URL" style={{marginBottom:8,fontSize:13}}/>
-          <button onClick={fetchSheetTabs} disabled={sheetLoading} style={{width:'100%',padding:'9px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:12,fontWeight:600,border:'1px solid var(--border)',marginBottom:8,opacity:sheetLoading?.5:1}}>{sheetLoading?'Loading…':'Load Sheet Tabs'}</button>
-          {sheetTabs.length>0&&<>
-            <select value={settings.sheetTab||''} onChange={e=>setSettings(s=>({...s,sheetTab:e.target.value}))} style={{marginBottom:8}}>
-              <option value="">Select a tab…</option>
-              {sheetTabs.map(t=><option key={t.id} value={t.title}>{t.title} ({t.rows} rows)</option>)}
+        {gOk&&<>
+          <input value={cfg.sheetId||''} onChange={e=>setCfg(s=>({...s,sheetId:e.target.value}))} placeholder="Paste Google Sheet URL" style={{marginBottom:8,fontSize:13}}/>
+          <button onClick={fetchTabs} disabled={sLoad} style={{width:'100%',padding:'9px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:12,fontWeight:600,border:'1px solid var(--border)',marginBottom:8}}>Load Tabs</button>
+          {sTabs.length>0&&<>
+            <select value={cfg.sheetTab||''} onChange={e=>setCfg(s=>({...s,sheetTab:e.target.value}))} style={{marginBottom:8}}>
+              <option value="">Select tab…</option>{sTabs.map(t=><option key={t.id} value={t.title}>{t.title} ({t.rows} rows)</option>)}
             </select>
-            <button onClick={fetchLeadsFromSheet} disabled={!settings.sheetTab||sheetLoading} style={{width:'100%',padding:'10px',borderRadius:8,background:'var(--accent-dim)',color:'var(--accent2)',fontSize:12,fontWeight:600,opacity:!settings.sheetTab?.4:1}}>
-              Fetch Leads from "{settings.sheetTab}"
-            </button>
+            <button onClick={fetchLeads} disabled={!cfg.sheetTab} style={{width:'100%',padding:'10px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Fetch Leads</button>
           </>}
-          <p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)'}}>Status changes auto-sync back to your sheet's Status column.</p>
         </>}
       </div>
-
-      {msg&&<div style={{padding:'8px 12px',borderRadius:8,marginBottom:8,fontSize:12,fontWeight:600,background:msg.t==='ok'?'var(--green-dim)':msg.t==='err'?'var(--red-dim)':'var(--accent-dim)',color:msg.t==='ok'?'var(--green)':msg.t==='err'?'var(--red)':'var(--accent2)'}}>{msg.m}</div>}
-
-      <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" onChange={handleFile} style={{display:'none'}}/>
-      <button onClick={()=>fileRef.current?.click()} style={{width:'100%',padding:'14px',borderRadius:10,border:'2px dashed var(--border2)',background:'transparent',color:'var(--text2)',fontSize:12,fontWeight:600,marginBottom:8}}>📁 Upload CSV / Excel</button>
-
-      <button onClick={()=>setShowAdd(!showAdd)} style={{width:'100%',padding:'9px',borderRadius:8,border:'1px dashed var(--border2)',background:showAdd?'var(--accent-dim)':'transparent',color:'var(--text3)',fontSize:12,fontWeight:600,marginBottom:8}}>+ Add Lead</button>
-      {showAdd&&<div className="card" style={{marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
-        <input value={newF.name} onChange={e=>setNewF(f=>({...f,name:e.target.value}))} placeholder="Name"/>
-        <input value={newF.phone} onChange={e=>setNewF(f=>({...f,phone:e.target.value}))} placeholder="Phone" type="tel"/>
-        <button onClick={addLead} style={{padding:'10px',borderRadius:8,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:13,fontWeight:600}}>Add</button>
-      </div>}
-
-      {leads.length>0&&<div style={{display:'flex',gap:6,marginBottom:10}}>
-        <button onClick={()=>{setLeads([]);setCurIdx(-1);setRunning(false);setPhase('idle')}} style={{flex:1,padding:'8px',borderRadius:7,background:'var(--red-dim)',color:'var(--red)',fontSize:11,fontWeight:600}}>Clear All</button>
-        <button onClick={()=>{setLeads(p=>p.map(l=>({...l,status:'pending',npCount:0,cbDate:'',cbTime:'',calledAt:null,notes:'',cbHistory:[]})));setCurIdx(-1);setRunning(false);setPhase('idle')}} style={{flex:1,padding:'8px',borderRadius:7,background:'var(--bg3)',color:'var(--text3)',fontSize:11,fontWeight:600,border:'1px solid var(--border)'}}>Reset All</button>
-      </div>}
-
-      {leads.map(l=><div key={l.id} onClick={()=>setDetailId(l.id)} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid var(--border)',cursor:'pointer'}}>
-        <div style={{width:34,height:34,borderRadius:8,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:ST[l.status]?.c,flexShrink:0}}>{l.name.charAt(0)}</div>
-        <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:13,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p>
-        <div style={{display:'flex',alignItems:'center',gap:4,marginTop:1}}><span className="mono" style={{fontSize:11,color:'var(--text3)'}}>{l.phone}</span><Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div></div>
-        <button onClick={e=>{e.stopPropagation();setLeads(p=>p.filter(x=>x.id!==l.id))}} style={{width:26,height:26,borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+      <input ref={fileRef} type="file" accept=".csv,.tsv,.xlsx,.xls" onChange={handleFile} style={{display:'none'}}/>
+      <button onClick={()=>fileRef.current?.click()} style={{width:'100%',padding:'14px',borderRadius:10,border:'2px dashed var(--border2)',background:'transparent',color:'var(--text2)',fontSize:12,fontWeight:600,marginBottom:8}}>📁 Upload CSV/Excel</button>
+      <button onClick={()=>setShowAdd(!showAdd)} style={{width:'100%',padding:'9px',borderRadius:8,border:'1px dashed var(--border2)',background:'transparent',color:'var(--text3)',fontSize:12,fontWeight:600,marginBottom:8}}>+ Add</button>
+      {showAdd&&<div className="card" style={{marginBottom:10,display:'flex',flexDirection:'column',gap:8}}><input value={newF.name} onChange={e=>setNewF(f=>({...f,name:e.target.value}))} placeholder="Name"/><input value={newF.phone} onChange={e=>setNewF(f=>({...f,phone:e.target.value}))} placeholder="Phone" type="tel"/><button onClick={addLead} style={{padding:'10px',borderRadius:8,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:13,fontWeight:600}}>Add</button></div>}
+      {leads.length>0&&<div style={{display:'flex',gap:6,marginBottom:8}}><button onClick={()=>{setLeads([])}} style={{flex:1,padding:'8px',borderRadius:7,background:'var(--rdim)',color:'var(--red)',fontSize:11,fontWeight:600}}>Clear</button><button onClick={()=>{setLeads(p=>p.map(l=>({...l,status:'pending',npCount:0,calledAt:null,notes:'',cbHistory:[]})))}} style={{flex:1,padding:'8px',borderRadius:7,background:'var(--bg3)',color:'var(--text3)',fontSize:11,fontWeight:600}}>Reset</button></div>}
+      {leads.slice(0,50).map(l=><div key={l.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+        <div style={{width:30,height:30,borderRadius:7,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,color:ST[l.status]?.c,flexShrink:0}}>{l.name.charAt(0)}</div>
+        <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p><span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div>
       </div>)}
+      {leads.length>50&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:8}}>Showing 50 of {leads.length}</p>}
     </div>}
 
-    {/* ═══ HISTORY ═══ */}
-    {tab==='history'&&<div style={{padding:'0 16px',paddingBottom:100}}>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, phone, notes…" style={{marginBottom:8}}/>
-      <div style={{display:'flex',gap:4,marginBottom:10,flexWrap:'wrap'}}>
-        {[['all','All','var(--accent2)'],['np','NP','var(--amber)'],['cb','CB','var(--blue)'],['ni','NI','var(--red)'],['set','Set','var(--green)']].map(([k,v,c])=>(
-          <button key={k} onClick={()=>setHistF(k)} style={{padding:'5px 12px',borderRadius:16,fontSize:10,fontWeight:700,background:histF===k?'var(--bg3)':'transparent',color:histF===k?c:'var(--text3)',border:`1px solid ${histF===k?'var(--border2)':'transparent'}`}}>{v} ({k==='all'?active.length:leads.filter(l=>l.status===k).length})</button>
+    {/* ═══ TRACKING (Main only) ═══ */}
+    {tab==='tracking'&&role==='main'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      <h3 style={{fontSize:15,fontWeight:700,color:'#f1f5f9',marginBottom:10}}>Admin Sessions</h3>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5,marginBottom:14}}>
+        {[['NP','var(--amber)','var(--amdim)','np'],['CB','var(--blue)','var(--bdim)','cb'],['NI','var(--red)','var(--rdim)','ni'],['Set','var(--green)','var(--gdim)','set']].map(([l,c,bg,k])=>(
+          <div key={k} style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:bg}}><p style={{margin:0,fontSize:16,fontWeight:700,color:c}}>{leads.filter(x=>x.status===k).length}</p><p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:600}}>{l}</p></div>
         ))}
       </div>
-      {active.length>0&&<button onClick={exportCSV} style={{width:'100%',padding:'11px',borderRadius:10,background:'var(--green-dim)',color:'var(--green)',fontSize:12,fontWeight:600,marginBottom:12,border:'1px solid rgba(52,211,153,.2)'}}>⬇ Export CSV</button>}
-      {histLeads.map(l=><div key={l.id} onClick={()=>setDetailId(l.id)} className="card" style={{marginBottom:6,padding:'9px 11px',cursor:'pointer'}}>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <div style={{width:30,height:30,borderRadius:7,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:ST[l.status]?.c,flexShrink:0}}>{l.name.charAt(0)}</div>
-          <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:13,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p>
-          <div style={{display:'flex',alignItems:'center',gap:4,marginTop:1}}><span className="mono" style={{fontSize:11,color:'var(--text3)'}}>{l.phone}</span><Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div></div>
-        </div>
-        {(l.calledAt||l.notes)&&<p style={{margin:'5px 0 0',fontSize:10,color:'var(--text3)',paddingTop:5,borderTop:'1px solid var(--border)'}}>{l.calledAt}{l.notes?` · ${l.notes}`:''}</p>}
+      <button onClick={exportCSV} style={{width:'100%',padding:'10px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginBottom:10}}>⬇ Export Full Report</button>
+      {leads.filter(l=>l.calledAt).slice(0,30).map(l=><div key={l.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid var(--border)'}}>
+        <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/>
+        <div style={{flex:1,minWidth:0}}><span style={{fontSize:12,color:'#cbd5e1'}}>{l.name}</span> <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span></div>
+        <span style={{fontSize:10,color:'var(--text3)'}}>{l.calledAt}</span>
       </div>)}
-    </div>}
-
-    {/* ═══ CALENDAR ═══ */}
-    {tab==='calendar'&&<div style={{padding:'0 16px',paddingBottom:100}}>
-      {!gConnected?<div className="card" style={{textAlign:'center',padding:30}}><p style={{color:'var(--text3)',marginBottom:12}}>Connect Google to see your calendar</p><button onClick={connectGoogle} style={{padding:'10px 20px',borderRadius:10,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:13,fontWeight:600}}>Connect Google</button></div>
-      :<>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-          <h3 style={{fontSize:15,fontWeight:700,color:'#f1f5f9'}}>Today's Schedule</h3>
-          <button onClick={fetchCalendar} style={{padding:'5px 12px',borderRadius:7,background:'var(--bg3)',color:'var(--text2)',fontSize:11,fontWeight:600,border:'1px solid var(--border)'}}>🔄 Refresh</button>
-        </div>
-        {calLoading&&<p style={{color:'var(--text3)',fontSize:12}}>Loading…</p>}
-        {calEvents.length===0&&!calLoading&&<div className="card" style={{textAlign:'center',padding:20}}><p style={{color:'var(--text3)',fontSize:13}}>No events today — clear to dial! 🎯</p></div>}
-        {calEvents.map((ev,i)=>{
-          const start=ev.start?.dateTime?new Date(ev.start.dateTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'All day';
-          const end=ev.end?.dateTime?new Date(ev.end.dateTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
-          return<div key={i} className="card" style={{marginBottom:6,display:'flex',gap:10,alignItems:'center'}}>
-            <div style={{width:4,height:36,borderRadius:2,background:'var(--accent)',flexShrink:0}}/>
-            <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{ev.summary||'(No title)'}</p>
-            <p className="mono" style={{margin:0,fontSize:11,color:'var(--text3)'}}>{start}{end?` – ${end}`:''}</p></div>
-          </div>})}
-      </>}
     </div>}
 
     {/* ═══ SETTINGS ═══ */}
     {tab==='settings'&&<div style={{padding:'0 16px',paddingBottom:100}}>
+      {role==='main'&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:600,marginBottom:10,color:'var(--gold)'}}>💰 Pay & Session Config</h3>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
+          {[['Bronze $/hr',0],['Silver $/hr',1],['Gold $/hr',2]].map(([l,i])=>
+            <div key={i}><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>{l}</label>
+            <input type="number" value={cfg.payRates[i]} onChange={e=>{const r=[...cfg.payRates];r[i]=parseFloat(e.target.value)||0;setCfg(s=>({...s,payRates:r}))}} style={{fontSize:13,textAlign:'center'}}/></div>
+          )}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>Session (hrs)</label><input type="number" value={cfg.sessionDur} onChange={e=>setCfg(s=>({...s,sessionDur:parseFloat(e.target.value)||5}))} style={{fontSize:13,textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>M (full sess)</label><input type="number" value={cfg.mThresh} onChange={e=>setCfg(s=>({...s,mThresh:parseInt(e.target.value)||2}))} style={{fontSize:13,textAlign:'center'}}/></div>
+          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>N (1.5× bonus)</label><input type="number" value={cfg.nThresh} onChange={e=>setCfg(s=>({...s,nThresh:parseInt(e.target.value)||4}))} style={{fontSize:13,textAlign:'center'}}/></div>
+        </div>
+      </div>}
       <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:600,marginBottom:10,color:'#f1f5f9'}}>🔑 Google API Setup</h3>
-        <p style={{fontSize:11,color:'var(--text3)',marginBottom:10,lineHeight:1.5}}>1. Go to <a href="https://console.cloud.google.com" target="_blank" style={{color:'var(--accent2)'}}>console.cloud.google.com</a><br/>2. Create project → Enable <b>Google Sheets API</b> + <b>Google Calendar API</b><br/>3. Credentials → Create OAuth 2.0 Client ID (Web app)<br/>4. Add your domain as Authorized JavaScript Origin<br/>5. Copy the Client ID below</p>
-        <label style={{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',display:'block',marginBottom:4}}>Google OAuth Client ID</label>
-        <input value={settings.gcid||''} onChange={e=>setSettings(s=>({...s,gcid:e.target.value}))} placeholder="xxxx.apps.googleusercontent.com" className="mono" style={{fontSize:12,marginBottom:8}}/>
-        <button onClick={()=>{if(!settings.gcid)return;window.initGoogleAuth(settings.gcid);toast('Client ID saved','ok')}} style={{padding:'9px 16px',borderRadius:8,background:'var(--accent-dim)',color:'var(--accent2)',fontSize:12,fontWeight:600,marginRight:8}}>Save</button>
-        <button onClick={connectGoogle} style={{padding:'9px 16px',borderRadius:8,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:12,fontWeight:600}}>Connect Google</button>
-        <p style={{margin:'8px 0 0',fontSize:11,color:gConnected?'var(--green)':'var(--text3)',fontWeight:600}}>{gConnected?'✓ Google connected':'Not connected'}</p>
+        <h3 style={{fontSize:14,fontWeight:600,marginBottom:6,color:'#f1f5f9'}}>Google</h3>
+        <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
+        <button onClick={connectG} style={{padding:'9px 16px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>
+          {gOk?'Reconnect':'Connect Google'}
+        </button>
       </div>
       <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:600,marginBottom:6,color:'#f1f5f9'}}>About</h3>
-        <p style={{fontSize:12,color:'var(--text3)',lineHeight:1.6}}>AutoDial Pro v2.0 · Auto-dialer with Google Sheets ↔ write-back, Calendar sync, NP/CB/NI/Set tracking. Same auth as PolicyLens.</p>
-      </div>
-      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'12px',borderRadius:10,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>
-    </div>}
-
-    {/* ═══ CB Modal ═══ */}
-    {showCb&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowCb(false)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
-        <h3 style={{margin:'0 0 12px',fontSize:17,fontWeight:700,color:'#f1f5f9'}}>Schedule Callback</h3>
-        {cur&&<p style={{margin:'0 0 14px',fontSize:13,color:'var(--text3)'}}>{cur.name} · {cur.phone}</p>}
-        <label style={{fontSize:11,color:'var(--text3)',fontWeight:600}}>Date</label>
-        <input type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)} style={{marginBottom:10,colorScheme:'dark'}}/>
-        <label style={{fontSize:11,color:'var(--text3)',fontWeight:600}}>Time</label>
-        <input type="time" value={cbTime} onChange={e=>setCbTime(e.target.value)} style={{marginBottom:14,colorScheme:'dark'}}/>
-        <button onClick={()=>{if(!cbDate||!cbTime)return;handleOutcome('cb',{cbDate,cbTime});setShowCb(false)}} style={{width:'100%',padding:'13px',borderRadius:10,background:'linear-gradient(135deg,var(--blue),#2563eb)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Set Callback</button>
-      </div>
-    </div>}
-
-    {/* ═══ Appointment Modal (after Set) ═══ */}
-    {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
-        <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:700,color:'var(--green)'}}>✓ Appointment Set!</h3>
-        <p style={{margin:'0 0 14px',fontSize:13,color:'var(--text3)'}}>Add to Google Calendar?</p>
-        <label style={{fontSize:11,color:'var(--text3)',fontWeight:600}}>Date</label>
-        <input type="date" value={apptDate} onChange={e=>setApptDate(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
-        <label style={{fontSize:11,color:'var(--text3)',fontWeight:600}}>Time</label>
-        <input type="time" value={apptTime} onChange={e=>setApptTime(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
-        <label style={{fontSize:11,color:'var(--text3)',fontWeight:600}}>Invite emails (comma-separated)</label>
-        <input value={apptInvite} onChange={e=>setApptInvite(e.target.value)} placeholder="john@email.com, jane@email.com" style={{marginBottom:14}}/>
+        <h3 style={{fontSize:14,fontWeight:600,marginBottom:6,color:'#4285f4'}}>🔵 Gemini AI (Smart Sheet Analysis)</h3>
+        <p style={{fontSize:11,color:'var(--text3)',marginBottom:8,lineHeight:1.5}}>Analyses messy sheets in 1 API call per import. Auto-detects columns, reads free-text statuses. Free — 1500 req/day.</p>
+        <input value={localStorage.getItem('autodial_gemini')||''} onChange={e=>{localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="Paste Gemini API key (AIza…)" className="mono" style={{fontSize:12,marginBottom:8}}/>
         <div style={{display:'flex',gap:8}}>
-          <button onClick={createAppt} disabled={!apptDate||!apptTime} style={{flex:1,padding:'13px',borderRadius:10,background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700,opacity:!apptDate||!apptTime?.4:1}}>📅 Create Event</button>
-          <button onClick={()=>setShowAppt(false)} style={{padding:'13px 20px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:14,fontWeight:600}}>Skip</button>
+          <button onClick={()=>{const k=localStorage.getItem('autodial_gemini');if(!k||!k.startsWith('AIza')){toast('Key should start with AIza…','err');return}toast('Gemini key saved')}} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Save</button>
+          <button onClick={async()=>{const k=geminiKey();if(!k){toast('No key set','err');return}try{const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+k,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:'Say hello in 3 words'}]}],generationConfig:{maxOutputTokens:20}})});const d=await r.json();if(d.error)toast(d.error.message,'err');else toast('✓ Gemini working!')}catch(e){toast(e.message,'err')}}} style={{padding:'8px 14px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:12,fontWeight:600,border:'1px solid var(--border)'}}>Test</button>
         </div>
+        <p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)'}}>Get free: <a href="https://aistudio.google.com/apikey" target="_blank" style={{color:'#4285f4'}}>aistudio.google.com</a> → Create key. Same key as PolicyLens works.</p>
       </div>
+      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'12px',borderRadius:10,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13}}>Sign Out</button>
     </div>}
 
-    {/* ═══ Detail Modal ═══ */}
-    {detailLead&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setDetailId(null)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
-          <div style={{width:40,height:40,borderRadius:10,background:ST[detailLead.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,fontWeight:700,color:ST[detailLead.status]?.c}}>{detailLead.name.charAt(0)}</div>
-          <div style={{flex:1}}><h3 style={{margin:0,fontSize:17,fontWeight:700,color:'#f1f5f9'}}>{detailLead.name}</h3><Badge s={detailLead.status} np={detailLead.npCount} cbh={detailLead.cbHistory}/></div>
-          <button onClick={()=>setDetailId(null)} style={{background:'none',color:'var(--text3)',fontSize:20}}>×</button>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:12}}>
-          {[['Phone',detailLead.phone],['Email',detailLead.email],['Age',detailLead.age],['Race',detailLead.race],['Income',detailLead.income],['Savings',detailLead.savings],['Birthday',detailLead.birthday],['Company',detailLead.company],['Called',detailLead.calledAt]].filter(([,v])=>v).map(([k,v])=>
-          <div key={k} style={{padding:'7px 9px',borderRadius:7,background:'var(--bg3)',border:'1px solid var(--border)'}}>
-            <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:600}}>{k}</p>
-            <p style={{margin:'1px 0 0',fontSize:12,color:'var(--text)',wordBreak:'break-all'}}>{v}</p>
-          </div>)}
-        </div>
-        {detailLead.cbHistory?.length>0&&<div style={{marginBottom:12}}>
-          <p style={{margin:'0 0 4px',fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase'}}>CB History</p>
-          {detailLead.cbHistory.map((h,i)=><p key={i} style={{margin:'0 0 3px',padding:'4px 8px',borderRadius:5,background:'var(--blue-dim)',fontSize:11,color:'var(--text3)'}}>CB {h.date} → <span style={{color:'var(--amber)',fontWeight:600}}>{h.result}</span></p>)}
-        </div>}
-        <a href={`tel:${detailLead.phone.replace(/[^+\d]/g,'')}`} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,width:'100%',padding:'12px',borderRadius:10,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>📞 Call Now</a>
+    {/* Modals */}
+    {showCb&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowCb(false)}><div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
+      <h3 style={{margin:'0 0 12px',fontSize:17,fontWeight:700,color:'#f1f5f9'}}>Callback</h3>
+      <input type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
+      <input type="time" value={cbTime} onChange={e=>setCbTime(e.target.value)} style={{marginBottom:14,colorScheme:'dark'}}/>
+      <button onClick={()=>{if(!cbDate||!cbTime)return;handleOutcome('cb',{cbDate,cbTime});setShowCb(false)}} style={{width:'100%',padding:'13px',borderRadius:10,background:'linear-gradient(135deg,var(--blue),#2563eb)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Set CB</button>
+    </div></div>}
+
+    {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAppt(false)}><div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
+      <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:700,color:'var(--green)'}}>✓ Appointment Set!</h3>
+      <p style={{margin:'0 0 12px',fontSize:12,color:'var(--text3)'}}>Add to Google Calendar?</p>
+      <input type="date" value={apptDate} onChange={e=>setApptDate(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
+      <input type="time" value={apptTime} onChange={e=>setApptTime(e.target.value)} style={{marginBottom:8,colorScheme:'dark'}}/>
+      <input value={apptInvite} onChange={e=>setApptInvite(e.target.value)} placeholder="Invite emails (comma separated)" style={{marginBottom:12}}/>
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={async()=>{if(!apptDate||!apptTime)return;try{const s=new Date(`${apptDate}T${apptTime}`);const e=new Date(s.getTime()+3600000);const att=apptInvite?apptInvite.split(',').map(s=>s.trim()).filter(Boolean):[];await gCal.create(`Appt: ${cur?.name||'Lead'}`,`Phone: ${cur?.phone||''}\nEmail: ${cur?.email||''}`,s.toISOString(),e.toISOString(),att);toast('Calendar event created!');setShowAppt(false)}catch(e){toast(e.message,'err')}}} style={{flex:1,padding:'13px',borderRadius:10,background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
+        <button onClick={()=>setShowAppt(false)} style={{padding:'13px 20px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
       </div>
-    </div>}
+    </div></div>}
+
+    {detailLead&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setDetailId(null)}><div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:'18px 18px 0 0',padding:'20px 20px 28px',border:'1px solid var(--border2)'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+        <div style={{width:38,height:38,borderRadius:10,background:ST[detailLead.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:700,color:ST[detailLead.status]?.c}}>{detailLead.name.charAt(0)}</div>
+        <div style={{flex:1}}><h3 style={{margin:0,fontSize:16,fontWeight:700,color:'#f1f5f9'}}>{detailLead.name}</h3><Badge s={detailLead.status} np={detailLead.npCount} cbh={detailLead.cbHistory}/></div>
+        <button onClick={()=>setDetailId(null)} style={{background:'none',color:'var(--text3)',fontSize:20}}>×</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,marginBottom:10}}>
+        {[['Phone',detailLead.phone],['Email',detailLead.email],['Age',detailLead.age],['Race',detailLead.race],['Income',detailLead.income],['Called',detailLead.calledAt]].filter(([,v])=>v).map(([k,v])=>
+        <div key={k} style={{padding:'6px 8px',borderRadius:6,background:'var(--bg3)'}}><p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:600}}>{k}</p><p style={{margin:'1px 0 0',fontSize:11,color:'var(--text)'}}>{v}</p></div>)}
+      </div>
+      {detailLead.notes&&<p style={{fontSize:11,color:'var(--text3)',marginBottom:8}}>{detailLead.notes}</p>}
+      <a href={`tel:${detailLead.phone.replace(/[^+\d]/g,'')}`} style={{display:'block',textAlign:'center',padding:'11px',borderRadius:10,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>📞 Call</a>
+    </div></div>}
   </div>);
 }
 
