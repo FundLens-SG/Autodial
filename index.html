@@ -229,7 +229,61 @@ var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.
 var GSCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 window.gConnect=function(cb){try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google error','err');return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
 window.gF=async function(url,opts){var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google');var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
-window.gSheets={async meta(id){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json()).sheets?.map(function(s){return{id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}})||[]},async vals(id,range){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range))).json()).values||[]},async put(id,range,val){await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range)+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
+window.gSheets={
+  async ensureTabs(id,tabNames){
+    // Check existing tabs and create missing ones
+    try{
+      var meta=await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json();
+      var existing=(meta.sheets||[]).map(function(s){return s.properties.title});
+      var missing=tabNames.filter(function(t){return existing.indexOf(t)===-1});
+      if(!missing.length)return existing;
+      // Batch create missing tabs
+      var reqs=missing.map(function(t){return{addSheet:{properties:{title:t}}}});
+      await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+':batchUpdate',{method:'POST',body:JSON.stringify({requests:reqs})});
+      // Add headers to new tabs
+      for(var i=0;i<missing.length;i++){
+        var tab=missing[i];var headers=[];
+        if(tab==='Timesheet')headers=[['Date','Day','Admin','Start','End','Hours','Dialed','NP','CB','NI','Set','Tier','$/hr','Bonus','Total Pay','Status']];
+        else if(tab==='Appointments Set')headers=[['Date Set','Admin','Lead Name','Phone','Appt Date','Appt Time','Location','Duration','Status','Follow-Up','Tip/EFYC','Notes']];
+        else if(tab==='Pay')headers=[['Date','Admin','Amount','Sessions','Hours','Incentives','Invoice #','Screenshot','Status']];
+        if(headers.length)await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(tab)+'!A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',{method:'POST',body:JSON.stringify({values:headers})});
+      }
+      toast(missing.length+' tab(s) created: '+missing.join(', '));
+      return[...existing,...missing];
+    }catch(e){console.warn('[EnsureTabs]',e.message);return[]}
+  },
+  async writeBack(id,tab,row,col,val){
+    // Write a value back to a specific cell
+    try{var colLetter='';var c=col;while(c>=0){colLetter=String.fromCharCode(65+(c%26))+colLetter;c=Math.floor(c/26)-1}
+      await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(tab)+'!'+colLetter+row+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})});return true}catch(e){return false}
+  },
+  async addColumn(id,tab,headerName){
+    // Add a new column at the end with the given header
+    try{var vals=await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(tab)+'!1:1')).json();
+      var headers=vals.values?vals.values[0]:[];var newCol=headers.length;
+      var colLetter=String.fromCharCode(65+newCol);
+      await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(tab)+'!'+colLetter+'1?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[headerName]]})});
+      return newCol}catch(e){return-1}
+  },
+  async appendAppt(id,appt,adminName){
+    try{var row=[
+      new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'2-digit',year:'numeric'}),
+      adminName,appt.name||'',appt.phone||'',appt.apptDate||'',appt.apptTime||'',
+      appt.location||'',appt.duration||60,'Set','Pending',appt.tip||appt.efyc||0,appt.remarks||''
+    ];
+    await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent('Appointments Set')+'!A:L:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
+      {method:'POST',body:JSON.stringify({values:[row]})});return true}catch(e){return false}
+  },
+  async appendPay(id,payment){
+    try{var row=[
+      new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'2-digit',year:'numeric'}),
+      payment.admin||'',payment.amount||0,payment.sessions||0,
+      (payment.hours||0).toFixed(1),payment.incentives||0,payment.invoiceNum||'','','Paid'
+    ];
+    await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent('Pay')+'!A:I:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
+      {method:'POST',body:JSON.stringify({values:[row]})});return true}catch(e){return false}
+  },
+  async meta(id){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json()).sheets?.map(function(s){return{id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}})||[]},async vals(id,range){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range))).json()).values||[]},async put(id,range,val){await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range)+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
 window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]}};
 window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spreadsheet'";if(q)fq+=" and name contains '"+q.replace(/'/g,"\\'")+"'";return(await(await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(fq)+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20')).json()).files||[]}};
 
@@ -238,13 +292,22 @@ window.geminiKey=function(){return localStorage.getItem('autodial_gemini')||loca
 window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)return null;
   var today=new Date().toISOString().slice(0,10);
   var prompt='You are a data analyst for Singapore insurance cold-calling. Analyze this spreadsheet and return a JSON mapping.\n'+
-    'TODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 20):\n'+rows.slice(0,20).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
-    '\n\nReturn ONLY valid JSON (no markdown, no backticks):\n'+
-    '{\n  "columns": {\n    "phone": <0-based index or -1>,\n    "first_name": <index or -1>,\n    "last_name": <index or -1>,\n    "full_name": <index or -1>,\n    "email": <index or -1>,\n    "age": <index or -1>,\n    "birthday": <index or -1>,\n    "race": <index or -1>,\n    "income": <index or -1>,\n    "savings": <index or -1>,\n    "company": <index or -1>,\n    "gender": <index or -1>,\n    "status": <index or -1>,\n    "remarks": <index or -1>\n  },\n'+
+    'TODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 30):\n'+rows.slice(0,30).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
+    '\n\nIMPORTANT: This sheet may contain MULTIPLE BATCHES of leads from different providers pasted together.\n'+
+    'Signs of misalignment: phone numbers suddenly appear in a different column, names shift columns, some rows have data in columns that were previously empty.\n'+
+    'If you detect batch shifts, map each batch independently.\n\n'+
+    'Return ONLY valid JSON (no markdown, no backticks):\n'+
+    '{\n  "columns": {\n    "phone": <0-based index or -1>,\n    "first_name": <index or -1>,\n    "last_name": <index or -1>,\n    "full_name": <index or -1>,\n    "email": <index or -1>,\n    "age": <index or -1>,\n    "nric": <index or -1>,\n    "birthday": <index or -1>,\n    "race": <index or -1>,\n    "income": <index or -1>,\n    "savings": <index or -1>,\n    "company": <index or -1>,\n    "gender": <index or -1>,\n    "status": <index or -1>,\n    "remarks": <index or -1>\n  },\n'+
     '  "statuses": [\n    {"row":1, "status":"pending|np|cb|ni|set", "np_count":0, "notes":"original remarks text", "cb_date":"YYYY-MM-DD", "cb_time":"HH:MM", "computed_age": <number or null>}\n  ]\n}\n\n'+
     'RULES:\n'+
     '- "Transaction ID" or 8-digit number columns = phone\n'+
     '- "Residential Status" = race\n'+
+    '- NRIC DETECTION: Singapore NRIC format is [STFGM]\\d{7}[A-Z] (e.g. S9012345A, T0512345B). If a column has NRIC values:\n'+
+    '  * Map it as "nric" column\n'+
+    '  * Calculate age: prefix S/F = born 19xx, prefix T/G/M = born 20xx, where xx = first 2 digits after prefix\n'+
+    '  * Example: S9012345A → born 1990 → age = '+today.slice(0,4)+' - 1990 = '+(new Date().getFullYear()-1990)+'\n'+
+    '  * Put computed_age in each status entry\n'+
+    '  * NEVER include the raw NRIC in notes or any output — only use it for age calculation\n'+
     '- If a column has dates like "12/05/1990" or "1990-05-12", it may be birthday. Convert to age using today ('+today+')\n'+
     '- If age column has values AND birthday column exists, prefer computing age from birthday for accuracy\n'+
     '- The REMARKS/NOTES column often contains status info mixed with free text. Parse it CAREFULLY:\n'+
@@ -302,16 +365,83 @@ window.gDriveUpload={
 };
 
 // ══════ SMART QUEUE ══════
+// ═══ TIME-AWARE CALLBACK PARSING ═══
+window.parseCBTime=function(text){
+  if(!text)return null;
+  var t=text.toLowerCase().trim();
+  var now=new Date();
+  var result={cbDate:'',cbTime:''};
+  // "call tmr" / "call tomorrow"
+  if(/tmr|tomorrow|tml/.test(t)){var d=new Date(now);d.setDate(d.getDate()+1);result.cbDate=d.toISOString().slice(0,10);result.cbTime='10:00';return result}
+  // "call next week"
+  if(/next week|nxt week/.test(t)){var d=new Date(now);d.setDate(d.getDate()+7);result.cbDate=d.toISOString().slice(0,10);result.cbTime='10:00';return result}
+  // "call in X days/hours"
+  var inMatch=t.match(/call\s+in\s+(\d+)\s*(day|hr|hour|d|h)/i);
+  if(inMatch){var n=parseInt(inMatch[1]);var unit=inMatch[2][0]==='h'?'hours':'days';var d=new Date(now);
+    if(unit==='hours')d.setHours(d.getHours()+n);else d.setDate(d.getDate()+n);
+    result.cbDate=d.toISOString().slice(0,10);result.cbTime=d.toTimeString().slice(0,5);return result}
+  // "call mon/tue/wed/thu/fri/sat/sun"
+  var dayMap={sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
+  var dayMatch=t.match(/call\s+(mon|tue|wed|thu|fri|sat|sun)/i);
+  if(dayMatch){var targetDay=dayMap[dayMatch[1].toLowerCase()];var d=new Date(now);var diff=(targetDay-d.getDay()+7)%7;if(diff===0)diff=7;d.setDate(d.getDate()+diff);
+    result.cbDate=d.toISOString().slice(0,10);result.cbTime='10:00';return result}
+  // "call at 3pm" / "call at 15:00"
+  var atMatch=t.match(/call\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if(atMatch){var h=parseInt(atMatch[1]);var m=parseInt(atMatch[2]||'0');if(atMatch[3]==='pm'&&h<12)h+=12;if(atMatch[3]==='am'&&h===12)h=0;
+    var d=new Date(now);if(h<=now.getHours())d.setDate(d.getDate()+1);
+    result.cbDate=d.toISOString().slice(0,10);result.cbTime=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');return result}
+  // "call 3pm tmr"
+  var tmrTime=t.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(tmr|tomorrow|tml)/i);
+  if(tmrTime){var h=parseInt(tmrTime[1]);var m=parseInt(tmrTime[2]||'0');if(tmrTime[3]==='pm'&&h<12)h+=12;
+    var d=new Date(now);d.setDate(d.getDate()+1);
+    result.cbDate=d.toISOString().slice(0,10);result.cbTime=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');return result}
+  return null;
+};
+
+// ═══ NRIC AGE CALCULATOR (Singapore) ═══
+// Format: [STFGM]\d{7}[A-Z] — first letter + 2 digits = birth year
+// S/F = 19xx, T/G/M = 20xx. NRIC is NEVER shown to user, only used for age.
+window.parseNRIC=function(val){
+  if(!val)return null;
+  var s=String(val).trim().toUpperCase();
+  var m=s.match(/^([STFGM])(\d{2})\d{5}[A-Z]$/);
+  if(!m)return null;
+  var prefix=m[1],yy=parseInt(m[2]);
+  var century=(prefix==='S'||prefix==='F')?1900:2000;
+  var birthYear=century+yy;
+  var now=new Date();var age=now.getFullYear()-birthYear;
+  // Adjust if birthday hasn't occurred yet this year (approximate — we only know year)
+  if(age<0||age>120)return null;
+  return{birthYear:birthYear,age:age};
+};
+window.isNRICLike=function(val){
+  if(!val)return false;
+  return/^[STFGM]\d{7}[A-Z]$/i.test(String(val).trim());
+};
+
 window.detectGender=function(l){if(l.gender){var g=l.gender.toLowerCase();if(/^(m|male|mr)$/i.test(g))return'male';if(/^(f|female|mrs|ms|miss|mdm)$/i.test(g))return'female'}var n=(l.name||'');if(/^(mr\.?|encik)\s/i.test(n))return'male';if(/^(mrs\.?|ms\.?|miss|mdm)\s/i.test(n))return'female';return null};
 window.parseAgeRange=function(a){if(!a)return null;var s=String(a).trim(),d=parseInt(s);if(!isNaN(d)&&s.length<=3)return{min:d,max:d};var m=s.match(/(\d+)\s*(?:to|-)\s*(\d+)/i);return m?{min:+m[1],max:+m[2]}:null};
-window.getNextDialable=function(leads,after,f){f=f||{};var now=new Date();for(var i=(after>=0?after+1:0);i<leads.length;i++){var l=leads[i];
-  if(l.status==='ni'||l.status==='set')continue;
-  // Safety net: re-check remarks for obvious NI/SET even if status is wrong
-  if(l.notes){var _rl=l.notes.toLowerCase().trim();if(/^ni$/i.test(l.notes.trim()))continue;if(/not interested/i.test(_rl))continue}if(l.status==='np'&&l.npCount>=(f.npMax||5))continue;if(f.skipAllNP&&l.status==='np')continue;
-  if(l.status==='cb'){if(f.includeCB){/* don't skip — include all CB */}else{if(!l.cbDate||!l.cbTime)continue;try{var diff=(new Date(l.cbDate+'T'+l.cbTime)-now)/6e4;if(diff>15||diff<-5)continue}catch(e){continue}}}
-  if(f.genderFilter&&f.genderFilter!=='all'){var g=detectGender(l);if(g&&g!==f.genderFilter)continue}
-  if(f.ageFilter&&f.ageMin){var ar=parseAgeRange(l.age);if(ar&&(ar.max<(+f.ageMin)||ar.min>(+f.ageMax||999)))continue}
-  return i}return-1};
+window.getNextDialable=function(leads,after,f){f=f||{};var now=new Date();
+  var priority=f.queuePriority||['blank','cb_due','np_retry'];
+  function isEligible(l){
+    if(l.status==='ni'||l.status==='set')return false;
+    if(l.notes){var _rl=l.notes.toLowerCase().trim();if(/^ni$/i.test(l.notes.trim()))return false;if(/not interested/i.test(_rl))return false}
+    if(l.status==='np'&&l.npCount>=(f.npMax||5))return false;
+    if(f.skipAllNP&&l.status==='np')return false;
+    if(f.genderFilter&&f.genderFilter!=='all'){var g=detectGender(l);if(g&&g!==f.genderFilter)return false}
+    if(f.ageFilter&&f.ageMin){var ar=parseAgeRange(l.age);if(ar&&(ar.max<(+f.ageMin)||ar.min>(+f.ageMax||999)))return false}
+    return true}
+  function isCBDue(l){if(l.status!=='cb')return false;if(f.includeCB)return true;if(!l.cbDate||!l.cbTime)return false;
+    try{var diff=(new Date(l.cbDate+'T'+l.cbTime)-now)/6e4;return diff<=15&&diff>=-60}catch(e){return false}}
+  for(var p=0;p<priority.length;p++){var bucket=priority[p];
+    for(var i=(after>=0?after+1:0);i<leads.length;i++){var l=leads[i];if(!isEligible(l))continue;
+      if(bucket==='blank'&&l.status==='pending')return i;
+      if(bucket==='cb_due'&&isCBDue(l))return i;
+      if(bucket==='np_retry'&&l.status==='np')return i;
+      if(bucket==='cb_all'&&l.status==='cb')return i;}}
+  for(var i=(after>=0?after+1:0);i<leads.length;i++){var l=leads[i];if(!isEligible(l))continue;
+    if(l.status==='cb'&&!isCBDue(l)&&!f.includeCB)continue;return i}
+  return-1};
 
 // ══════ TIMESHEET GOOGLE SHEET ══════
 // Round to nearest 30 min
@@ -514,16 +644,309 @@ function getTier(n,mins){const tiers=buildTiers(mins);for(let i=tiers.length-1;i
 function getNextTier(n,mins){const tiers=buildTiers(mins);for(let i=0;i<tiers.length;i++)if(n<tiers[i].min)return{...tiers[i],idx:i};return null}
 
 // Column detection + AI parsing
-const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction\s*id|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
+// ═══ FUZZY STATUS MATCHING ═══
+const FUZZY_STATUS_MAP=[
+  // [pattern, status, description]
+  {patterns:['not interested','not intrsted','not intrstd','nt interested','no interest','notinterested','no intrest','dun wan','dont want','rejected','refuse','declined','not keen','no need'],status:'ni'},
+  {patterns:['no pick','no answer','no ans','no pickup','no pick up','nopick','didnt ans','didnt answer','unanswered','not reachable','unreachable','busy','engaged','line busy','cant reach','switched off','phone off'],status:'np'},
+  {patterns:['call back','callback','call again','call later','call tmr','call tomorrow','call next','ring back','re-call','recall','follow up call','to call','cb ','call mon','call tue','call wed','call thu','call fri','call sat','call sun'],status:'cb'},
+  {patterns:['appointment','appt set','appointment set','meeting set','confirmed','booked','scheduled meeting','appt confirmed','set appt','fixed appt'],status:'set'}
+];
+function fuzzyStatusMatch(text){
+  if(!text||text.length<2)return null;
+  var t=text.toLowerCase().trim();
+  // Exact known abbreviations
+  if(t==='ni'||t==='n.i.'||t==='n.i')return'ni';
+  if(t==='np'||t==='n.p.'||t==='n.p')return'np';
+  if(t==='cb'||t==='c.b.'||t==='c.b')return'cb';
+  // Check learned patterns first
+  var lp=window._learnedPatterns||{};
+  if(lp[t])return lp[t];
+  // Fuzzy substring match
+  for(var i=0;i<FUZZY_STATUS_MAP.length;i++){
+    var group=FUZZY_STATUS_MAP[i];
+    for(var j=0;j<group.patterns.length;j++){
+      if(t.indexOf(group.patterns[j])!==-1)return group.status;
+    }
+  }
+  // Levenshtein-based fuzzy (for typos like "not intrstd")
+  function levenshtein(a,b){var m=[];for(var i=0;i<=b.length;i++){m[i]=[i];for(var j=1;j<=a.length;j++)m[i][j]=i===0?j:Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[j-1]===b[i-1]?0:1))}return m[b.length][a.length]}
+  var bestMatch=null,bestDist=999;
+  var refs=['not interested','no pick','no answer','callback','call back','appointment set','appt set'];
+  var refStatus=['ni','np','np','cb','cb','set','set'];
+  for(var k=0;k<refs.length;k++){var d=levenshtein(t.slice(0,refs[k].length+3),refs[k]);var threshold=Math.max(2,Math.floor(refs[k].length*0.3));
+    if(d<threshold&&d<bestDist){bestDist=d;bestMatch=refStatus[k]}}
+  return bestMatch;
+}
+window.fuzzyStatusMatch=fuzzyStatusMatch;
+
+// ═══════════════════════════════════════════════════════
+//  BATCH DETECTION — Multi-provider sheet alignment
+// ═══════════════════════════════════════════════════════
+// Detects when a sheet has multiple lead batches pasted with different column layouts.
+// Returns an array of batch objects, each with its own column mapping.
+
+function isPhoneLike(v){if(!v)return false;var s=String(v).replace(/[\s\-().+]/g,'');return/^\d{7,15}$/.test(s)}
+function isEmailLike(v){return v&&/@/.test(String(v))}
+function isAgeLike(v){if(!v)return false;var n=parseInt(String(v));return!isNaN(n)&&n>=16&&n<=100&&String(v).trim().length<=3}
+function isNameLike(v){if(!v)return false;var s=String(v).trim();return s.length>=2&&s.length<=40&&/^[a-zA-Z\s\-'.]+$/.test(s)&&!/\d/.test(s)&&!/@/.test(s)}
+function isHeaderLike(v){if(!v)return false;var s=String(v).trim().toLowerCase();
+  return/^(first.?name|last.?name|full.?name|name|phone|tel|mobile|email|age|gender|sex|race|residential|transaction|remarks|notes|status|company|income|savings|birthday|dob)$/i.test(s)||
+  /^(first|last|surname|contact|client|customer|cell|number|whatsapp|salutation|comments?|result|outcome)$/i.test(s)}
+function isRemarksLike(v){if(!v)return false;var s=String(v).toLowerCase().trim();
+  return/^ni$|^np|not interested|callback|call back|call again|appt|appointment|no pick|no ans|fly kite|flykite|postponed/i.test(s)||
+  /\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(s)||
+  /\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(s)||
+  /singapore (citizen|pr)/i.test(s)===false&&s.length>2&&s.length<200&&!/^\d+$/.test(s)&&!isEmailLike(v)&&!isPhoneLike(v)}
+
+// Find which column has phone numbers in a set of rows
+function detectPhoneCol(rows,startRow,scanCount){
+  var scores=[];
+  var endRow=Math.min(startRow+scanCount,rows.length);
+  // Get max column width
+  var maxCols=0;for(var i=startRow;i<endRow;i++)if(rows[i]&&rows[i].length>maxCols)maxCols=rows[i].length;
+  for(var col=0;col<maxCols;col++){
+    var hits=0;
+    for(var r=startRow;r<endRow;r++){
+      if(rows[r]&&isPhoneLike(rows[r][col]))hits++;
+    }
+    scores.push({col:col,hits:hits,pct:hits/Math.max(1,endRow-startRow)});
+  }
+  scores.sort(function(a,b){return b.hits-a.hits});
+  return scores[0]&&scores[0].hits>=2?scores[0].col:-1;
+}
+
+// Detect column mapping for a batch of rows
+function detectBatchColumns(rows,startRow,endRow){
+  var scanRows=rows.slice(startRow,Math.min(endRow,startRow+15));
+  if(!scanRows.length)return null;
+  var maxCols=0;scanRows.forEach(function(r){if(r&&r.length>maxCols)maxCols=r.length});
+  
+  var map={phone:-1,first:-1,last:-1,name:-1,email:-1,age:-1,gender:-1,race:-1,remarks:-1};
+  
+  // Score each column
+  var colScores=[];
+  for(var col=0;col<maxCols;col++){
+    var vals=scanRows.map(function(r){return r?String(r[col]||'').trim():''}).filter(Boolean);
+    var phoneHits=vals.filter(isPhoneLike).length;
+    var emailHits=vals.filter(isEmailLike).length;
+    var ageHits=vals.filter(isAgeLike).length;
+    var nameHits=vals.filter(isNameLike).length;
+    var remarkHits=vals.filter(isRemarksLike).length;
+    // Gender: m/f/male/female
+    var genderHits=vals.filter(function(v){return/^(m|f|male|female|mr|mrs|ms|miss|mdm)$/i.test(v.trim())}).length;
+    // Race/residential: "Singapore Citizen", "Singapore PR", "Chinese", "Malay", "Indian"
+    var raceHits=vals.filter(function(v){return/singapore (citizen|pr)|chinese|malay|indian|eurasian|others/i.test(v)}).length;
+    
+    colScores.push({col:col,phone:phoneHits,email:emailHits,age:ageHits,name:nameHits,gender:genderHits,race:raceHits,remarks:remarkHits,total:vals.length});
+  }
+  
+  // Assign columns greedily by highest confidence
+  var assigned=new Set();
+  // Phone first (most reliable signal)
+  var phoneBest=colScores.filter(function(c){return c.phone>=2}).sort(function(a,b){return b.phone-a.phone})[0];
+  if(phoneBest){map.phone=phoneBest.col;assigned.add(phoneBest.col)}
+  // Email
+  var emailBest=colScores.filter(function(c){return c.email>=2&&!assigned.has(c.col)}).sort(function(a,b){return b.email-a.email})[0];
+  if(emailBest){map.email=emailBest.col;assigned.add(emailBest.col)}
+  // Gender
+  var genderBest=colScores.filter(function(c){return c.gender>=2&&!assigned.has(c.col)}).sort(function(a,b){return b.gender-a.gender})[0];
+  if(genderBest){map.gender=genderBest.col;assigned.add(genderBest.col)}
+  // Race
+  var raceBest=colScores.filter(function(c){return c.race>=2&&!assigned.has(c.col)}).sort(function(a,b){return b.race-a.race})[0];
+  if(raceBest){map.race=raceBest.col;assigned.add(raceBest.col)}
+  // Age
+  var ageBest=colScores.filter(function(c){return c.age>=2&&!assigned.has(c.col)}).sort(function(a,b){return b.age-a.age})[0];
+  if(ageBest){map.age=ageBest.col;assigned.add(ageBest.col)}
+  // Name columns — likely the first unassigned columns with text before the phone column
+  var nameCandidates=colScores.filter(function(c){return c.name>=2&&!assigned.has(c.col)&&(map.phone===-1||c.col<map.phone)}).sort(function(a,b){return a.col-b.col});
+  if(nameCandidates.length>=2){map.first=nameCandidates[0].col;assigned.add(nameCandidates[0].col);map.last=nameCandidates[1].col;assigned.add(nameCandidates[1].col)}
+  else if(nameCandidates.length===1){map.name=nameCandidates[0].col;assigned.add(nameCandidates[0].col)}
+  // If no name found before phone, check after (some layouts put name after phone)  
+  if(map.first===-1&&map.name===-1){
+    nameCandidates=colScores.filter(function(c){return c.name>=2&&!assigned.has(c.col)}).sort(function(a,b){return a.col-b.col});
+    if(nameCandidates.length>=2){map.first=nameCandidates[0].col;assigned.add(nameCandidates[0].col);map.last=nameCandidates[1].col;assigned.add(nameCandidates[1].col)}
+    else if(nameCandidates.length===1){map.name=nameCandidates[0].col;assigned.add(nameCandidates[0].col)}
+  }
+  // Remarks — unassigned columns with remark-like content, or the LAST column with any text
+  var remarkCandidates=colScores.filter(function(c){return c.remarks>=1&&!assigned.has(c.col)}).sort(function(a,b){return b.remarks-a.remarks});
+  if(remarkCandidates.length)map.remarks=remarkCandidates[0].col;
+  
+  return map;
+}
+
+// Main batch detection function
+function detectBatches(headers,rows){
+  if(!rows||rows.length<2)return[{startRow:0,endRow:rows.length,headers:headers,colMap:null,isShifted:false}];
+  
+  // Find the primary phone column from the first batch (using headers + first ~15 rows)
+  var primaryPhoneCol=-1;
+  for(var i=0;i<headers.length;i++){if(/^(phone|tel|mobile|cell|transaction\s*id|transaction|number|whatsapp)$/i.test(String(headers[i]).trim())){primaryPhoneCol=i;break}}
+  if(primaryPhoneCol===-1)primaryPhoneCol=detectPhoneCol(rows,0,15);
+  if(primaryPhoneCol===-1)return[{startRow:0,endRow:rows.length,headers:headers,colMap:null,isShifted:false}];
+  
+  var batches=[];
+  var batchStart=0;
+  var currentPhoneCol=primaryPhoneCol;
+  var SCAN_WINDOW=8; // Look ahead this many rows to confirm a shift
+  
+  for(var ri=0;ri<rows.length;ri++){
+    var row=rows[ri];
+    if(!row)continue;
+    
+    // Check if this row has a phone number in the expected column
+    var hasPhoneInExpected=isPhoneLike(row[currentPhoneCol]);
+    
+    // Check if this row is completely empty or nearly empty
+    var nonEmpty=row.filter(function(v){return String(v||'').trim().length>0}).length;
+    if(nonEmpty===0)continue; // Skip empty rows
+    
+    // Check if this row looks like a NEW header row
+    var headerCells=row.filter(function(v){return isHeaderLike(v)}).length;
+    if(headerCells>=3){
+      // This is a header row for a new batch!
+      if(ri>batchStart){
+        batches.push({startRow:batchStart,endRow:ri,headers:headers,colMap:detectBatchColumns(rows,batchStart,ri),isShifted:currentPhoneCol!==primaryPhoneCol,phoneCol:currentPhoneCol});
+      }
+      // Use this row as headers for next batch and detect new phone col
+      headers=row.map(String);
+      batchStart=ri+1;
+      var newPhoneCol=detectPhoneCol(rows,ri+1,SCAN_WINDOW);
+      if(newPhoneCol!==-1)currentPhoneCol=newPhoneCol;
+      continue;
+    }
+    
+    if(!hasPhoneInExpected){
+      // Phone not where expected — is it somewhere else?
+      var altPhoneCol=-1;
+      for(var ci=0;ci<(row.length||0);ci++){if(isPhoneLike(row[ci])){altPhoneCol=ci;break}}
+      
+      if(altPhoneCol!==-1&&altPhoneCol!==currentPhoneCol){
+        // Confirm it's a real shift by scanning ahead
+        var shiftConfirmed=0;
+        for(var ahead=1;ahead<=SCAN_WINDOW&&ri+ahead<rows.length;ahead++){
+          var futureRow=rows[ri+ahead];
+          if(!futureRow)continue;
+          if(isPhoneLike(futureRow[altPhoneCol]))shiftConfirmed++;
+          if(isPhoneLike(futureRow[currentPhoneCol])){shiftConfirmed=-99;break} // False alarm
+        }
+        
+        if(shiftConfirmed>=2){
+          // Confirmed batch shift!
+          if(ri>batchStart){
+            batches.push({startRow:batchStart,endRow:ri,headers:headers,colMap:detectBatchColumns(rows,batchStart,ri),isShifted:currentPhoneCol!==primaryPhoneCol,phoneCol:currentPhoneCol});
+          }
+          console.log('[BatchDetect] Shift at row '+(ri+2)+': phone col '+currentPhoneCol+' → '+altPhoneCol);
+          batchStart=ri;
+          currentPhoneCol=altPhoneCol;
+        }
+      }
+    }
+  }
+  
+  // Final batch
+  if(batchStart<rows.length){
+    batches.push({startRow:batchStart,endRow:rows.length,headers:headers,colMap:detectBatchColumns(rows,batchStart,rows.length),isShifted:currentPhoneCol!==primaryPhoneCol,phoneCol:currentPhoneCol});
+  }
+  
+  // If only 1 batch found and no shifts, return simple result
+  if(batches.length<=1)return batches.length?batches:[{startRow:0,endRow:rows.length,headers:headers,colMap:null,isShifted:false}];
+  
+  console.log('[BatchDetect] Found '+batches.length+' batches in sheet');
+  return batches;
+}
+
+// Parse a single batch using its detected column map
+function parseBatch(rows,batchInfo){
+  var startRow=batchInfo.startRow,endRow=batchInfo.endRow;
+  var map=batchInfo.colMap;
+  if(!map||map.phone===-1)return{leads:[],error:'No phone column in batch'};
+  
+  var leads=[];
+  for(var ri=startRow;ri<endRow;ri++){
+    var r=rows[ri];if(!r)continue;
+    var ph=String(r[map.phone]||'').trim();
+    if(!ph||!isPhoneLike(ph))continue;
+    ph=ph.replace(/[\s\-().]/g,'');
+    
+    var fn='',ln='',fullName='';
+    if(map.first!==-1)fn=String(r[map.first]||'').trim();
+    if(map.last!==-1)ln=String(r[map.last]||'').trim();
+    if(map.name!==-1)fullName=String(r[map.name]||'').trim();
+    var name=(fn&&ln)?(fn+' '+ln).trim():(fullName||fn||ln||ph);
+    
+    var age=map.age!==-1?String(r[map.age]||'').trim():'';
+    var gender=map.gender!==-1?String(r[map.gender]||'').trim():'';
+    var race=map.race!==-1?String(r[map.race]||'').trim():'';
+    var email=map.email!==-1?String(r[map.email]||'').trim():'';
+    var rmk=map.remarks!==-1?String(r[map.remarks]||'').trim():'';
+    
+    // Status detection from remarks
+    var status='pending',npCount=0,cbDate='',cbTime='',needsReview=false;
+    if(rmk){
+      var rl=rmk.toLowerCase().trim();
+      var lp=window._learnedPatterns||{};
+      if(lp[rl])status=lp[rl];
+      else if(/^ni$/i.test(rmk.trim())||/\bnot interested\b/i.test(rl))status='ni';
+      else if(/np\s*x?\s*\d*/i.test(rl)&&/np/i.test(rl)&&rl.length<10){status='np';var m=rl.match(/np\s*x?\s*(\d+)/i);npCount=m?parseInt(m[1]):1}
+      else if(/\bappt\b|\bappointment\b|appt set/i.test(rl))status='set';
+      else if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl)){status='cb';var _p=parseCBTime(rl);if(_p){cbDate=_p.cbDate;cbTime=_p.cbTime}}
+      else if(/\bcall in\b|\bcall at\b|\bcb\b/i.test(rl)){status='cb';var _p2=parseCBTime(rl);if(_p2){cbDate=_p2.cbDate;cbTime=_p2.cbTime}}
+      else if(/\bcall (tmr|tomorrow|tml|next week|nxt week|mon|tue|wed|thu|fri|sat|sun)\b/i.test(rl)){status='cb';var _p3=parseCBTime(rl);if(_p3){cbDate=_p3.cbDate;cbTime=_p3.cbTime}}
+      else if((/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl))&&/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl))status='set';
+      else if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)status='set';
+      else{var fz=fuzzyStatusMatch(rl);if(fz)status=fz;else if(rl.length>3)needsReview=true}
+    }
+    
+    leads.push({id:Date.now()+Math.random(),name:name,phone:ph,email:email,age:age,race:race,income:'',gender:gender,status:status,
+      npCount:npCount,cbDate:cbDate,cbTime:cbTime,cbHistory:[],calledAt:null,notes:rmk,needsReview:needsReview,
+      sheetRow:ri+2,statusCol:map.remarks,_batchIdx:batchInfo.isShifted?1:0});
+  }
+  return{leads:leads,count:leads.length};
+}
+
+// Master function: detect batches and parse all
+function parseSheetMultiBatch(headers,rows){
+  var batches=detectBatches(headers,rows);
+  if(batches.length<=1&&!batches[0]?.isShifted){
+    // No misalignment detected — use standard parser
+    return null; // Signal to caller to use normal flow
+  }
+  
+  var allLeads=[];var batchSummary=[];
+  for(var b=0;b<batches.length;b++){
+    var batch=batches[b];
+    var result=parseBatch(rows,batch);
+    if(result.leads.length){
+      allLeads=allLeads.concat(result.leads);
+      batchSummary.push('Batch '+(b+1)+': rows '+(batch.startRow+2)+'-'+(batch.endRow+1)+' → '+result.leads.length+' leads'+(batch.isShifted?' (SHIFTED)':''));
+    }
+  }
+  
+  if(allLeads.length===0)return null;
+  
+  console.log('[BatchDetect] Parsed '+allLeads.length+' leads from '+batches.length+' batches');
+  batchSummary.forEach(function(s){console.log('[BatchDetect] '+s)});
+  
+  return{leads:allLeads,count:allLeads.length,batches:batches.length,summary:batchSummary};
+}
+window.parseSheetMultiBatch=parseSheetMultiBatch;
+window.detectBatches=detectBatches;
+
+const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction\s*id|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,nric:/^(nric|ic|ic.?no|nric.?no|identification|id.?number)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
 function parseSheet(rows,h){window._learnedPatterns=window._learnedPatterns||{};const c={};for(const[k,r]of Object.entries(RE))c[k]=h.findIndex(x=>r.test(x.trim()));
   if(c.phone===-1)for(let i=0;i<h.length;i++){if(rows.slice(0,15).filter(r=>r[i]&&/^\d{7,15}$/.test(String(r[i]).replace(/[\s\-().+]/g,''))).length>=3){c.phone=i;break}}
   if(c.phone===-1)return{leads:[],error:'No phone column'};
   if(c.name===-1&&c.first===-1)for(let i=0;i<h.length;i++){if(Object.values(c).includes(i))continue;if(rows.slice(0,10).filter(r=>r[i]&&/[a-zA-Z]/.test(String(r[i]))).length>=3){c.name=i;break}}
+  // Auto-detect NRIC column by data pattern if not found by header
+  if(c.nric===-1){for(let i=0;i<h.length;i++){if(Object.values(c).includes(i))continue;
+    if(rows.slice(0,15).filter(r=>isNRICLike(r[i])).length>=3){c.nric=i;console.log('[AutoDial] NRIC column detected: col '+i+' ('+h[i]+')');break}}}
   const leads=[];for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn=c.first!==-1?String(r[c.first]||'').trim():'',ln=c.last!==-1?String(r[c.last]||'').trim():'';if(!fn&&c.name!==-1)fn=String(r[c.name]||'').trim();
-    // Compute age from birthday if no age column
+    // Compute age: priority → age column → birthday column → NRIC column
     let age=c.age!==-1?String(r[c.age]||'').trim():'';
     if(!age&&c.birthday!==-1){try{const bd=new Date(String(r[c.birthday]||''));if(!isNaN(bd.getTime())){age=String(Math.floor((Date.now()-bd.getTime())/31557600000))}}catch(e){}}
+    if(!age&&c.nric!==-1){const nricVal=String(r[c.nric]||'').trim();const parsed=parseNRIC(nricVal);if(parsed)age=String(parsed.age)}
     // Get remarks
     const rmk=c.remarks!==-1?String(r[c.remarks]||'').trim():'';
     // Smart status detection from remarks (with learned patterns)
@@ -539,14 +962,15 @@ function parseSheet(rows,h){window._learnedPatterns=window._learnedPatterns||{};
       // Explicit appointment keywords
       else if(/\bappt\b|\bappointment\b|appt set/i.test(rl))status='set';
       // Callback patterns — check BEFORE date+time to avoid "Callback on 7th Aug" being SET
-      else if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))status='cb';
-      else if(/\bcall in\b|\bcall at\b|\bcb\b/i.test(rl))status='cb';
+      else if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl)){status='cb';var _p=parseCBTime(rl);if(_p){cbDate=_p.cbDate;cbTime=_p.cbTime}}
+      else if(/\bcall in\b|\bcall at\b|\bcb\b/i.test(rl)){status='cb';var _p2=parseCBTime(rl);if(_p2){cbDate=_p2.cbDate;cbTime=_p2.cbTime}}
+      else if(/\bcall (tmr|tomorrow|tml|next week|nxt week|mon|tue|wed|thu|fri|sat|sun)\b/i.test(rl)){status='cb';var _p3=parseCBTime(rl);if(_p3){cbDate=_p3.cbDate;cbTime=_p3.cbTime}}
       // Date+Time pattern = SET (e.g. "3pm 28th Feb Kinex", "6.45pm 23rd March Starbucks")
       else if((/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl))&&/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl))status='set';
       // Date+ordinal+month without explicit time but with location words = likely SET
       else if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)status='set';
       // Non-empty unknown remark → flag for review
-      else if(rl.length>3)needsReview=true
+      else{var fuzzy=fuzzyStatusMatch(rl);if(fuzzy){status=fuzzy}else if(rl.length>3)needsReview=true}
     }
     // Also check status column if separate
     if(c.status!==-1&&c.status!==c.remarks){const sv=String(r[c.status]||'').trim().toLowerCase();if(/^ni$/i.test(sv))status='ni';else if(/^np$/i.test(sv))status='np';else if(/^set|^appt/i.test(sv))status='set';else if(/^cb$/i.test(sv))status='cb'}
@@ -558,10 +982,11 @@ async function aiParse(rows,h){const ai=await aiAnalyzeSheet(h,rows);if(!ai?.col
   for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn='',ln='';if(c.first_name!==-1)fn=String(r[c.first_name]||'').trim();if(c.last_name!==-1)ln=String(r[c.last_name]||'').trim();if(!fn&&c.full_name!==-1)fn=String(r[c.full_name]||'').trim();
     const a=st[ri]||{};
-    // Compute age: prefer AI computed_age, then age column, then birthday calc
+    // Compute age: prefer AI computed_age, then age column, then birthday calc, then NRIC
     let age=a.computed_age||'';
     if(!age&&c.age!==-1)age=String(r[c.age]||'').trim();
     if(!age&&c.birthday!==-1){try{const bd=new Date(String(r[c.birthday]||''));if(!isNaN(bd)){const diff=Date.now()-bd.getTime();age=String(Math.floor(diff/31557600000))}}catch(e){}}
+    if(!age&&c.nric!=null&&c.nric!==-1){const nricVal=String(r[c.nric]||'').trim();const parsed=parseNRIC(nricVal);if(parsed)age=String(parsed.age)}
     // Get remarks from column
     let remarks='';if(c.remarks!==-1)remarks=String(r[c.remarks]||'').trim();
     // AI notes override if present
@@ -597,8 +1022,9 @@ function validateStatuses(leads,rawRows,remarksIdx){
     if(/\bappt set\b|\bappointment set\b/i.test(rl))return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
     if(/\bappt\b|\bappointment\b/i.test(rl)&&!/cancel/i.test(rl))return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
     // Callback keywords — check BEFORE date patterns
-    if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes});
-    if(/\bcall in\b|\bcall at\b/i.test(rl))return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes});
+    if(/\bcallback\b|\bcall back\b|\bcall again\b/i.test(rl)){var _cbp=parseCBTime(rl);return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes,cbDate:(_cbp&&_cbp.cbDate)||l.cbDate||'',cbTime:(_cbp&&_cbp.cbTime)||l.cbTime||''})}
+    if(/\bcall in\b|\bcall at\b/i.test(rl)){var _cbp2=parseCBTime(rl);return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes,cbDate:(_cbp2&&_cbp2.cbDate)||l.cbDate||'',cbTime:(_cbp2&&_cbp2.cbTime)||l.cbTime||''})}
+    if(/\bcall (tmr|tomorrow|tml|next week|nxt week|mon|tue|wed|thu|fri|sat|sun)\b/i.test(rl)){var _cbp3=parseCBTime(rl);return Object.assign({},l,{status:'cb',_validated:true,notes:rmk||l.notes,cbDate:(_cbp3&&_cbp3.cbDate)||'',cbTime:(_cbp3&&_cbp3.cbTime)||''})}
     // Date+Time = SET (e.g. "3pm 28th Feb Kinex")
     var hasTime=/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(rl)||/\b\d{1,2}\s*(am|pm)\b/i.test(rl);
     var hasMonth=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl);
@@ -607,6 +1033,9 @@ function validateStatuses(leads,rawRows,remarksIdx){
     if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rl)&&rl.length>15)return Object.assign({},l,{status:'set',_validated:true,notes:rmk||l.notes});
     // NP anywhere (but not in longer words)
     if(/\bnp\b/i.test(rl)&&rl.length<15)return Object.assign({},l,{status:'np',npCount:1,_validated:true,notes:rmk||l.notes});
+    // Fuzzy match attempt
+    var fuzzy=fuzzyStatusMatch(rl);
+    if(fuzzy)return Object.assign({},l,{status:fuzzy,_validated:true,_fuzzyMatched:true,notes:rmk||l.notes});
     // Unknown non-empty remark
     if(rl.length>3)return Object.assign({},l,{needsReview:true,notes:rmk});
     return l;
@@ -630,19 +1059,23 @@ const MilestonePopup=({show,title,sub,emoji,onClose})=>{if(!show)return null;
 function App(){
   const role=window._role||'admin';
   const stored=load('data')||{};
-  // Auto-validate cached leads on startup (fixes stale statuses)
+  // Auto-validate cached leads on startup
   const[leads,setLeads]=useState(()=>{
     const cached=stored.leads||[];
     if(!cached.length)return cached;
     const fixed=validateStatuses(cached);
     const changed=fixed.filter((l,i)=>l.status!==cached[i]?.status).length;
-    if(changed>0)console.log('[AutoDial] Fixed '+changed+' stale lead statuses from cache');
+    if(changed>0)console.log('[AutoDial] Fixed '+changed+' stale statuses');
+    // Flag if leads need re-fetch (most have empty notes = stale cache)
+    const emptyNotes=fixed.filter(l=>!l.notes&&l.status==='pending').length;
+    if(emptyNotes>fixed.length*0.7&&stored.cfg?.sheetId)window._needsRefetch=true;
     return fixed;
   });
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
-  const[running,setRunning]=useState(false);
-  const[curIdx,setCurIdx]=useState(-1);
+  const[running,setRunning]=useState(()=>{const s=load('activeSession');return s&&!s.ended?true:false});
+  const[curIdx,setCurIdx]=useState(()=>load('curIdx')||-1);
+  useEffect(()=>{save('curIdx',curIdx)},[curIdx]);
   const[countdown,setCountdown]=useState(0);
   const[phase,setPhase]=useState('idle');
   const[tab,setTab]=useState(role==='admin'?'dial':'leads');
@@ -659,9 +1092,11 @@ function App(){
   const[showFilters,setShowFilters]=useState(false);
   const[filters,setFilters]=useState({genderFilter:'all',ageFilter:false,ageMin:'',ageMax:'',skipAllNP:false,includeCB:false});
   const[gOk,setGOk]=useState(!!localStorage.getItem('ad_gt'));
-  const[sTabs,setSTabs]=useState([]);const[sLoad,setSLoad]=useState(false);
+  const[sTabs,setSTabs]=useState(load('stabs')||[]);
+  useEffect(()=>{if(sTabs.length)save('stabs',sTabs)},[sTabs]);const[sLoad,setSLoad]=useState(false);
   const[sheetQ,setSheetQ]=useState('');const[sheetResults,setSheetResults]=useState([]);const[sheetSearching,setSheetSearching]=useState(false);
-  const[session,setSession]=useState(null);
+  const[session,setSession]=useState(()=>load('activeSession')||null);
+  useEffect(()=>{save('activeSession',session)},[session]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[promotionLog,setPromotionLog]=useState(load('promo')||[]);  // [{date,fromTier,toTier,atSets,newRate}]
   const[milestone,setMilestone]=useState(null);const[confetti,setConfetti]=useState(false);
@@ -711,6 +1146,15 @@ function App(){
   const myCfg=role==='admin'&&adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg;
 
   useEffect(()=>{save('data',{leads,cfg})},[leads,cfg]);
+  // Auto re-fetch if cached leads are stale (no notes)
+  useEffect(()=>{
+    if(window._needsRefetch&&cfg.sheetId&&cfg.sheetTab&&gOk){
+      window._needsRefetch=false;
+      console.log('[AutoDial] Auto re-fetching stale leads...');
+      setTimeout(()=>fetchLeads(),1000)
+    }
+  },[gOk]);
+
   // Re-validate leads when raw sheet data becomes available (e.g. after re-fetch)
   useEffect(()=>{
     if(!rawSheet||!leads.length)return;
@@ -780,7 +1224,7 @@ function App(){
     })();
 
     // Load CB queue
-    DB.getCBQueue(role==='admin'?myEmail:null).then(setCbQueue);
+    DB.getCBQueue((role==='admin'||(role==='main'&&mainMode==='call'))?myEmail:null).then(setCbQueue);
     // Load WA templates
     DB.getWATemplates().then(setWaTemplates);
     // Load notifications
@@ -840,10 +1284,37 @@ function App(){
   const isCreatorUser=isCreator(myEmail);
   const fmtTime=s=>`${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
-  const dial=useCallback(ph=>{if(isMob)window.location.href='tel:'+ph.replace(/[^+\d]/g,'');syncSend('dial',{phone:ph})},[]);
+  const dncCheck=useCallback(()=>{
+    const h=new Date().getHours();
+    const dncStart=cfg.dncStart??21,dncEnd=cfg.dncEnd??9;
+    if(h>=dncStart||h<dncEnd){toast('⛔ DNC hours ('+dncEnd+'am–'+dncStart+'h). Auto-paused.','err');setRunning(false);setPhase('idle');return true}
+    return false},[cfg.dncStart,cfg.dncEnd]);
+  const dial=useCallback(ph=>{
+    // DNC hours check
+    const h=new Date().getHours();const dncStart=cfg.dncStart??21,dncEnd=cfg.dncEnd??9;
+    if(h>=dncStart||h<dncEnd){toast('⛔ DNC hours active ('+dncEnd+'am–'+dncStart+'h)','err');return}
+    if(isMob)window.location.href='tel:'+ph.replace(/[^+\d]/g,'');syncSend('dial',{phone:ph})},[cfg.dncStart,cfg.dncEnd]);
 
-  const syncSheet=useCallback(async(lead,st)=>{if(!cfg.sheetId||lead.statusCol===-1||!lead.sheetRow||!localStorage.getItem('ad_gt'))return;
-    try{const col=String.fromCharCode(65+lead.statusCol);let v=st.toUpperCase();if(st==='np')v='NP x'+(lead.npCount+1);if(st==='cb')v=('CB '+lead.cbDate+' '+lead.cbTime).trim();if(st==='set')v='appt set';await gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,v)}catch(e){}},[cfg]);
+  const syncSheet=useCallback(async(lead,st)=>{if(!cfg.sheetId||!lead.sheetRow||!localStorage.getItem('ad_gt'))return;
+    try{
+      let colIdx=lead.statusCol;
+      // If no status column found, try to create one
+      if(colIdx===-1||colIdx===undefined){
+        const newCol=await gSheets.addColumn(cfg.sheetId,cfg.sheetTab||'Sheet1','Remarks');
+        if(newCol>=0){colIdx=newCol;
+          // Update lead with new column
+          setLeads(p=>p.map(l=>({...l,statusCol:newCol})));
+          toast('Created "Remarks" column in sheet','info')}
+        else return;
+      }
+      const col=String.fromCharCode(65+colIdx);
+      let v=st.toUpperCase();
+      if(st==='np')v='NP x'+(lead.npCount+1);
+      if(st==='cb')v=('CB '+lead.cbDate+' '+lead.cbTime).trim();
+      if(st==='set')v='appt set';
+      if(st==='ni')v='NI';
+      await gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,v)
+    }catch(e){console.warn('[SyncSheet]',e.message)}},[cfg]);
 
   const startSession=()=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false});setElapsed(0);toast('Session started! 🔥')};
   const endSession=()=>{if(!session)return;const s={...session,ended:true,endTime:Date.now(),elapsed};
@@ -855,7 +1326,8 @@ function App(){
     DB.saveSess(s,_user?.id,myEmail);
     DB.notify(null,'session_end','Session ended: '+myEmail,s.sets+' appts | '+rank.label,{email:myEmail,sets:s.sets,rank:rank.label});
     setCallLog([]);syncSend('end',{session:s});syncSend('adminSession',{session:s,email:myEmail});
-    if(localStorage.getItem('ad_gt')){const tsId=adminConfigs[myEmail]?.timesheetId||'';
+    if(localStorage.getItem('ad_gt')){const tsId=adminConfigs[myEmail]?.timesheetId||cfg.sheetId||'';
+      if(tsId){gSheets.ensureTabs(tsId,['Timesheet','Appointments Set','Pay']).catch(()=>{})}
       gTimesheet.append(s,userName,myCfg,tsId||undefined).catch(()=>{})}};
 
 
@@ -917,7 +1389,7 @@ function App(){
     setShowPostCall(null);
     // Now show next lead preview
     setTimeout(()=>{
-      const nextIdx=getNextDialable(leads,showPostCall?.leadIdx??curIdx,{...filters,npMax:myCfg.npMax||5});
+      const nextIdx=getNextDialable(leads,showPostCall?.leadIdx??curIdx,{...filters,npMax:myCfg.npMax||5,queuePriority:cfg.queuePriority});
       if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info');return}
       setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')
     },100)
@@ -926,7 +1398,7 @@ function App(){
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}},[phase,countdown,running,cur,dial]);
 
-  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,{...filters,npMax:myCfg.npMax||5});if(f===-1){toast('No eligible leads','err');return}
+  const startDial=()=>{if(!session||session.ended)startSession();const f=getNextDialable(leads,-1,{...filters,npMax:myCfg.npMax||5,queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads','err');return}
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
   const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
@@ -952,6 +1424,21 @@ function App(){
     try{const v=await gSheets.vals(cfg.sheetId,cfg.sheetTab);if(v.length<2){toast('Empty','err');setSLoad(false);return}
       const h=v[0].map(String),r=v.slice(1);
       setRawSheet({headers:h,rows:r}); // Store for re-analysis
+
+      // ═══ STEP 0: Multi-batch detection (misaligned providers) ═══
+      const multiBatch=parseSheetMultiBatch(h,r);
+      if(multiBatch&&multiBatch.leads.length){
+        // Multi-batch detected! Validate and use
+        const validated=validateStatuses(multiBatch.leads,r,-1);
+        setLeads(validated);
+        const ni=validated.filter(l=>l.status==='ni').length,set=validated.filter(l=>l.status==='set').length;
+        const cb=validated.filter(l=>l.status==='cb').length,pend=validated.filter(l=>l.status==='pending').length;
+        toast('🔀 '+multiBatch.batches+' batches detected! '+multiBatch.count+' leads | '+pend+' callable, '+ni+' NI, '+set+' Set, '+cb+' CB');
+        multiBatch.summary.forEach(s=>console.log('[AutoDial] '+s));
+        setSLoad(false);return;
+      }
+
+      // ═══ STEP 1: Single-batch flow (original) ═══
       // Detect remarks column directly from headers (don't rely on AI)
       // Step 1: exact match for common names
       let rmkCol=h.findIndex(x=>/^(remarks?|notes?|comments?|result|outcome)$/i.test(x.trim()));
@@ -1158,7 +1645,7 @@ function App(){
           <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>📞 Dial</button>
           <button onClick={()=>{
             // Skip this lead, find the one after
-            const skipIdx=getNextDialable(leads,nextPreviewIdx,{...filters,npMax:myCfg.npMax||5});
+            const skipIdx=getNextDialable(leads,nextPreviewIdx,{...filters,npMax:myCfg.npMax||5,queuePriority:cfg.queuePriority});
             if(skipIdx===-1){toast('No more leads','info');setShowNextPreview(false);setRunning(false);setPhase('idle');return}
             setNextPreviewIdx(skipIdx)
           }} style={{flex:1,padding:'12px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Skip →</button>
@@ -1212,7 +1699,7 @@ function App(){
       const starsToNext=nextRank?(nextRank.cumStars-monthlyAppts):0;
       // Monthly stats
       const now=new Date(),y=now.getFullYear(),m=now.getMonth();
-      const monthSessions=sessionLog.filter(s=>{const d=new Date(s.startTime);return d.getFullYear()===y&&d.getMonth()===m});
+      const monthSessions=sessionLog.filter(s=>{const d=new Date(s.startTime);return d.getFullYear()===y&&d.getMonth()===m&&(!isManageMode||(s.email||'')!==myEmail)});
       const monthDialed=monthSessions.reduce((a,s)=>a+(s.dialed||0),0);
       const monthNP=monthSessions.reduce((a,s)=>a+(s.np||0),0);
       const monthNI=monthSessions.reduce((a,s)=>a+(s.ni||0),0);
@@ -1272,6 +1759,10 @@ function App(){
 
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {tab==='appts'&&<div className='content-pad'>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+        <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'Admin Appointments'}</h3>
+        <span style={{fontSize:10,color:'var(--text3)'}}>{appointments.filter(a=>isCallMode?(a.admin===myEmail||!a.admin):a.admin!==myEmail).length} total</span>
+      </div>
       <input value={apptSearch} onChange={e=>setApptSearch(e.target.value)} placeholder="🔍 Search appointments…" style={{marginBottom:10}}/>
       
       <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
@@ -1281,6 +1772,9 @@ function App(){
       </div>
 
       {appointments.filter(a=>{
+        // Separate self vs admin appointments by mode
+        if(isCallMode&&a.admin&&a.admin!==myEmail)return false;
+        if(isManageMode&&a.admin===myEmail)return false;
         if(!apptSearch)return true;
         if(['pending','met','postponed','flykite','closed'].includes(apptSearch))return a.followUp===apptSearch;
         return(a.name||'').toLowerCase().includes(apptSearch.toLowerCase())||(a.phone||'').includes(apptSearch)
@@ -1289,11 +1783,17 @@ function App(){
         const statusLabels={pending:'Pending',met:'Met ✅',postponed:'Postponed',flykite:'Fly Kite 🪁',closed:'Closed 💰'};
         return<div key={a.id} className="card" style={{marginBottom:8,borderColor:(statusColors[a.followUp]||'var(--border)')+'30'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
-            <div>
-              <p style={{margin:0,fontSize:14,fontWeight:700,color:'#f1f5f9'}}>{a.name}</p>
+            <div style={{flex:1}}>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <p style={{margin:0,fontSize:14,fontWeight:700,color:'#f1f5f9'}}>{a.name}</p>
+                <span className="pill" style={{background:a.admin===myEmail?'var(--adim)':'var(--bg3)',color:a.admin===myEmail?'var(--accent2)':'var(--text3)',fontSize:7}}>{a.admin===myEmail?'SELF':'ADMIN'}</span>
+              </div>
               <p className="mono" style={{margin:0,fontSize:11,color:'var(--text3)'}}>{a.phone} {a.gender?'· '+a.gender:''} {a.age?'· '+a.age:''}</p>
             </div>
-            <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
+            <div style={{display:'flex',alignItems:'center',gap:4}}>
+              <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
+              <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?'))setAppointments(p=>p.filter(x=>x.id!==a.id))}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
+            </div>
           </div>
           
           {a.apptDate&&<p style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>📅 {a.apptDate} {a.apptTime} {a.location?'· 📍'+a.location:''}</p>}
@@ -1317,22 +1817,26 @@ function App(){
                   toast(`+$${myCfg.metIncentive||10} incentive for meeting ${a.name} (added to current billing cycle)`)}
                 if(k==='flykite')toast(a.name+' — fly kite 🪁');
                 // Closed → tip also uses CURRENT date for billing
-                if(k==='closed'){const tip=prompt((role==='main'?'EFYC (Est. First Year Commission)':'Tip amount')+' for '+a.name+' ($):');const t=parseFloat(tip)||0;
-                  setAppointments(p=>p.map(x=>x.id===a.id?{...x,tip:t,followUp:'closed',followUpDate:now}:x));
+                if(k==='closed'){const isMain=role==='main';const promptLabel=isMain?'EFYC (Est. First Year Commission)':'Tip amount';
+                  const val=prompt(promptLabel+' for '+a.name+' ($):');const t=parseFloat(val)||0;
+                  // Store in separate fields: efyc for main, tip for admin
+                  const update=isMain?{efyc:t,followUp:'closed',followUpDate:now}:{tip:t,followUp:'closed',followUpDate:now};
+                  setAppointments(p=>p.map(x=>x.id===a.id?{...x,...update}:x));
                   if(t>0){
-                    setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:'closed',
+                    const incType=isMain?'efyc':'tip';
+                    setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:incType,
                       amount:t,
                       date:now, // CURRENT date = this billing cycle
                       apptOriginalDate:a.createdAt,
                       paid:false}]);
-                    toast(`$${t} tip for ${a.name} (added to current billing cycle)`)}}
+                    toast(`$${t} ${isMain?'EFYC':'tip'} for ${a.name} (added to current billing cycle)`)}}
               }} style={{flex:1,padding:'8px 2px',borderRadius:8,background:bg,color:c,fontSize:10,fontWeight:700}}>{l}</button>
             )}
           </div>}
           
           {/* Closed: show tip and paid status */}
           {a.followUp==='closed'&&<div style={{display:'flex',alignItems:'center',gap:8,marginTop:6}}>
-            <span style={{fontSize:12,color:'var(--gold)'}}>💰 {role==='main'?'EFYC':'Tip'}: ${a.tip||0}</span>
+            <span style={{fontSize:12,color:'var(--gold)'}}>💰 {role==='main'?'EFYC':'Tip'}: ${role==='main'?(a.efyc||0):(a.tip||0)}</span>
             {a.tipPaid?<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Paid</span>
             :isMain&&<button onClick={()=>setAppointments(p=>p.map(x=>x.id===a.id?{...x,tipPaid:true}:x))} style={{padding:'4px 10px',borderRadius:6,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Tip Paid</button>}
           </div>}
@@ -1465,7 +1969,11 @@ function App(){
                 setIncentives(p=>p.map(x=>(!x.paid&&(x.admin||'').toLowerCase()===email)?{...x,paid:true,paidDate:new Date().toISOString()}:x));
                 const adminIncentiveAmt=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).reduce((a,x)=>a+(x.amount||0),0);
                 setPaymentHistory(p=>[{date:new Date().toISOString(),admin:email,amount:unpaid+adminIncentiveAmt,sessions:sessions.filter(s=>!s.paid).length,hours:totalHrs,incentives:incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).length},...p]);
-                toast(email+' marked paid ✓')
+                toast(email+' marked paid ✓');
+                // Write to Pay tab in Google Sheet
+                if(cfg.sheetId&&localStorage.getItem('ad_gt')){
+                  gSheets.appendPay(cfg.sheetId,{admin:email,amount:unpaid+adminIncentiveAmt,sessions:sessions.filter(s=>!s.paid).length,hours:totalHrs,incentives:incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).length}).catch(()=>{})
+                }
               }} style={{flex:1,padding:'9px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>✓ Pay ${(unpaid+incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).reduce((a,x)=>a+(x.amount||0),0)).toFixed(2)}</button>
             </div>}
           </div>
@@ -1552,7 +2060,7 @@ function App(){
         <h3 style={{fontSize:14,fontWeight:700,color:'var(--gold)',marginTop:16,marginBottom:8}}>🎯 Incentives & Tips {unpaidIncentiveTotal>0&&<span className="mono" style={{color:'var(--amber)'}}>(${unpaidIncentiveTotal.toFixed(2)} unpaid)</span>}</h3>
         {incentives.map((x,i)=><div key={x.id} className="card" style={{marginBottom:6,padding:'10px 12px',opacity:x.paid?.5:1,borderColor:x.paid?'var(--border)':'rgba(240,180,41,.2)'}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
-            <span className="pill" style={{background:x.type==='met'?'var(--gdim)':'var(--golddim)',color:x.type==='met'?'var(--green)':'var(--gold)'}}>{x.type==='met'?'Met':'Tip'}</span>
+            <span className="pill" style={{background:x.type==='met'?'var(--gdim)':'var(--golddim)',color:x.type==='met'?'var(--green)':'var(--gold)'}}>{x.type==='met'?'Met':x.type==='efyc'?'EFYC':'Tip'}</span>
             <div style={{flex:1}}>
               <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{x.leadName}</p>
               <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>
@@ -1575,9 +2083,14 @@ function App(){
           :<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>Connected</span>}
         </div>
         {gOk&&<>
-          <div style={{display:'flex',gap:6,marginBottom:8}}>
-            <input value={sheetQ} onChange={e=>setSheetQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')searchSheets()}} placeholder="🔍 Search sheets…" style={{flex:1,fontSize:13}}/>
-            <button onClick={searchSheets} disabled={sheetSearching} style={{padding:'0 14px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{sheetSearching?'…':'Go'}</button>
+          <div style={{position:'relative',marginBottom:8}}>
+            <input value={sheetQ} onChange={e=>{setSheetQ(e.target.value);
+              // Auto-suggest: debounced search as user types
+              clearTimeout(window._sheetSearchTimer);
+              if(e.target.value.length>=2){window._sheetSearchTimer=setTimeout(()=>{setSheetSearching(true);gDrive.search(e.target.value).then(r=>{setSheetResults(r);setSheetSearching(false)}).catch(()=>setSheetSearching(false))},400)}
+              else{setSheetResults([])}
+            }} onKeyDown={e=>{if(e.key==='Enter')searchSheets()}} placeholder="🔍 Type to search sheets…" style={{fontSize:13,paddingRight:40}}/>
+            {sheetSearching&&<span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:10,color:'var(--accent2)'}}>…</span>}
           </div>
           {sheetResults.length>0&&<div style={{marginBottom:8,maxHeight:180,overflowY:'auto',borderRadius:10,border:'1px solid var(--border)'}}>
             {sheetResults.map(f=><div key={f.id} onClick={()=>{setCfg(s=>({...s,sheetId:f.id,sheetTab:''}));setSheetResults([]);setSLoad(true);gSheets.meta(f.id).then(t=>{setSTabs(t);setSLoad(false)}).catch(()=>setSLoad(false))}} style={{padding:'10px 12px',borderBottom:'1px solid var(--border)',cursor:'pointer',background:'var(--bg3)'}}>
@@ -1641,7 +2154,7 @@ function App(){
         const dNP=tds.reduce((a,s)=>a+(s.np||0),0)+(ts?.np||0);
         const dConn=dDialed-dNP;
         const cpl=cfg.cpl||0;const cost=td*cpl;
-        const efycTotal=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||x.tip||0),0);
+        const efycTotal=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||0),0);const tipTotal=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.tip||0),0);
         return<>
         <div className="card" style={{marginBottom:10}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',margin:'0 0 10px'}}>Hit Rates</h3>
@@ -1694,11 +2207,11 @@ function App(){
             </div>
             <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
               <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Avg EFYC / Closed</p>
-              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const cl=appointments.filter(a=>a.followUp==='closed');return cl.length?'$'+(cl.reduce((a,x)=>a+(x.efyc||x.tip||0),0)/cl.length).toFixed(0):'--'})()}</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const cl=appointments.filter(a=>a.followUp==='closed');return cl.length?'$'+(cl.reduce((a,x)=>a+(x.efyc||0),0)/cl.length).toFixed(0):'--'})()}</p>
             </div>
             <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
               <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Revenue / 100 Dials</p>
-              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const rev=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||x.tip||0),0);return td>0?'$'+((rev/td)*100).toFixed(0):'--'})()}</p>
+              <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const rev=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||0),0);return td>0?'$'+((rev/td)*100).toFixed(0):'--'})()}</p>
             </div>
           </div>
           {/* Conversion Funnel */}
@@ -1801,7 +2314,7 @@ function App(){
     {tab==='cb'&&<div className='content-pad'>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <h3 style={{fontSize:16,fontWeight:800,color:'#f1f5f9'}}>🔔 Callback Queue</h3>
-        <button onClick={()=>DB.getCBQueue(role==='admin'?myEmail:null).then(setCbQueue)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Refresh</button>
+        <button onClick={()=>DB.getCBQueue(isCallMode?myEmail:null).then(setCbQueue)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Refresh</button>
       </div>
       {/* Overdue */}
       {(()=>{const now=new Date();const overdue=cbQueue.filter(c=>{try{return new Date(c.scheduled_date+'T'+c.scheduled_time)<now&&c.status==='pending'}catch(e){return false}});
@@ -1967,6 +2480,33 @@ function App(){
       {/* Call Settings */}
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Settings</h3>
+        {/* DNC Hours */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+          <div>
+            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>⛔ DNC Hours</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-pause outside allowed hours</p>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:4}}>
+            <input type="number" min="0" max="23" value={cfg.dncEnd??9} onChange={e=>setCfg(s=>({...s,dncEnd:+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
+            <span style={{fontSize:10,color:'var(--text3)'}}>to</span>
+            <input type="number" min="0" max="23" value={cfg.dncStart??21} onChange={e=>setCfg(s=>({...s,dncStart:+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
+          </div>
+        </div>
+        {/* Queue Priority */}
+        <div style={{marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
+          <p style={{margin:'0 0 6px',fontSize:13,fontWeight:600,color:'#f1f5f9'}}>📋 Queue Priority</p>
+          <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Order in which leads are dialed</p>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>
+            {(cfg.queuePriority||['blank','cb_due','np_retry']).map((p,i)=>{
+              const labels={blank:'⬜ Blank/Pending first',cb_due:'🔵 CB Due (within 15min)',np_retry:'🟡 NP Retries',cb_all:'🔵 All Callbacks'};
+              return<div key={p} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)'}}>
+                <span className="mono" style={{fontSize:10,color:'var(--accent2)',fontWeight:700}}>{i+1}</span>
+                <span style={{flex:1,fontSize:11,color:'var(--text2)'}}>{labels[p]||p}</span>
+                {i>0&&<button onClick={()=>{const q=[...(cfg.queuePriority||['blank','cb_due','np_retry'])];[q[i-1],q[i]]=[q[i],q[i-1]];setCfg(s=>({...s,queuePriority:q}))}} style={{padding:'2px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↑</button>}
+                {i<(cfg.queuePriority||['blank','cb_due','np_retry']).length-1&&<button onClick={()=>{const q=[...(cfg.queuePriority||['blank','cb_due','np_retry'])];[q[i],q[i+1]]=[q[i+1],q[i]];setCfg(s=>({...s,queuePriority:q}))}} style={{padding:'2px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↓</button>}
+              </div>})}
+          </div>
+        </div>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div>
             <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
@@ -2149,7 +2689,11 @@ function App(){
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
               if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs}:a));
               setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
-              toast('Event created!')}catch(ev){toast(ev.message,'err')}
+              toast('Event created!');
+              // Write to Google Sheet Appointments Set tab
+              const apptSheetId=cfg.sheetId;
+              if(apptSheetId&&localStorage.getItem('ad_gt')){
+                gSheets.appendAppt(apptSheetId,{name:lead?.name,phone:lead?.phone,apptDate,apptTime,location:apptLocation,duration:dur,remarks:apptObs},userName).catch(()=>{})}}catch(ev){toast(ev.message,'err')}
             setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
           <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
         </div>
