@@ -63,26 +63,29 @@ button:active{transform:scale(.97)}
 .glow-border{animation:borderGlow 3s infinite}
 .fi{animation:fadeIn .3s ease-out}
 
-/* Toggle Switch */
-.mode-toggle{position:relative;width:60px;height:30px;border-radius:15px;cursor:pointer;transition:background .3s,box-shadow .3s;border:none;padding:0;flex-shrink:0}
-.mode-toggle.call{background:linear-gradient(135deg,#22c55e,#16a34a);box-shadow:0 2px 12px rgba(34,197,94,.35)}
-.mode-toggle.manage{background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 2px 12px rgba(239,68,68,.35)}
-.mode-toggle .knob{position:absolute;top:3px;width:24px;height:24px;border-radius:12px;background:#fff;transition:left .25s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 4px rgba(0,0,0,.25)}
-.mode-toggle.call .knob{left:33px}
+/* Toggle Switch — wider with clear labels */
+.mode-switch{display:flex;align-items:center;gap:8;flex-shrink:0}
+.mode-switch .sw-label{font-size:10px;font-weight:700;letter-spacing:.03em;transition:color .3s;text-transform:uppercase}
+.mode-switch .sw-label.active{color:#fff}
+.mode-switch .sw-label.dim{color:var(--text3)}
+.mode-toggle{position:relative;width:52px;height:28px;border-radius:14px;cursor:pointer;transition:background .3s,box-shadow .3s;border:none;padding:0;flex-shrink:0}
+.mode-toggle.call{background:linear-gradient(135deg,#22c55e,#16a34a);box-shadow:0 2px 12px rgba(34,197,94,.3)}
+.mode-toggle.manage{background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 2px 12px rgba(239,68,68,.3)}
+.mode-toggle .knob{position:absolute;top:3px;width:22px;height:22px;border-radius:11px;background:#fff;transition:left .25s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.mode-toggle.call .knob{left:27px}
 .mode-toggle.manage .knob{left:3px}
-.mode-toggle .lbl{position:absolute;top:50%;transform:translateY(-50%);font-size:7px;font-weight:800;letter-spacing:.05em;color:rgba(255,255,255,.85);text-transform:uppercase}
-.mode-toggle .lbl.l{left:6px}
-.mode-toggle .lbl.r{right:6px}
 
 /* Layout */
-.app-shell{min-height:100vh;min-height:100dvh;background:var(--bg);width:100%;max-width:540px;margin:0 auto;position:relative;backgroundImage:radial-gradient(ellipse at 50% 0%,rgba(99,102,241,.04),transparent 60%)}
+.app-shell{min-height:100vh;min-height:100dvh;background:var(--bg);width:100%;max-width:540px;margin:0 auto;position:relative;background-image:radial-gradient(ellipse at 50% 0%,rgba(99,102,241,.04),transparent 60%)}
 @media(min-width:600px){.app-shell{border-left:1px solid var(--border);border-right:1px solid var(--border)}}
-.app-header{padding:12px 14px 6px;display:flex;align-items:center;gap:10}
-.app-tabs{display:flex;padding:4px 8px;gap:1px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.hdr-row1{display:flex;align-items:center;gap:10;padding:14px 14px 0}
+.hdr-row2{display:flex;align-items:center;justify-content:space-between;padding:8px 14px 8px;gap:10}
+.app-tabs{display:flex;padding:2px 10px 6px;gap:1px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-bottom:1px solid var(--border)}
 .app-tabs::-webkit-scrollbar{display:none}
-.app-tabs button{padding:7px 11px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;background:transparent;color:var(--text3)}
+.app-tabs button{padding:8px 12px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;background:transparent;color:var(--text3)}
 .app-tabs button.active{background:var(--adim);color:var(--accent2)}
 .content-pad{padding:0 14px;padding-bottom:100px}
+.rank-chip{display:inline-flex;align-items:center;gap:6;padding:5px 12px 5px 8px;border-radius:10px;font-size:12px;font-weight:700}
 
 /* Auth */
 #auth-gate{position:fixed;inset:0;z-index:10000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;
@@ -233,9 +236,30 @@ window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spr
 // ══════ GEMINI AI ══════
 window.geminiKey=function(){return localStorage.getItem('autodial_gemini')||localStorage.getItem('geminiKey')||''};
 window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)return null;
-  var prompt='Data analyst for Singapore insurance cold-calling. Headers+rows→JSON mapping.\nHEADERS:'+JSON.stringify(headers)+'\nROWS:\n'+rows.map(function(r,i){return'R'+(i+1)+':'+JSON.stringify(r)}).join('\n')+'\nReturn ONLY JSON:{columns:{phone,first_name,last_name,full_name,email,age,race,income,savings,birthday,company,gender,status:<all 0-based indices or -1>},statuses:[{row:1,status:pending|np|cb|ni|set,np_count:0,notes:,cb_date:,cb_time:}...per row with status]}. Rules:empty=pending,NP/no pick=np,CB/callback=cb,NI/not interested=ni,Set/appt=set. Transaction ID with 8-digit=phone. Residential Status=race. No markdown.';
-  try{var r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:8000,temperature:.1}})});
-    var d=await r.json();if(d.error)return null;var t=(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();return JSON.parse(t)}catch(e){return null}};
+  var today=new Date().toISOString().slice(0,10);
+  var prompt='You are a data analyst for Singapore insurance cold-calling. Analyze this spreadsheet and return a JSON mapping.\n'+
+    'TODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 20):\n'+rows.slice(0,20).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
+    '\n\nReturn ONLY valid JSON (no markdown, no backticks):\n'+
+    '{\n  "columns": {\n    "phone": <0-based index or -1>,\n    "first_name": <index or -1>,\n    "last_name": <index or -1>,\n    "full_name": <index or -1>,\n    "email": <index or -1>,\n    "age": <index or -1>,\n    "birthday": <index or -1>,\n    "race": <index or -1>,\n    "income": <index or -1>,\n    "savings": <index or -1>,\n    "company": <index or -1>,\n    "gender": <index or -1>,\n    "status": <index or -1>,\n    "remarks": <index or -1>\n  },\n'+
+    '  "statuses": [\n    {"row":1, "status":"pending|np|cb|ni|set", "np_count":0, "notes":"original remarks text", "cb_date":"YYYY-MM-DD", "cb_time":"HH:MM", "computed_age": <number or null>}\n  ]\n}\n\n'+
+    'RULES:\n'+
+    '- "Transaction ID" or 8-digit number columns = phone\n'+
+    '- "Residential Status" = race\n'+
+    '- If a column has dates like "12/05/1990" or "1990-05-12", it may be birthday. Convert to age using today ('+today+')\n'+
+    '- If age column has values AND birthday column exists, prefer computing age from birthday for accuracy\n'+
+    '- The REMARKS/NOTES column often contains status info mixed with free text. Parse it:\n'+
+    '  * Contains "NI" or "not interested" → status=ni\n'+
+    '  * Contains "NP" or "no pick" or just "NP" → status=np, count occurrences for np_count\n'+
+    '  * Contains "CB" or "callback" or a future date/time → status=cb, extract cb_date and cb_time\n'+
+    '  * Contains "appt" or "set" or "appointment" → status=set\n'+
+    '  * Contains "call in" or specific time reference → status=cb\n'+
+    '  * Empty or just "NI"/"NP" with no other info → notes="" \n'+
+    '  * Has extra text beyond status → preserve in notes field\n'+
+    '- If status is ambiguous or you are unsure, set status="pending" and put the full text in notes for user review\n'+
+    '- Return statuses for ALL '+rows.length+' data rows, not just the sample\n'+
+    '- For rows beyond the sample, set status="pending" and notes="" unless you can infer from the pattern';
+  try{var r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:16000,temperature:.05}})});
+    var d=await r.json();if(d.error){console.warn('[AI]',d.error.message);return null}var t=(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();return JSON.parse(t)}catch(e){console.warn('[AI Parse]',e.message);return null}};
 
 // ══════ GOOGLE DRIVE — Upload Files ══════
 window.gDriveUpload={
@@ -479,21 +503,40 @@ function getTier(n,mins){const tiers=buildTiers(mins);for(let i=tiers.length-1;i
 function getNextTier(n,mins){const tiers=buildTiers(mins);for(let i=0;i<tiers.length;i++)if(n<tiers[i].min)return{...tiers[i],idx:i};return null}
 
 // Column detection + AI parsing
-const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|remarks|notes|result)$/i};
+const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
 function parseSheet(rows,h){const c={};for(const[k,r]of Object.entries(RE))c[k]=h.findIndex(x=>r.test(x.trim()));
   if(c.phone===-1)for(let i=0;i<h.length;i++){if(rows.slice(0,15).filter(r=>r[i]&&/^\d{7,15}$/.test(String(r[i]).replace(/[\s\-().+]/g,''))).length>=3){c.phone=i;break}}
   if(c.phone===-1)return{leads:[],error:'No phone column'};
   if(c.name===-1&&c.first===-1)for(let i=0;i<h.length;i++){if(Object.values(c).includes(i))continue;if(rows.slice(0,10).filter(r=>r[i]&&/[a-zA-Z]/.test(String(r[i]))).length>=3){c.name=i;break}}
   const leads=[];for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn=c.first!==-1?String(r[c.first]||'').trim():'',ln=c.last!==-1?String(r[c.last]||'').trim():'';if(!fn&&c.name!==-1)fn=String(r[c.name]||'').trim();
-    leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:c.age!==-1?String(r[c.age]||'').trim():'',race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',status:'pending',npCount:0,cbDate:'',cbTime:'',cbHistory:[],calledAt:null,notes:'',sheetRow:ri+2,statusCol:c.status!==-1?c.status:-1})}
+    // Compute age from birthday if no age column
+    let age=c.age!==-1?String(r[c.age]||'').trim():'';
+    if(!age&&c.birthday!==-1){try{const bd=new Date(String(r[c.birthday]||''));if(!isNaN(bd.getTime())){age=String(Math.floor((Date.now()-bd.getTime())/31557600000))}}catch(e){}}
+    // Get remarks
+    const rmk=c.remarks!==-1?String(r[c.remarks]||'').trim():'';
+    // Basic status detection from remarks
+    let status='pending',npCount=0,cbDate='',cbTime='';
+    if(rmk){const rl=rmk.toLowerCase();if(/\bni\b|not interested/i.test(rl))status='ni';else if(/\bnp\b|no pick/i.test(rl)){status='np';npCount=1}else if(/\bappt|appointment|\bset\b/i.test(rl))status='set';else if(/\bcb\b|callback|call back|call in/i.test(rl))status='cb'}
+    // Also check status column if separate
+    if(c.status!==-1&&c.status!==c.remarks){const sv=String(r[c.status]||'').trim().toLowerCase();if(/^ni$/i.test(sv))status='ni';else if(/^np$/i.test(sv))status='np';else if(/^set|^appt/i.test(sv))status='set';else if(/^cb$/i.test(sv))status='cb'}
+    leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age,race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status,npCount,cbDate,cbTime,cbHistory:[],calledAt:null,notes:rmk,sheetRow:ri+2,statusCol:c.remarks!==-1?c.remarks:(c.status!==-1?c.status:-1)})}
   return{leads,error:null,count:leads.length}}
 
 async function aiParse(rows,h){const ai=await aiAnalyzeSheet(h,rows);if(!ai?.columns||ai.columns.phone===-1)return null;
   const c=ai.columns,st={};if(ai.statuses)ai.statuses.forEach(s=>{st[s.row-1]=s});const leads=[];
   for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn='',ln='';if(c.first_name!==-1)fn=String(r[c.first_name]||'').trim();if(c.last_name!==-1)ln=String(r[c.last_name]||'').trim();if(!fn&&c.full_name!==-1)fn=String(r[c.full_name]||'').trim();
-    const a=st[ri]||{};leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:c.age!==-1?String(r[c.age]||'').trim():'',race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',status:a.status||'pending',npCount:a.np_count||0,cbDate:a.cb_date||'',cbTime:a.cb_time||'',cbHistory:[],calledAt:null,notes:a.notes||'',sheetRow:ri+2,statusCol:c.status!=null?c.status:-1})}
+    const a=st[ri]||{};
+    // Compute age: prefer AI computed_age, then age column, then birthday calc
+    let age=a.computed_age||'';
+    if(!age&&c.age!==-1)age=String(r[c.age]||'').trim();
+    if(!age&&c.birthday!==-1){try{const bd=new Date(String(r[c.birthday]||''));if(!isNaN(bd)){const diff=Date.now()-bd.getTime();age=String(Math.floor(diff/31557600000))}}catch(e){}}
+    // Get remarks from column
+    let remarks='';if(c.remarks!==-1)remarks=String(r[c.remarks]||'').trim();
+    // AI notes override if present
+    const notes=a.notes||remarks;
+    leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:String(age),race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status:a.status||'pending',npCount:a.np_count||0,cbDate:a.cb_date||'',cbTime:a.cb_time||'',cbHistory:[],calledAt:null,notes,sheetRow:ri+2,statusCol:c.status!=null?c.status:(c.remarks!=null?c.remarks:-1)})}
   return{leads,count:leads.length}}
 
 // Confetti
@@ -556,6 +599,9 @@ function App(){
   const[showWA,setShowWA]=useState(null);     // WhatsApp template modal
   const[newWA,setNewWA]=useState({name:'',template:'',category:'appointment'});
   const[showReplay,setShowReplay]=useState(null); // Session replay modal
+  const[rawSheet,setRawSheet]=useState(null); // {headers,rows} for re-analysis
+  const[showColPicker,setShowColPicker]=useState(null); // {headers, onPick} for status column selection
+  const[aiAnalyzing,setAiAnalyzing]=useState(false);
   // Appointments tracking
   const[appointments,setAppointments]=useState(load('appts')||[]);
   const[incentives,setIncentives]=useState(load('incv')||[]); // {id,admin,leadName,type:'met'|'closed',amount,date(current!),apptDate(original),paid}
@@ -765,15 +811,42 @@ function App(){
   const connectG=()=>gConnect(()=>setGOk(true));
   const fetchTabs=async id=>{const sid=id||cfg.sheetId;const m=sid?.match(/\/d\/([a-zA-Z0-9_-]+)/)||sid?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m)return toast('Bad URL','err');setCfg(s=>({...s,sheetId:m[1]}));setSLoad(true);try{setSTabs(await gSheets.meta(m[1]))}catch(e){toast(e.message,'err')}setSLoad(false)};
   const searchSheets=async()=>{if(!gOk)return toast('Connect Google','err');setSheetSearching(true);try{setSheetResults(await gDrive.search(sheetQ))}catch(e){toast(e.message,'err')}setSheetSearching(false)};
+  // Reanalyze existing leads with AI (called when Gemini key is added after leads loaded)
+  const reanalyzeWithAI=async(headers,rows)=>{
+    if(!headers||!rows)return;const key=geminiKey();if(!key){toast('Add Gemini key first','err');return}
+    setAiAnalyzing(true);toast('🧠 AI analyzing '+rows.length+' leads…','info');
+    try{const ai=await aiParse(rows,headers);
+      if(ai?.leads.length){setLeads(ai.leads);toast('✨ '+ai.count+' leads reanalyzed with AI!');
+        // Count how many got a non-pending status
+        const detected=ai.leads.filter(l=>l.status!=='pending').length;
+        if(detected>0)toast(detected+' leads with detected status','info')}
+      else toast('AI could not improve — keeping current leads','info')
+    }catch(e){toast('AI error: '+e.message,'err')}
+    setAiAnalyzing(false)};
+
   const fetchLeads=async()=>{if(!cfg.sheetId||!cfg.sheetTab)return;setSLoad(true);toast('Analyzing…','info');
     try{const v=await gSheets.vals(cfg.sheetId,cfg.sheetTab);if(v.length<2){toast('Empty','err');setSLoad(false);return}
-      const h=v[0].map(String),r=v.slice(1);const ai=await aiParse(r,h);
+      const h=v[0].map(String),r=v.slice(1);
+      setRawSheet({headers:h,rows:r}); // Store for re-analysis
+      const ai=await aiParse(r,h);
       if(ai?.leads.length){setLeads(ai.leads);toast('✨ '+ai.count+' leads (AI)');setSLoad(false);return}
-      const res=parseSheet(r,h);if(res.error){toast(res.error,'err');setSLoad(false);return}setLeads(res.leads);toast(res.count+' leads loaded')}catch(e){toast(e.message,'err')}setSLoad(false)};
+      // No AI — use basic parser
+      const res=parseSheet(r,h);if(res.error){toast(res.error,'err');setSLoad(false);return}
+      // Check for ambiguous status/remarks columns — find candidates
+      const statusCandidates=h.map((col,i)=>({idx:i,name:col})).filter(({name})=>/status|remark|notes?|comment|result|outcome/i.test(name));
+      if(statusCandidates.length>1){
+        // Multiple possible columns — ask user to pick
+        setShowColPicker({headers:h,candidates:statusCandidates,rows:r});
+        setLeads(res.leads);toast(res.count+' leads loaded — please confirm status column','info')
+      }else{
+        setLeads(res.leads);
+        if(!geminiKey())toast(res.count+' leads loaded. Add Gemini AI key for smarter analysis','info');
+        else toast(res.count+' leads loaded')
+      }}catch(e){toast(e.message,'err')}setSLoad(false)};
   const handleFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const ext=f.name.split('.').pop().toLowerCase();let h,r;
     if(['csv','tsv','txt'].includes(ext)){const p=Papa.parse(await f.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}
     else{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
-    const ai=await aiParse(r,h);if(ai?.leads.length){setLeads(p=>[...p,...ai.leads]);toast('✨ '+ai.count+' imported (AI)');return}
+    setRawSheet({headers:h,rows:r});const ai=await aiParse(r,h);if(ai?.leads.length){setLeads(p=>[...p,...ai.leads]);toast('✨ '+ai.count+' imported (AI)');return}
     const res=parseSheet(r,h);if(res.error)return toast(res.error,'err');setLeads(p=>[...p,...res.leads]);toast(res.count+' imported')}catch(err){toast(err.message,'err')}if(fileRef.current)fileRef.current.value=''};
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
@@ -791,33 +864,40 @@ function App(){
     <MilestonePopup show={!!milestone} {...(milestone||{})} onClose={()=>setMilestone(null)}/>
 
     {/* ═══ HEADER ═══ */}
-    <div className="app-header">
-      <div style={{width:34,height:34,borderRadius:11,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,boxShadow:'0 3px 14px rgba(99,102,241,.25)'}}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+    {/* Row 1: Brand + User + Logout */}
+    <div className="hdr-row1">
+      <div style={{width:32,height:32,borderRadius:10,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
       </div>
-      <div style={{flex:1,minWidth:0}}>
-        <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em',lineHeight:1.1}}>AutoDial</h1>
-        <div style={{display:'flex',alignItems:'center',gap:5,marginTop:1}}>
-          <span style={{fontSize:10,color:'var(--text3)'}}>{userName}</span>
-          {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 6px'}}>LIVE {fmtTime(elapsed)}</span>}
-        </div>
+      <div style={{flex:1}}>
+        <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>AutoDial</h1>
       </div>
-      {isCallMode&&<div style={{textAlign:'right',flexShrink:0,marginRight:2}}>
-        <p style={{margin:0,fontSize:12,fontWeight:800,color:rank.color,lineHeight:1.1}}>{rank.label}</p>
-        <p className="mono" style={{margin:0,fontSize:9,color:'var(--text3)'}}>{monthlyAppts} this mo</p>
-      </div>}
-      {role==='main'&&<button className={'mode-toggle '+(mainMode==='call'?'call':'manage')} onClick={()=>{const m=mainMode==='call'?'manage':'call';setMainMode(m);setTab(m==='call'?'dial':'live')}}>
-        <span className="lbl l" style={{opacity:mainMode==='manage'?0:.8}}>C</span>
-        <span className="lbl r" style={{opacity:mainMode==='call'?0:.8}}>M</span>
-        <div className="knob"/>
-      </button>}
-      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
+      <span style={{fontSize:11,color:'var(--text3)',marginRight:4}}>{userName}</span>
+      {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
+      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       </button>
     </div>
 
-    {/* Progress */}
-    <div style={{margin:'0 14px 4px',height:2,borderRadius:1,background:'var(--border)',overflow:'hidden'}}><div style={{height:'100%',width:progress+'%',background:'linear-gradient(90deg,var(--accent),#a78bfa)',transition:'width .4s'}}/></div>
+    {/* Row 2: Rank chip + Mode toggle */}
+    <div className="hdr-row2">
+      {isCallMode?<div className="rank-chip" style={{background:rank.color+'18',color:rank.color,border:'1px solid '+rank.color+'30'}}>
+        <span style={{fontSize:15}}>{rank.emoji}</span>
+        <span>{rank.label}</span>
+        <span style={{opacity:.6,fontSize:10,fontWeight:600}}>{monthlyAppts} this month</span>
+      </div>
+      :<div className="rank-chip" style={{background:'var(--rdim)',color:'var(--red)',border:'1px solid rgba(248,81,73,.2)'}}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span>Management</span>
+      </div>}
+      {role==='main'&&<div className="mode-switch">
+        <span className={'sw-label '+(mainMode==='call'?'active':'dim')} style={{color:mainMode==='call'?'#22c55e':'var(--text3)'}}>Call</span>
+        <button className={'mode-toggle '+(mainMode==='call'?'call':'manage')} onClick={()=>{const m=mainMode==='call'?'manage':'call';setMainMode(m);setTab(m==='call'?'dial':'live')}}>
+          <div className="knob"/>
+        </button>
+        <span className={'sw-label '+(mainMode==='manage'?'active':'dim')} style={{color:mainMode==='manage'?'#ef4444':'var(--text3)'}}>Mgmt</span>
+      </div>}
+    </div>
 
     {/* ═══ TABS ═══ */}
     <div className="app-tabs">
@@ -851,24 +931,48 @@ function App(){
       </div>}
 
       {/* Call card */}
-      <div className="card" style={{textAlign:'center',marginBottom:10,minHeight:140,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
+      <div className="card" style={{marginBottom:10,borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
         {cur&&running&&phase!=='preview'?(
           <>
-            {phase==='calling'?<div style={{width:64,height:64,borderRadius:'50%',border:'2px solid rgba(99,102,241,.4)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12,animation:'pulse 2s infinite'}}><div style={{width:46,height:46,borderRadius:'50%',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:19,fontWeight:800,color:'#fff'}}>{cur.name.charAt(0)}</div></div>
-            :<div style={{width:64,height:64,borderRadius:'50%',background:'var(--bg3)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12,fontSize:24,fontWeight:800,color:'var(--accent2)'}}>{countdown}</div>}
-            <p style={{margin:0,fontSize:10,fontWeight:800,textTransform:'uppercase',letterSpacing:'.15em',color:'var(--accent)'}}>{phase==='calling'?'Calling':'Next in'}</p>
-            <h2 style={{margin:'2px 0',fontSize:20,fontWeight:800,color:'#f1f5f9'}}>{cur.name}</h2>
-            <p className="mono" style={{margin:0,fontSize:14,color:'var(--text2)'}}>{cur.phone}</p>
-            {cur.age&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{cur.age} {cur.race?'· '+cur.race:''}</p>}
-            {cur.npCount>0&&<p style={{margin:'4px 0 0',fontSize:10,color:'var(--amber)'}}>NP ×{cur.npCount}</p>}
-            {phase==='calling'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,marginTop:14,width:'100%'}}>
-              <button onClick={()=>handleOutcome('np')} style={{padding:'12px 0',background:'var(--amdim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP</button>
-              <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
-              <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
-              <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set ✓</button>
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
+              {phase==='calling'?<div style={{width:52,height:52,borderRadius:'50%',border:'2px solid rgba(99,102,241,.4)',display:'flex',alignItems:'center',justifyContent:'center',animation:'pulse 2s infinite',flexShrink:0}}><div style={{width:38,height:38,borderRadius:'50%',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:800,color:'#fff'}}>{cur.name.charAt(0)}</div></div>
+              :<div style={{width:52,height:52,borderRadius:'50%',background:'var(--bg3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,fontWeight:800,color:'var(--accent2)',flexShrink:0}}>{countdown}</div>}
+              <div style={{flex:1,minWidth:0}}>
+                <p style={{margin:0,fontSize:10,fontWeight:800,textTransform:'uppercase',letterSpacing:'.12em',color:'var(--accent)'}}>{phase==='calling'?'Calling':'Next in '+countdown+'s'}</p>
+                <h2 style={{margin:'1px 0',fontSize:18,fontWeight:800,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cur.name}</h2>
+                <p className="mono" style={{margin:0,fontSize:13,color:'var(--text2)'}}>{cur.phone}</p>
+              </div>
+              {cur.npCount>0&&<span className="pill" style={{background:'var(--amdim)',color:'var(--amber)',flexShrink:0}}>NP x{cur.npCount}</span>}
+            </div>
+            {/* Lead info strip */}
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+              {cur.age&&<span className="pill" style={{background:'var(--bg)',color:'var(--text2)'}}>{cur.age} yrs</span>}
+              {cur.gender&&<span className="pill" style={{background:'var(--bg)',color:'var(--text2)'}}>{cur.gender}</span>}
+              {cur.race&&<span className="pill" style={{background:'var(--bg)',color:'var(--text2)'}}>{cur.race}</span>}
+              {cur.email&&<span className="pill" style={{background:'var(--bg)',color:'var(--blue)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{cur.email}</span>}
+            </div>
+            {/* Remarks */}
+            {cur.notes&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:10,border:'1px solid var(--border)'}}>
+              <p style={{margin:0,fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:2}}>REMARKS</p>
+              <p style={{margin:0,fontSize:12,color:'var(--text2)',lineHeight:1.4}}>{cur.notes}</p>
             </div>}
+            {phase==='calling'&&<>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,width:'100%'}}>
+                <button onClick={()=>handleOutcome('np')} style={{padding:'12px 0',background:'var(--amdim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP</button>
+                <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
+                <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
+                <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set</button>
+              </div>
+              {/* Adjustable delay timer */}
+              <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10,marginTop:10}}>
+                <span style={{fontSize:10,color:'var(--text3)'}}>Delay:</span>
+                <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-5)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>-</button>
+                <span className="mono" style={{fontSize:14,fontWeight:700,color:'var(--accent2)',minWidth:32,textAlign:'center'}}>{cfg.delay}s</span>
+                <button onClick={()=>setCfg(s=>({...s,delay:s.delay+5}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+              </div>
+            </>}
           </>
-        ):(!showNextPreview&&<p style={{color:'var(--text3)',fontSize:13}}>{pending.length?'Ready':'Upload leads'}</p>)}
+        ):(!showNextPreview&&<div style={{textAlign:'center',padding:'24px 0'}}><p style={{color:'var(--text3)',fontSize:13}}>{pending.length?'Ready - '+pending.length+' leads':'Upload leads to start'}</p></div>)}
       </div>
 
       {/* ═══ NEXT LEAD PREVIEW ═══ */}
@@ -885,8 +989,12 @@ function App(){
               {nextPreviewLead.gender&&<span style={{fontSize:10,color:'var(--text3)'}}>· {nextPreviewLead.gender}</span>}
               <Badge s={nextPreviewLead.status} np={nextPreviewLead.npCount} cbh={nextPreviewLead.cbHistory}/>
             </div>
+            {nextPreviewLead.email&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--blue)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nextPreviewLead.email}</p>}
           </div>
         </div>
+        {nextPreviewLead.notes&&<div style={{padding:'6px 10px',borderRadius:8,background:'var(--bg)',marginBottom:10,border:'1px solid var(--border)'}}>
+          <p style={{margin:0,fontSize:10,color:'var(--text3)',lineHeight:1.3}}><b>Remarks:</b> {nextPreviewLead.notes}</p>
+        </div>}
         <div style={{display:'flex',gap:8}}>
           <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>📞 Dial</button>
           <button onClick={()=>{
@@ -1301,7 +1409,9 @@ function App(){
       {leads.filter(l=>!leadSearch||(l.name||'').toLowerCase().includes(leadSearch.toLowerCase())||(l.phone||'').includes(leadSearch)).slice(0,50).map(l=><div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
         <div style={{width:32,height:32,borderRadius:10,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:ST[l.status]?.c,flexShrink:0}}>{l.name.charAt(0)}</div>
         <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p>
-        <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/></div>
+        <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/>
+        {l.notes&&<p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'100%'}}>📝 {l.notes.slice(0,50)}{l.notes.length>50?'…':''}</p>}
+        </div>
       </div>)}
       <div style={{height:80}}/>
     </div>}
@@ -1540,7 +1650,13 @@ function App(){
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'#4285f4'}}>🔵 Gemini AI</h3>
         <input value={localStorage.getItem('autodial_gemini')||''} onChange={e=>localStorage.setItem('autodial_gemini',e.target.value.trim())} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:8}}/>
-        <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved')}} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Save</button>
+        <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
+            if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
+            else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
+              // Re-fetch and analyze
+              toast('Re-fetching leads with AI…','info');fetchLeads()}
+          }} disabled={aiAnalyzing} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{aiAnalyzing?'Analyzing…':'Save & Analyze'}</button>
+          {leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginLeft:6}}>🧠 Re-analyze Leads</button>}
       </div>
 
       {/* Calendar Sharing (Main only) */}
@@ -1670,6 +1786,42 @@ function App(){
           <button onClick={()=>{const msg=document.getElementById('wa-custom')?.value;if(!msg)return toast('Type a message','err');window.open(waLink(showWA.phone,msg),'_blank');setShowWA(null)}} style={{flex:1,padding:'14px',background:'#25d366',color:'#fff',fontSize:14,fontWeight:700,borderRadius:14}}>Send via WhatsApp</button>
           <button onClick={()=>setShowWA(null)} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14,borderRadius:14}}>×</button>
         </div>
+      </div>
+    </div>}
+
+    {/* ═══ Column Picker Modal (ambiguous status/remarks) ═══ */}
+    {showColPicker&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowColPicker(null)}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:400,background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+        <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>Which column has status/remarks?</h3>
+        <p style={{margin:'0 0 16px',fontSize:12,color:'var(--text3)'}}>Multiple columns look like they could contain lead status. Pick the one that has NI/NP/CB/Set info:</p>
+        {showColPicker.candidates.map(col=>{
+          // Show sample values from this column
+          const samples=showColPicker.rows.slice(0,5).map(r=>String(r[col.idx]||'').trim()).filter(Boolean).slice(0,3);
+          return<button key={col.idx} onClick={()=>{
+            // Re-parse with this column as the status/remarks column
+            const h=showColPicker.headers;const r=showColPicker.rows;
+            const reLeads=leads.map((l,i)=>{
+              const rowIdx=i;if(rowIdx>=r.length)return l;
+              const rmk=String(r[rowIdx][col.idx]||'').trim();
+              let status='pending',npCount=l.npCount;
+              const rl=rmk.toLowerCase();
+              if(/\bni\b|not interested/i.test(rl))status='ni';
+              else if(/\bnp\b|no pick/i.test(rl)){status='np';npCount=Math.max(1,npCount)}
+              else if(/\bappt|appointment|\bset\b/i.test(rl))status='set';
+              else if(/\bcb\b|callback|call back|call in/i.test(rl))status='cb';
+              return{...l,status,npCount,notes:rmk,statusCol:col.idx}});
+            setLeads(reLeads);
+            const detected=reLeads.filter(x=>x.status!=='pending').length;
+            toast('Updated! '+detected+' leads with detected status from "'+col.name+'"');
+            setShowColPicker(null)
+          }} style={{width:'100%',padding:'14px 16px',borderRadius:14,background:'var(--bg3)',border:'1px solid var(--border)',marginBottom:8,textAlign:'left'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:14,fontWeight:700,color:'#f1f5f9'}}>Col {String.fromCharCode(65+col.idx)}: {col.name}</span>
+              <span className="pill" style={{background:'var(--adim)',color:'var(--accent2)'}}>Pick</span>
+            </div>
+            {samples.length>0&&<p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)'}}>Samples: {samples.join(' | ')}</p>}
+          </button>})}
+        <button onClick={()=>setShowColPicker(null)} style={{width:'100%',padding:'12px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,marginTop:4}}>Skip — keep all as Pending</button>
       </div>
     </div>}
 
