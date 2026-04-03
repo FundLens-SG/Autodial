@@ -291,7 +291,7 @@ window.gTimesheet={
     var id=await this.ensureSheet();if(!id)return;
     var date=new Date(session.startTime);
     var endDate=session.endTime?new Date(session.endTime):new Date();
-    var hoursCredit=session.fullSession?cfg.sessionDur:(session.elapsed/3600);
+    var hoursCredit=session.fullSession?myCfg.sessionDur:(session.elapsed/3600);
     var row=[
       date.toLocaleDateString(),userName,
       date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
@@ -406,6 +406,13 @@ function App(){
   const stored=load('data')||{};
   const[leads,setLeads]=useState(stored.leads||[]);
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,12,18],sessionDur:5,mThresh:2,nThresh:4,billingDays:14,metIncentive:10});
+  // Per-admin pay configs: { "email@example.com": { payRates, sessionDur, mThresh, nThresh } }
+  const[adminConfigs,setAdminConfigs]=useState(load('adminConfigs')||{});
+  const[editingAdmin,setEditingAdmin]=useState(null);
+  const[newAdminEmail,setNewAdminEmail]=useState('');
+  // Effective config: per-admin override if exists, else global defaults
+  const myEmail=(window._prof?.email||window._user?.email||'').toLowerCase();
+  const myCfg=role==='admin'&&adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg;
   const[running,setRunning]=useState(false);
   const[curIdx,setCurIdx]=useState(-1);
   const[countdown,setCountdown]=useState(0);
@@ -445,6 +452,23 @@ function App(){
   useEffect(()=>{save('totalSets',totalSets)},[totalSets]);
   useEffect(()=>{save('sessions',sessionLog)},[sessionLog]);
   useEffect(()=>{save('incentives',incentives)},[incentives]);
+  useEffect(()=>{save('adminConfigs',adminConfigs)},[adminConfigs]);
+
+  // ─── Full state broadcast (debounced) ───
+  const syncTimeout=useRef(null);
+  const broadcastState=useCallback((extra={})=>{
+    clearTimeout(syncTimeout.current);
+    syncTimeout.current=setTimeout(()=>{
+      syncSend('fullSync',{leads,cfg:{sheetId:cfg.sheetId,sheetTab:cfg.sheetTab,delay:cfg.delay},curIdx,phase,running,session,countdown,...extra});
+    },300);
+  },[leads,cfg,curIdx,phase,running,session,countdown]);
+
+  // Auto-broadcast when leads or key state changes
+  const prevLeadsRef=useRef(leads);
+  useEffect(()=>{
+    if(leads!==prevLeadsRef.current){prevLeadsRef.current=leads;broadcastState()}
+  },[leads,broadcastState]);
+  useEffect(()=>{broadcastState()},[running,phase,curIdx]);
 
   // Session timer
   useEffect(()=>{
@@ -458,35 +482,36 @@ function App(){
   const hasAge=leads.some(l=>l.age);
   const tier=getTier(totalSets);const nextTier=getNextTier(totalSets);
   const userName=window._prof?.full_name||window._prof?.email||'User';
-  const hourlyRate=cfg.payRates[tier.idx]||cfg.payRates[0];
+  const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
 
   const dial=useCallback(ph=>{
     if(isMob)window.location.href=`tel:${ph.replace(/[^+\d]/g,'')}`;
-    // Broadcast dial event so phone auto-dials if PC triggered
     syncSend('dial',{phone:ph});
   },[]);
 
   // ─── Cross-device sync listener ───
   useEffect(()=>{
     const unsub=onSync((data)=>{
-      if(data.type==='dial'&&isMob){
-        // Phone received dial command from PC — auto-trigger call
-        setTimeout(()=>{window.location.href=`tel:${data.phone.replace(/[^+\d]/g,'')}`},500);
-      }
-      if(data.type==='outcome'){
-        // Other device marked an outcome — apply it
-        setLeads(data.leads||[]);
+      // Full state sync — covers leads loaded, tabs changed, status changes, everything
+      if(data.type==='fullSync'){
+        if(data.leads)setLeads(data.leads);
+        if(data.cfg){
+          setCfg(prev=>({...prev,sheetId:data.cfg.sheetId||prev.sheetId,sheetTab:data.cfg.sheetTab||prev.sheetTab,delay:data.cfg.delay||prev.delay}));
+        }
         if(data.curIdx!==undefined)setCurIdx(data.curIdx);
         if(data.phase)setPhase(data.phase);
         if(data.running!==undefined)setRunning(data.running);
         if(data.session)setSession(data.session);
         if(data.countdown!==undefined)setCountdown(data.countdown);
       }
+      // Direct dial command — phone auto-triggers
+      if(data.type==='dial'&&isMob){
+        setTimeout(()=>{window.location.href=`tel:${data.phone.replace(/[^+\d]/g,'')}`},500);
+      }
       if(data.type==='start'){
-        setLeads(data.leads||leads);
+        if(data.leads)setLeads(data.leads);
         setCurIdx(data.curIdx);setRunning(true);setPhase(data.phase||'calling');
         setSession(data.session);setTab('dial');
-        // Phone auto-dials
         if(isMob&&data.phone){
           setTimeout(()=>{window.location.href=`tel:${data.phone.replace(/[^+\d]/g,'')}`},800);
         }
@@ -495,7 +520,7 @@ function App(){
       if(data.type==='end'){setSession(data.session);setRunning(false);setPhase('idle')}
     });
     return unsub;
-  },[leads]);
+  },[]);
 
   const syncSheet=useCallback(async(lead,st)=>{
     if(!cfg.sheetId||lead.statusCol===-1||!lead.sheetRow||!localStorage.getItem('ad_gt'))return;
@@ -511,9 +536,9 @@ function App(){
   const endSession=()=>{
     if(!session)return;
     const s={...session,ended:true,endTime:Date.now(),elapsed};
-    const fullSessionEarned=s.sets>=cfg.mThresh;
-    const bonusEarned=s.sets>=cfg.nThresh;
-    const hours=fullSessionEarned?cfg.sessionDur:(elapsed/3600);
+    const fullSessionEarned=s.sets>=myCfg.mThresh;
+    const bonusEarned=s.sets>=myCfg.nThresh;
+    const hours=fullSessionEarned?myCfg.sessionDur:(elapsed/3600);
     const pay=hours*hourlyRate*(bonusEarned?1.5:1);
     s.pay=pay;s.fullSession=fullSessionEarned;s.bonus=bonusEarned;s.hourlyRate=hourlyRate;s.tier=tier.label;
     setSession(s);
@@ -550,15 +575,15 @@ function App(){
         if(status==='set'){
           s.sets=prev.sets+1;
           const newTotal=totalSets+1;setTotalSets(newTotal);
-          if(s.sets===cfg.mThresh){
+          if(s.sets===myCfg.mThresh){
             setConfetti(true);setTimeout(()=>setConfetti(false),3000);
-            setMilestone({title:'FULL SESSION EARNED! 🎉',sub:`You hit ${cfg.mThresh} appointments! Your full ${cfg.sessionDur}-hour session is now logged.\n\nBut why stop? Push for ${cfg.nThresh} appts to unlock the 1.5× BONUS!`,emoji:'🏆'});
-          }else if(s.sets===cfg.nThresh){
+            setMilestone({title:'FULL SESSION EARNED! 🎉',sub:`You hit ${myCfg.mThresh} appointments! Your full ${myCfg.sessionDur}-hour session is now logged.\n\nBut why stop? Push for ${myCfg.nThresh} appts to unlock the 1.5× BONUS!`,emoji:'🏆'});
+          }else if(s.sets===myCfg.nThresh){
             setConfetti(true);setTimeout(()=>setConfetti(false),4000);
-            setMilestone({title:'1.5× BONUS UNLOCKED! 💰',sub:`INCREDIBLE! ${cfg.nThresh} appointments! Your entire session pay is now multiplied by 1.5×!\n\nYou're on FIRE — keep going!`,emoji:'🔥'});
+            setMilestone({title:'1.5× BONUS UNLOCKED! 💰',sub:`INCREDIBLE! ${myCfg.nThresh} appointments! Your entire session pay is now multiplied by 1.5×!\n\nYou're on FIRE — keep going!`,emoji:'🔥'});
           }
           if(TIERS.some(t=>t.min===newTotal)){
-            setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION! 🚀',sub:`You've reached ${getTier(newTotal).label}!\nYour hourly rate is now $${cfg.payRates[getTier(newTotal).idx]}/hr!`,emoji:'⭐'})},1500);
+            setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'TIER PROMOTION! 🚀',sub:`You've reached ${getTier(newTotal).label}!\nYour hourly rate is now $${myCfg.payRates[getTier(newTotal).idx]}/hr!`,emoji:'⭐'})},1500);
           }
         }
         return s;
@@ -686,17 +711,17 @@ function App(){
         {/* M/N progress */}
         <div style={{marginBottom:4}}>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
-            <span>Full session: {session.sets}/{cfg.mThresh} appts</span>
-            {session.sets>=cfg.mThresh&&<span style={{color:'var(--green)',fontWeight:700}}>✓ EARNED</span>}
+            <span>Full session: {session.sets}/{myCfg.mThresh} appts</span>
+            {session.sets>=myCfg.mThresh&&<span style={{color:'var(--green)',fontWeight:700}}>✓ EARNED</span>}
           </div>
-          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:`${Math.min(100,(session.sets/cfg.mThresh)*100)}%`,background:session.sets>=cfg.mThresh?'var(--green)':'var(--accent)',transition:'width .5s'}}/></div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:`${Math.min(100,(session.sets/myCfg.mThresh)*100)}%`,background:session.sets>=myCfg.mThresh?'var(--green)':'var(--accent)',transition:'width .5s'}}/></div>
         </div>
         <div>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
-            <span>1.5× Bonus: {session.sets}/{cfg.nThresh} appts</span>
-            {session.sets>=cfg.nThresh&&<span style={{color:'var(--gold)',fontWeight:700,animation:'firePulse 2s infinite'}}>🔥 ACTIVE</span>}
+            <span>1.5× Bonus: {session.sets}/{myCfg.nThresh} appts</span>
+            {session.sets>=myCfg.nThresh&&<span style={{color:'var(--gold)',fontWeight:700,animation:'firePulse 2s infinite'}}>🔥 ACTIVE</span>}
           </div>
-          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:`${Math.min(100,(session.sets/cfg.nThresh)*100)}%`,background:session.sets>=cfg.nThresh?'var(--gold)':'var(--amber)',transition:'width .5s'}}/></div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:`${Math.min(100,(session.sets/myCfg.nThresh)*100)}%`,background:session.sets>=myCfg.nThresh?'var(--gold)':'var(--amber)',transition:'width .5s'}}/></div>
         </div>
       </div>}
 
@@ -888,7 +913,7 @@ function App(){
       <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',marginTop:12,marginBottom:6}}>📊 Sessions {unpaidSessions.length>0&&<span style={{color:'var(--amber)',fontWeight:600}}>({unpaidSessions.length} unpaid)</span>}</h3>
       {sessionLog.map((s,i)=>{
         const d=new Date(s.startTime);const ed=s.endTime?new Date(s.endTime):null;
-        const hc=s.fullSession?cfg.sessionDur:(s.elapsed/3600);
+        const hc=s.fullSession?myCfg.sessionDur:(s.elapsed/3600);
         return<div key={i} className="card" style={{marginBottom:6,padding:'10px 12px',opacity:s.paid?.6:1,borderColor:s.paid?'var(--border)':s.bonus?'rgba(251,191,36,.2)':'var(--border)'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
             <div>
@@ -1074,8 +1099,67 @@ function App(){
             </select></div>
           <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',display:'block',marginBottom:3}}>Met Incentive ($)</label><input type="number" value={cfg.metIncentive} onChange={e=>setCfg(s=>({...s,metIncentive:parseFloat(e.target.value)||0}))} style={{fontSize:13,textAlign:'center'}}/></div>
         </div>
-        <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Tips for "Closed" leads are discretionary — enter per lead in Timesheet tab.</p>
+        <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>These are defaults. Customize per-admin below.</p>
       </div>}
+
+      {/* Per-Admin Config */}
+      {role==='main'&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:600,marginBottom:10,color:'var(--accent2)'}}>👥 Admin Pay (Per-Person)</h3>
+        <p style={{fontSize:11,color:'var(--text3)',marginBottom:10}}>Override defaults for individual admins. Admins without custom config use the defaults above.</p>
+        
+        {/* Add admin */}
+        <div style={{display:'flex',gap:6,marginBottom:10}}>
+          <input value={newAdminEmail} onChange={e=>setNewAdminEmail(e.target.value)} placeholder="Admin email" style={{flex:1,fontSize:13}}/>
+          <button onClick={()=>{
+            const email=newAdminEmail.trim().toLowerCase();
+            if(!email||!email.includes('@')){toast('Enter valid email','err');return}
+            if(adminConfigs[email]){toast('Already exists','err');return}
+            setAdminConfigs(p=>({...p,[email]:{payRates:[...cfg.payRates],sessionDur:cfg.sessionDur,mThresh:cfg.mThresh,nThresh:cfg.nThresh}}));
+            setNewAdminEmail('');toast(`Added ${email}`);
+          }} style={{padding:'0 16px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600,flexShrink:0}}>Add</button>
+        </div>
+
+        {/* Admin list */}
+        {Object.entries(adminConfigs).map(([email,ac])=>(
+          <div key={email} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:10,padding:12,marginBottom:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{email}</p>
+              <div style={{display:'flex',gap:6}}>
+                <button onClick={()=>setEditingAdmin(editingAdmin===email?null:email)} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>{editingAdmin===email?'Close':'Edit'}</button>
+                <button onClick={()=>{const c={...adminConfigs};delete c[email];setAdminConfigs(c);toast(`Removed ${email}`)}} style={{padding:'4px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>×</button>
+              </div>
+            </div>
+            
+            {/* Summary row */}
+            <div style={{display:'flex',gap:8,fontSize:10,color:'var(--text3)',flexWrap:'wrap'}}>
+              <span>💰 ${ac.payRates[0]}/${ac.payRates[1]}/${ac.payRates[2]}</span>
+              <span>⏱ {ac.sessionDur}h</span>
+              <span>M:{ac.mThresh}</span>
+              <span>N:{ac.nThresh}</span>
+            </div>
+            
+            {/* Edit form */}
+            {editingAdmin===email&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
+                {[['🥉 $/hr',0],['🥈 $/hr',1],['🥇 $/hr',2]].map(([l,i])=>
+                  <div key={i}><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,display:'block',marginBottom:2}}>{l}</label>
+                  <input type="number" value={ac.payRates[i]} onChange={e=>{const r=[...ac.payRates];r[i]=parseFloat(e.target.value)||0;setAdminConfigs(p=>({...p,[email]:{...p[email],payRates:r}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+                )}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6}}>
+                <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,display:'block',marginBottom:2}}>Session (hrs)</label>
+                <input type="number" value={ac.sessionDur} onChange={e=>setAdminConfigs(p=>({...p,[email]:{...p[email],sessionDur:parseFloat(e.target.value)||5}}))} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+                <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,display:'block',marginBottom:2}}>M (full)</label>
+                <input type="number" value={ac.mThresh} onChange={e=>setAdminConfigs(p=>({...p,[email]:{...p[email],mThresh:parseInt(e.target.value)||2}}))} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+                <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:600,display:'block',marginBottom:2}}>N (1.5×)</label>
+                <input type="number" value={ac.nThresh} onChange={e=>setAdminConfigs(p=>({...p,[email]:{...p[email],nThresh:parseInt(e.target.value)||4}}))} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
+              </div>
+            </div>}
+          </div>
+        ))}
+        {Object.keys(adminConfigs).length===0&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:10}}>No custom admin configs. All admins use defaults.</p>}
+      </div>}
+
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:600,marginBottom:6,color:'#f1f5f9'}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
