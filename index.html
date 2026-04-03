@@ -2723,7 +2723,7 @@ function App(){
             </datalist>
           </div>
           <button onClick={()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
-            setAdminConfigs(p=>({...p,[em]:{payRates:[...cfg.payRates],sessionDur:cfg.sessionDur,mThresh:cfg.mThresh,nThresh:cfg.nThresh,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],payRates:[...(cfg.payRates||DEF_PAY_RATES)],bizName:'',payNow:'',timesheetId:''}}));
+            setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:true,bizName:'',payNow:'',timesheetId:''}}));
             setNewAdminEmail('');toast('Added '+em)}} style={{padding:'0 16px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Add</button>
         </div>
         {Object.entries(adminConfigs).map(([em,ac])=><div key={em} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:14,padding:12,marginBottom:8}}>
@@ -2763,18 +2763,29 @@ function App(){
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
               <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:2}}>Bonus ×</label>
                 <input type="number" min="1" step="0.1" value={ac.bonusMult??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
-              <div><label style={{fontSize:9,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:2}}>Timesheet Sheet ID</label>
-                <input value={ac._tsName||ac.timesheetId||''} onChange={e=>{const v=e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],_tsName:v}}));if(v.length>=2&&gOk){clearTimeout(window['_ts'+em]);window['_ts'+em]=setTimeout(()=>{gDrive.search(v).then(r=>{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:r}}))}).catch(()=>{})},400)}else{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:[]}}))}}} placeholder="Search Google Sheets..." style={{fontSize:11,padding:'8px'}}/>
-                {(ac._tsResults||[]).length>0&&<div style={{maxHeight:100,overflowY:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,marginTop:2}}>
-                  {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}))} style={{padding:'6px 8px',fontSize:10,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>{f.name}</div>)}
-                </div>}</div>
+              <div><label style={{fontSize:9,color:'var(--amber)',fontWeight:700,display:'block',marginBottom:2}}>Met Incentive ($)</label>
+                <input type="number" value={ac.metIncentive??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],metIncentive:e.target.value===''?'':parseFloat(e.target.value)}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'4px 0 8px',padding:'8px 12px',borderRadius:10,background:'var(--bg3)',border:'1px solid var(--border)'}}>
+              <div><span style={{fontSize:11,fontWeight:600,color:'#f1f5f9'}}>🏆 Rank System</span><br/><span style={{fontSize:9,color:'var(--text3)'}}>Gamified rank progression</span></div>
+              <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],rankEnabled:!(ac.rankEnabled!==false)}}))} style={{padding:'4px 12px',borderRadius:6,background:ac.rankEnabled!==false?'var(--gdim)':'var(--bg)',color:ac.rankEnabled!==false?'var(--green)':'var(--text3)',fontSize:10,fontWeight:700,border:'1px solid '+(ac.rankEnabled!==false?'rgba(63,185,80,.2)':'var(--border)')}}>{ac.rankEnabled!==false?'ON':'OFF'}</button>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:2}}>📋 Leads Sheet</label>
+              <div style={{position:'relative'}}>
+                <input value={ac._tsName||ac.timesheetId||''} onChange={e=>{const v=e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],_tsName:v}}));if(v.length>=2&&gOk){clearTimeout(window['_ts'+em]);window['_ts'+em]=setTimeout(()=>{gDrive.search(v).then(r=>{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:r}}))}).catch(()=>{})},400)}else{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:[]}}))}}} placeholder="Type to search your Google Sheets..." style={{fontSize:12,padding:'10px'}}/>
+                {(ac._tsResults||[]).length>0&&<div style={{position:'absolute',left:0,right:0,zIndex:10,maxHeight:120,overflowY:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,marginTop:2,boxShadow:'0 8px 24px rgba(0,0,0,.4)'}}>
+                  {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}))} style={{padding:'8px 10px',fontSize:11,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>📗 {f.name}</div>)}
+                </div>}
+              </div>
+              {ac.timesheetId&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>}
+              <p style={{fontSize:9,color:'var(--text3)',margin:'6px 0 0',lineHeight:1.4}}>💡 Just add the leads sheet — <b style={{color:'var(--accent2)'}}>Timesheet</b>, <b style={{color:'var(--accent2)'}}>Appointments</b> & <b style={{color:'var(--accent2)'}}>Pay</b> tabs are auto-created!</p>
             </div>
             <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Invoice Name</label>
               <input value={ac.bizName||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bizName:e.target.value}}))} placeholder="Business or full name" style={{fontSize:12,padding:'8px'}}/></div>
             <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>PayNow Number</label>
               <input value={ac.payNow||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],payNow:e.target.value}}))} placeholder="+65 9xxx xxxx" style={{fontSize:12,padding:'8px'}}/></div>
-            <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Assigned Sheet IDs</label>
-              <input value={ac.sheets||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sheets:e.target.value}}))} placeholder="Sheet IDs (comma-separated)" style={{fontSize:12,padding:'8px'}}/></div>
+            
           </div>}
         </div>)}
         {!Object.keys(adminConfigs).length&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:8}}>No custom configs. All admins use defaults.</p>}
