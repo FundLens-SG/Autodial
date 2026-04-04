@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="AutoDial">
 <meta name="theme-color" content="#07080d">
 <title>AutoDial</title>
-<script>window.onerror=function(m){if(!m||m==='Script error.'||m==='Script error')return true};</script>
+<script>window.onerror=function(m){if(!m||m==='Script error.'||m==='Script error')return true;console.error('[AutoDial Error]',m);return true};window.onunhandledrejection=function(e){console.warn('[AutoDial] Unhandled promise:',e.reason);e.preventDefault()};</script>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='108' fill='url(%23g)'/%3E%3Cpath d='M352 311v48a16 16 0 01-17 16 158 158 0 01-69-25 156 156 0 01-48-48 158 158 0 01-25-69A16 16 0 01209 216h24a16 16 0 0116 14c1 8 3 15 6 22a16 16 0 01-4 17l-10 10a128 128 0 0048 48l10-10a16 16 0 0117-4c7 3 15 5 22 6A16 16 0 01352 336z' fill='none' stroke='white' stroke-width='18' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%22%2C%22short_name%22%3A%22AutoDial%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22orientation%22%3A%22portrait%22%2C%22background_color%22%3A%22%2307080d%22%2C%22theme_color%22%3A%22%236366f1%22%7D">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -295,14 +295,110 @@ window.onSync=function(cb){_syncCbs.push(cb);return function(){_syncCbs=_syncCbs
 // ══════ GOOGLE API ══════
 var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com',_gToken=null;
 var GSCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
+var _gsiReady=false,_gsiLoading=false;
+
+// ═══ PRE-LOAD Google GSI on page load (don't wait for first connect) ═══
+function _ensureGSI(cb){
+  if(_gsiReady&&typeof google!=='undefined'&&google.accounts){if(cb)cb();return}
+  if(_gsiLoading){var _w=setInterval(function(){if(_gsiReady){clearInterval(_w);if(cb)cb()}},200);return}
+  _gsiLoading=true;
+  var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
+  s.onload=function(){_gsiReady=true;_gsiLoading=false;if(cb)cb()};
+  s.onerror=function(){_gsiLoading=false};
+  document.head.appendChild(s)}
+// Start loading GSI immediately
+setTimeout(_ensureGSI,1000);
+
+// ═══ TOKEN HANDLER — called on every token grant ═══
+function _handleGToken(r){
+  if(r.error){console.warn('[Google]',r.error);return false}
+  _gToken=r.access_token;
+  localStorage.setItem('ad_gt',_gToken);
+  localStorage.setItem('ad_gt_ts',Date.now().toString());
+  localStorage.setItem('ad_g_ever','1'); // Remember Google was ever connected
+  window._gOkCb&&window._gOkCb(true);
+  // Share with admins via Supabase
+  if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}}
+  return true}
+
+// ═══ SILENT REFRESH — zero user interaction ═══
+window.gSilentRefresh=function(cb){
+  _ensureGSI(function(){
+    try{
+      google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,prompt:'',
+        callback:function(r){var ok=_handleGToken(r);
+          if(ok)console.log('[Google] Token refreshed silently');
+          if(cb)cb(ok)}
+      }).requestAccessToken({prompt:''})
+    }catch(e){console.warn('[Google] Refresh error:',e.message);if(cb)cb(false)}})};
+
+// ═══ RETRY REFRESH — tries up to 3 times with increasing delays ═══
+window.gRetryRefresh=function(attempt,cb){
+  attempt=attempt||1;
+  if(attempt>3){if(cb)cb(false);return}
+  console.log('[Google] Refresh attempt '+attempt+'/3');
+  gSilentRefresh(function(ok){
+    if(ok){if(cb)cb(true)}
+    else{setTimeout(function(){gRetryRefresh(attempt+1,cb)},attempt*2000)}})};
+
+// ═══ PROACTIVE REFRESH — refresh BEFORE a call if token is getting old ═══
+window._gEnsureFresh=function(){
+  var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+  if(Date.now()-ts>2400000&&localStorage.getItem('ad_gt')){// >40min old
+    return new Promise(function(res){gSilentRefresh(function(ok){res(ok)})}).catch(function(){return false})}
+  return Promise.resolve(true)};
+
+// ═══ AUTO-REFRESH TIMER — keeps token alive in background ═══
+window._gRefreshTimer=null;
+function _startAutoRefresh(){
+  clearInterval(window._gRefreshTimer);
+  // Refresh every 30 min proactively (tokens expire at 60min)
+  window._gRefreshTimer=setInterval(function(){
+    if(!localStorage.getItem('ad_gt')&&!localStorage.getItem('ad_g_ever'))return;
+    var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+    if(Date.now()-ts>1800000){// >30min since last token
+      console.log('[Google] Proactive refresh…');
+      gSilentRefresh(function(ok){if(!ok)console.warn('[Google] Proactive refresh failed, will retry on next API call')})}
+  },180000); // Check every 3 min
+  // Also refresh when tab becomes visible
+  if(!window._gVisHandler){
+    window._gVisHandler=function(){
+      if(!document.hidden&&localStorage.getItem('ad_g_ever')){
+        var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+        if(Date.now()-ts>1800000)gSilentRefresh()}};
+    document.addEventListener('visibilitychange',window._gVisHandler)}}
+
+// ═══ CONNECT — first-time auth with popup ═══
 window.gConnect=function(cb){
-  // Lazy-load Google GSI if not available
-  if(typeof google==='undefined'||!google.accounts){
-    var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
-    s.onload=function(){window.gConnect(cb)};s.onerror=function(){toast('Google failed to load','err')};
-    document.head.appendChild(s);return}
-  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google: '+(r.error_description||r.error),'err');console.error('[Google OAuth]',r);return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');window._gOkCb&&window._gOkCb(true);if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}};if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
-window.gF=async function(url,opts){var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google');var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
+  _ensureGSI(function(){
+    try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,
+      callback:function(r){if(_handleGToken(r)){toast('Google connected!');_startAutoRefresh();if(cb)cb()}
+        else{toast('Google: '+(r.error_description||r.error||'Failed'),'err')}}
+    }).requestAccessToken()}catch(e){toast(e.message,'err')}})};
+
+// ═══ API FETCH — proactive refresh + multi-retry on 401 ═══
+window.gF=async function(url,opts){
+  // Proactively refresh if token is stale (before making the call)
+  await window._gEnsureFresh();
+  var t=_gToken||localStorage.getItem('ad_gt');
+  if(!t){
+    // No token but was previously connected — try silent refresh
+    if(localStorage.getItem('ad_g_ever')){
+      var got=await new Promise(function(res){gRetryRefresh(1,res)}).catch(function(){return false});
+      if(got){t=_gToken||localStorage.getItem('ad_gt')}
+      if(!t)throw new Error('Google session expired')}
+    else throw new Error('Connect Google')}
+  var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});
+  if(r.status===401){
+    // Token expired mid-call — retry with fresh token (up to 3 attempts)
+    var refreshed=await new Promise(function(res){gRetryRefresh(1,res)}).catch(function(){return false});
+    if(refreshed){
+      var t2=_gToken||localStorage.getItem('ad_gt');
+      var r2=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t2,'Content-Type':'application/json'}});
+      if(r2.ok||r2.status!==401)return r2}
+    // All retries failed — DON'T clear the token (it might work later)
+    throw new Error('Google temporarily unavailable — will auto-retry')}
+  return r};
 window.gSheets={
   async ensureTabs(id,tabNames){
     // Check existing tabs and create missing ones
@@ -1527,7 +1623,9 @@ function App(){
             const gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
             if(gt.data&&gt.data.biz_name){
               const parsed=JSON.parse(gt.data.biz_name);
-              if(parsed.token){_gToken=parsed.token;localStorage.setItem('ad_gt',parsed.token);console.log('[AutoDial] Using shared Google token from Main')}
+              if(parsed.token){_gToken=parsed.token;localStorage.setItem('ad_gt',parsed.token);
+                if(parsed.ts)localStorage.setItem('ad_gt_ts',parsed.ts.toString());
+                _startAutoRefresh();console.log('[AutoDial] Using shared Google token from Main')}
             }
           }catch(e){}
         }
@@ -1629,78 +1727,60 @@ function App(){
           }
         }
       }catch(e){console.warn('[CloudSync]',e.message)}
-      // ═══ DEDICATED HARD-SYNC RESTORE (fallback for cross-device) ═══
+      // ═══ DEDICATED HARD-SYNC RESTORE (each item isolated so one failure never blocks others) ═══
       if(_SB){
-        try{
-          // Gemini key
-          if(!localStorage.getItem('autodial_gemini')){
-            const gk=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gemini_'+myEmail).single();
-            if(gk.data?.biz_name){const p=JSON.parse(gk.data.biz_name);if(p.key){setGeminiKeyVal(p.key);localStorage.setItem('autodial_gemini',p.key);console.log('[HardSync] Restored Gemini key')}}
-          }
-          // WA templates
-          if(!waTemplates.length){
-            const wt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','watpl_'+myEmail).single();
-            if(wt.data?.biz_name){const tpls=JSON.parse(wt.data.biz_name);if(tpls?.length){setWaTemplates(tpls);console.log('[HardSync] Restored '+tpls.length+' WA templates')}}
-          }
-          // Admin configs (pay settings)
-          if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length)){
-            const ac=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','acfg_'+myEmail).single();
-            if(ac.data?.biz_name){const acfg=JSON.parse(ac.data.biz_name);if(acfg&&Object.keys(acfg).length){setAdminConfigs(acfg);console.log('[HardSync] Restored admin configs')}}
-          }
-          // Appt duration
-          if(!load('apptDur')){
-            const ad=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptdur_'+myEmail).single();
-            if(ad.data?.biz_name){const p=JSON.parse(ad.data.biz_name);if(p.dur&&p.dur!==60){setApptDuration(p.dur);console.log('[HardSync] Restored apptDuration='+p.dur)}}
-          }
-          // Google token (try to reuse if recent, <45min)
-          if(!localStorage.getItem('ad_gt')){
-            const gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
-            if(gt.data?.biz_name){const p=JSON.parse(gt.data.biz_name);if(p.token&&p.ts&&(Date.now()-p.ts)<2700000){_gToken=p.token;localStorage.setItem('ad_gt',p.token);setGOk(true);console.log('[HardSync] Restored Google token (still fresh)')}}
-          }
-          // Total stars
-          if(!load('totalStars')){
-            const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','stars_'+myEmail).single();
-            if(sr.data?.biz_name){const p=JSON.parse(sr.data.biz_name);if(p.stars){setTotalStars(p.stars);console.log('[HardSync] Restored totalStars='+p.stars)}}
-          }
-          // Payment history
-          if(!paymentHistory.length){
-            const ph=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','payh_'+myEmail).single();
-            if(ph.data?.biz_name){const p=JSON.parse(ph.data.biz_name);if(p?.length){setPaymentHistory(p);console.log('[HardSync] Restored '+p.length+' payment records')}}
-          }
-          // Incentives
-          if(!incentives.length){
-            const iv=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','incv_'+myEmail).single();
-            if(iv.data?.biz_name){const p=JSON.parse(iv.data.biz_name);if(p?.length){setIncentives(p);console.log('[HardSync] Restored '+p.length+' incentives')}}
-          }
-          // Admin sessions (Main's view of admin sessions)
-          if(!Object.keys(adminSessions).length){
-            const as=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','asess_'+myEmail).single();
-            if(as.data?.biz_name){const p=JSON.parse(as.data.biz_name);if(p&&Object.keys(p).length){setAdminSessions(p);console.log('[HardSync] Restored admin sessions')}}
-          }
-          // Learned patterns (AI status mappings)
-          if(!Object.keys(learnedPatterns).length){
-            const lp=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','learned_'+myEmail).single();
-            if(lp.data?.biz_name){const p=JSON.parse(lp.data.biz_name);if(p&&Object.keys(p).length){setLearnedPatterns(p);window._learnedPatterns=p;console.log('[HardSync] Restored learned patterns')}}
-          }
-          // Promotion log
-          if(!promotionLog.length){
-            const pl=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','promo_'+myEmail).single();
-            if(pl.data?.biz_name){const p=JSON.parse(pl.data.biz_name);if(p?.length){setPromotionLog(p);console.log('[HardSync] Restored '+p.length+' promotions')}}
-          }
-          // Sheet tabs
-          if(!sTabs.length){
-            const st=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','stabs_'+myEmail).single();
-            if(st.data?.biz_name){const p=JSON.parse(st.data.biz_name);if(p?.length){setSTabs(p);console.log('[HardSync] Restored '+p.length+' sheet tabs')}}
-          }
-          // Gamification (bestStreak + achievements)
-          if(!load('bestStreak')&&!load('achievements')){
-            const gf=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gamify_'+myEmail).single();
-            if(gf.data?.biz_name){const p=JSON.parse(gf.data.biz_name);if(p.bestStreak)setBestStreak(p.bestStreak);if(p.achievements?.length)setAchievements(p.achievements);console.log('[HardSync] Restored gamification')}
-          }
-        }catch(e){console.warn('[HardSync]',e.message)}
+        const _hs=async(key,fn)=>{try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',key).single();if(r.data?.biz_name){const d=JSON.parse(r.data.biz_name);fn(d)}}catch(e){console.warn('[HardSync:'+key+']',e.message)}};
+
+        if(!localStorage.getItem('autodial_gemini'))
+          await _hs('gemini_'+myEmail,d=>{if(d.key){setGeminiKeyVal(d.key);localStorage.setItem('autodial_gemini',d.key)}});
+
+        if(!waTemplates.length)
+          await _hs('watpl_'+myEmail,d=>{if(d?.length)setWaTemplates(d)});
+
+        if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length))
+          await _hs('acfg_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminConfigs(d)});
+
+        if(!load('apptDur'))
+          await _hs('apptdur_'+myEmail,d=>{if(d.dur&&d.dur!==60)setApptDuration(d.dur)});
+
+        // Google token — restore + auto-refresh
+        if(!localStorage.getItem('ad_gt')){
+          await _hs('shared_gtoken',d=>{
+            if(d.token&&d.ts&&(Date.now()-d.ts)<2700000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());setGOk(true);_startAutoRefresh()}
+            else if(d.token){try{gSilentRefresh(ok=>{if(ok){setGOk(true);_startAutoRefresh()}})}catch(e){}}})
+        }else{_startAutoRefresh()}
+
+        if(!load('totalStars'))
+          await _hs('stars_'+myEmail,d=>{if(d.stars)setTotalStars(d.stars)});
+
+        if(!paymentHistory.length)
+          await _hs('payh_'+myEmail,d=>{if(d?.length)setPaymentHistory(d)});
+
+        if(!incentives.length)
+          await _hs('incv_'+myEmail,d=>{if(d?.length)setIncentives(d)});
+
+        if(!Object.keys(adminSessions).length)
+          await _hs('asess_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminSessions(d)});
+
+        if(!Object.keys(learnedPatterns).length)
+          await _hs('learned_'+myEmail,d=>{if(d&&Object.keys(d).length){setLearnedPatterns(d);window._learnedPatterns=d}});
+
+        if(!promotionLog.length)
+          await _hs('promo_'+myEmail,d=>{if(d?.length)setPromotionLog(d)});
+
+        if(!sTabs.length)
+          await _hs('stabs_'+myEmail,d=>{if(d?.length)setSTabs(d)});
+
+        if(!load('bestStreak')&&!load('achievements'))
+          await _hs('gamify_'+myEmail,d=>{if(d.bestStreak)setBestStreak(d.bestStreak);if(d.achievements?.length)setAchievements(d.achievements)});
       }
       setSyncing(false);
       cloudReady.current=true;window._cloudReady=true; // Safe to write to Supabase now
+      // If Google was previously connected but token is missing/stale, auto-recover
+      if(!localStorage.getItem('ad_gt')&&localStorage.getItem('ad_g_ever')){
+        console.log('[Google] Was previously connected — auto-recovering…');
+        gRetryRefresh(1,function(ok){if(ok){setGOk(true);_startAutoRefresh();toast('Google auto-reconnected ✓','info')}})
+      }
     })();
 
     // ═══ AUTO-FETCH PENDING APPROVALS (creator only) ═══
@@ -3170,7 +3250,7 @@ function App(){
         {usersList.map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
           <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{u.full_name||u.email}</p>
             <span style={{fontSize:10,color:'var(--text3)'}}>{u.email}</span> <span className="pill" style={{background:u.approved?'var(--gdim)':'var(--rdim)',color:u.approved?'var(--green)':'var(--red)',fontSize:8}}>{u.approved?'OK':'PENDING'}</span></div>
-          {!isCreator(u.email)&&<button onClick={async()=>{await _SB.from('profiles').update({approved:!u.approved}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:!x.approved}:x));setPendingUsers(p=>u.approved?[...p,{...u,approved:false}]:p.filter(x=>x.id!==u.id));toast(u.approved?'Revoked':'Approved')}} style={{padding:'4px 10px',borderRadius:6,background:u.approved?'var(--rdim)':'var(--gdim)',color:u.approved?'var(--red)':'var(--green)',fontSize:10,fontWeight:600}}>{u.approved?'Revoke':'Approve'}</button>}
+          {!isCreator(u.email)&&<button onClick={async()=>{try{await _SB.from('profiles').update({approved:!u.approved}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:!x.approved}:x));setPendingUsers(p=>u.approved?[...p,{...u,approved:false}]:p.filter(x=>x.id!==u.id));toast(u.approved?'Revoked':'Approved')}catch(e){toast('Error: '+e.message,'err')}}} style={{padding:'4px 10px',borderRadius:6,background:u.approved?'var(--rdim)':'var(--gdim)',color:u.approved?'var(--red)':'var(--green)',fontSize:10,fontWeight:600}}>{u.approved?'Revoke':'Approve'}</button>}
         </div>)}
       </div>}
 
@@ -3239,7 +3319,7 @@ function App(){
               <div style={{position:'relative'}}>
                 <input value={ac._tsName||ac.timesheetId||''} onChange={e=>{const v=e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],_tsName:v}}));if(v.length>=2&&gOk){clearTimeout(window['_ts'+em]);window['_ts'+em]=setTimeout(()=>{gDrive.search(v).then(r=>{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:r}}))}).catch(()=>{})},400)}else{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:[]}}))}}} placeholder="Type to search your Google Sheets..." style={{fontSize:12,padding:'10px'}}/>
                 {(ac._tsResults||[]).length>0&&<div style={{position:'absolute',left:0,right:0,zIndex:10,maxHeight:120,overflowY:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,marginTop:2,boxShadow:'0 8px 24px rgba(0,0,0,.4)'}}>
-                  {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>{setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}));
+                  {(ac._tsResults||[]).slice(0,5).map(f=><div key={f.id} onClick={()=>{setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}));
                     // Auto-load tabs immediately
                     toast('Loading tabs...','info');
                     gF('https://sheets.googleapis.com/v4/spreadsheets/'+f.id+'?fields=sheets.properties').then(r=>r.json()).then(meta=>{
@@ -3519,7 +3599,7 @@ function App(){
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
         <div style={{display:'flex',gap:8}}>
           <button onClick={connectG} style={{padding:'10px 18px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{gOk?'Reconnect':'Connect'}</button>
-          {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Google disconnected')}} style={{padding:'10px 18px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:600}}>Disconnect</button>}
+          {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');localStorage.removeItem('ad_gt_ts');localStorage.removeItem('ad_g_ever');clearInterval(window._gRefreshTimer);setGOk(false);toast('Google disconnected')}} style={{padding:'10px 18px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:600}}>Disconnect</button>}
         </div>
       </div>:
       <div className="card" style={{marginBottom:12}}>
@@ -4088,10 +4168,33 @@ function App(){
   </div>);
 }
 
+// ═══ ERROR BOUNDARY — never show a blank page again ═══
+class ErrorBoundary extends React.Component{
+  constructor(p){super(p);this.state={hasError:false,error:null,errorInfo:null}}
+  static getDerivedStateFromError(e){return{hasError:true,error:e}}
+  componentDidCatch(e,info){this.setState({errorInfo:info});console.error('[AutoDial Crash]',e,info)}
+  render(){
+    if(this.state.hasError){
+      return React.createElement('div',{style:{padding:40,textAlign:'center',background:'#07080d',color:'#e6edf3',minHeight:'100vh',fontFamily:'Inter,system-ui'}},
+        React.createElement('p',{style:{fontSize:48,margin:'0 0 8px'}},'⚠️'),
+        React.createElement('h2',{style:{fontSize:20,fontWeight:800,margin:'0 0 12px'}},'AutoDial Hit a Snag'),
+        React.createElement('p',{style:{fontSize:13,color:'#8b949e',margin:'0 0 20px',maxWidth:400,marginLeft:'auto',marginRight:'auto'}},
+          'Something went wrong. Your data is safe — just reload.'),
+        React.createElement('button',{onClick:()=>location.reload(),
+          style:{padding:'12px 28px',borderRadius:12,background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,border:'none',cursor:'pointer',marginBottom:16}},
+          '🔄 Reload App'),
+        React.createElement('details',{style:{textAlign:'left',maxWidth:500,margin:'0 auto',background:'#161b22',borderRadius:12,padding:16}},
+          React.createElement('summary',{style:{cursor:'pointer',fontSize:12,color:'#8b949e',marginBottom:8}},'Error details (for debugging)'),
+          React.createElement('pre',{style:{fontSize:10,color:'#f85149',whiteSpace:'pre-wrap',wordBreak:'break-all',margin:0}},
+            String(this.state.error)+'\n\n'+(this.state.errorInfo?.componentStack||'')))
+      )}
+    return this.props.children}
+}
+
 function initApp(){
   try{
     var root=ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App/>);
+    root.render(<ErrorBoundary><App/></ErrorBoundary>);
   }catch(e){
     console.error('[AutoDial] Render error:',e);
     document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center;color:#f87171"><h2>⚠️ AutoDial Error</h2><p style="color:#8b949e">'+e.message+'</p><button onclick="localStorage.clear();location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#6366f1;color:white;border:none;border-radius:10px;cursor:pointer;font-size:14px">Clear Data & Retry</button><button onclick="location.reload()" style="margin:16px 8px 0;padding:12px 24px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:10px;cursor:pointer;font-size:14px">Reload</button></div>';
