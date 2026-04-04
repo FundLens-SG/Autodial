@@ -114,9 +114,9 @@ button:active{transform:scale(.97)}
 @media(max-width:959px){.script-panel{display:none!important}.script-toggle{display:none!important}}
 .hdr-row1{display:flex;align-items:center;gap:10;padding:14px 14px 0}
 .hdr-row2{display:flex;align-items:center;justify-content:space-between;padding:8px 14px 8px;gap:10}
-.app-tabs{display:flex;padding:2px 10px 6px;gap:1px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-bottom:1px solid var(--border)}
+.app-tabs{display:flex;padding:6px 10px 8px;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-bottom:1px solid var(--border)}
 .app-tabs::-webkit-scrollbar{display:none}
-.app-tabs button{padding:8px 12px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;background:transparent;color:var(--text3)}
+.app-tabs button{flex:1 1 auto;min-width:72px;padding:14px 10px;border-radius:12px;font-size:13px;font-weight:700;white-space:nowrap;background:transparent;color:var(--text3)}
 .app-tabs button.active{background:var(--adim);color:var(--accent2)}
 .content-pad{padding:0 14px;padding-bottom:100px}
 .rank-chip{display:inline-flex;align-items:center;gap:6;padding:5px 12px 5px 8px;border-radius:10px;font-size:12px;font-weight:700}
@@ -443,7 +443,7 @@ window.gSheets={
       {method:'POST',body:JSON.stringify({values:[row]})});return true}catch(e){return false}
   },
   async meta(id){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json()).sheets?.map(function(s){return{id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}})||[]},async vals(id,range){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range))).json()).values||[]},async put(id,range,val){await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range)+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
-window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]}};
+window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
 window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spreadsheet'";if(q)fq+=" and name contains '"+q.replace(/'/g,"\\'")+"'";return(await(await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(fq)+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20')).json()).files||[]}};
 
 // ══════ AI PROMPTS — centralized ══════
@@ -1724,7 +1724,7 @@ function App(){
   useEffect(()=>{save('activeSession',session)},[session]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[totalStars,setTotalStars]=useState(load('totalStars')||0);
-  const[starBank,setStarBank]=useState(load('starBank')||0); // Lifetime accumulated stars
+  const[starBank,setStarBank]=useState(Math.round(load('starBank')||0)); // Lifetime accumulated stars
   const[rankStarsAwarded,setRankStarsAwarded]=useState(load('rankStarsAwarded')||[]); // Rank indices awarded stars this month
   // Monthly reset: on 1st of month, bank the stars and reset monthly tracking
   useEffect(()=>{
@@ -1732,7 +1732,7 @@ function App(){
     const thisMonth=new Date().toISOString().slice(0,7); // "2026-04"
     if(lastReset!==thisMonth){
       // New month! Bank current stars and reset
-      if(totalStars>0){setStarBank(p=>{const nb=p+totalStars;save('starBank',nb);return nb});
+      if(totalStars>0){setStarBank(p=>{const nb=Math.round((p||0)+totalStars);save('starBank',nb);return nb});
         toast('🏦 '+totalStars+' stars banked! New month, new grind.','info')}
       setTotalStars(0);save('totalStars',0);
       setRankStarsAwarded([]);save('rankStarsAwarded',[]);
@@ -1756,6 +1756,7 @@ function App(){
   const[waTemplates,setWaTemplates]=useState([]);
   const[calShares,setCalShares]=useState([]);
   const[calList,setCalList]=useState([]);
+  const[weekEvents,setWeekEvents]=useState([]); // Events for the coming week across shared/own calendars
   const[callLog,setCallLog]=useState([]);     // Current session replay
   const[apptDuration,setApptDuration]=useState(()=>{const v=load('apptDur');return(v&&v>=15&&v<=480)?v:60}); // default mins
   const[showWA,setShowWA]=useState(null);     // WhatsApp template modal
@@ -1809,6 +1810,9 @@ function App(){
   const[appointments,setAppointments]=useState(_dedupAppts(load('appts')||[]));
   const[incentives,setIncentives]=useState(load('incv')||[]); // {id,admin,leadName,type:'met'|'closed',amount,date(current!),apptDate(original),paid}
   const[apptSearch,setApptSearch]=useState('');
+  const[tipModal,setTipModal]=useState(null); // {appt, fromMet} — shown when closing an appointment
+  const[tipAmountInput,setTipAmountInput]=useState('');
+  const[celebration,setCelebration]=useState(null); // {amount, tier} — full-screen tip animation overlay
   const[tsSearch,setTsSearch]=useState('');
   const[leadSearch,setLeadSearch]=useState('');
   // Billing: fixed date of month (1-28)
@@ -2234,6 +2238,30 @@ function App(){
     // Admin: load shared calendars
     if(role==='admin')DB.getSharedCalendars(myEmail).then(setCalShares);
   },[]);
+
+  // ═══ In-app calendar view: auto-load this week's events ═══
+  // Main: their primary calendar + any shared calendars they own
+  // Admin: the calendars their manager has shared with them (via adminConfigs[myEmail].sharedCals)
+  useEffect(()=>{
+    // Also keep calList fresh whenever Google connects — needed for per-admin sharing UI
+    if(gOk&&role==='main'&&!calList.length)gCalShare.listCalendars().then(setCalList).catch(()=>{});
+    if(!gOk||!window.gCal?.loadWeek)return;
+    let calIds=['primary'];
+    if(role==='admin'){
+      // Use Main's shared calendars (from adminConfigs — Main configures which to share per-admin)
+      const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
+      if(myShares.length)calIds=myShares;
+      else if(calShares.length)calIds=calShares.map(c=>c.calendar_id).filter(Boolean);
+    }
+    gCal.loadWeek(calIds).then(evts=>{
+      // For admin with hideDetails flag, strip event titles/descriptions so only time blocks show
+      if(role==='admin'){
+        const hideMap={};(adminConfigs[myEmail]?.sharedCals||[]).forEach(c=>{if(c.hideDetails)hideMap[c.id]=true});
+        evts=evts.map(e=>hideMap[e._calId]?{...e,summary:'Busy',description:'',location:''}:e);
+      }
+      setWeekEvents(evts);
+    }).catch(e=>console.warn('[WeekEvents]',e?.message||e));
+  },[gOk,role,adminConfigs,calShares,myEmail,showAppt]);
 
   // ═══ LIVE SYNC — keep multiple devices in sync in real-time ═══
   useEffect(()=>{
@@ -2689,9 +2717,9 @@ function App(){
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
   const _showRank=true;
-  const _baseTabs=[['dial','Dial'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const _baseTabs=[['dial','📞 Dial'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const cbDue=cbQueue.filter(cb=>cb.status!=='called').length;
-  const callTabs=[['dial','Dial'+(cbDue?' 🔔'+cbDue:'')],['rank','📊 Rank'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const callTabs=[['dial','📞 Dial'+(cbDue?' 🔔'+cbDue:'')],['rank','📊 Rank'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
@@ -3277,16 +3305,33 @@ function App(){
             </div>
             <div style={{display:'flex',alignItems:'center',gap:4}}>
               <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
-              <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?')){
-                // Track deleted by PHONE (most reliable) + id
+              <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?\n\nThis will block all copies of this phone number from re-appearing.')){
+                // Track deleted by PHONE (most reliable) + id + phone-alone (nuke all variants)
                 const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
                 const delKey=a.phone+'_'+(a.apptDate||a.createdAt||'');
                 if(!delIds.includes(delKey))delIds.push(delKey);
                 if(a.id&&!delIds.includes(String(a.id)))delIds.push(String(a.id));
+                // CRITICAL: add phone alone to permanently block re-sync from cloud
+                if(a.phone&&!delIds.includes(a.phone))delIds.push(a.phone);
                 localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
                 // Sync deleted IDs to Supabase so other devices respect deletions
                 if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(delIds.slice(-500))},{onConflict:'admin_email'}).catch(function(){});
-                setAppointments(p=>p.filter(x=>x.id!==a.id))}}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
+                // Also scrub this phone from the admin's shared_appts record so their device stops re-publishing it
+                if(_SB&&a.admin&&a.phone){
+                  (async()=>{try{
+                    const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_appts_'+a.admin.toLowerCase()).single();
+                    if(r.data&&r.data.biz_name){
+                      const list=JSON.parse(r.data.biz_name)||[];
+                      const cleaned=list.filter(x=>x.phone!==a.phone);
+                      if(cleaned.length!==list.length){
+                        await _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+a.admin.toLowerCase(),biz_name:JSON.stringify(cleaned)},{onConflict:'admin_email'});
+                        console.log('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from '+a.admin);
+                      }
+                    }
+                  }catch(e){console.warn('[AutoDial] shared_appts scrub failed',e?.message||e)}})();
+                }
+                // Remove ALL copies of this phone from local state, not just the matched id
+                setAppointments(p=>p.filter(x=>x.phone!==a.phone))}}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
             </div>
           </div>
           
@@ -3321,20 +3366,8 @@ function App(){
                     paid:false}]);
                   toast(`+$${n(myCfg.metIncentive,10)} incentive for meeting ${a.name} (added to current billing cycle)`)}
                 if(k==='flykite')toast(a.name+' — fly kite 🪁');
-                // Closed → tip also uses CURRENT date for billing
-                if(k==='closed'){const isMain=role==='main';const promptLabel=isMain?'EFYC (Est. First Year Commission)':'Tip amount';
-                  const val=prompt(promptLabel+' for '+a.name+' ($):');const t=parseFloat(val)||0;
-                  // Store in separate fields: efyc for main, tip for admin
-                  const update=isMain?{efyc:t,followUp:'closed',followUpDate:now}:{tip:t,followUp:'closed',followUpDate:now};
-                  setAppointments(p=>p.map(x=>x.id===a.id?{...x,...update}:x));
-                  if(t>0){
-                    const incType=isMain?'efyc':'tip';
-                    setIncentives(p=>[...p,{id:Date.now(),admin:a.admin||myEmail,leadName:a.name,type:incType,
-                      amount:t,
-                      date:now, // CURRENT date = this billing cycle
-                      apptOriginalDate:a.createdAt,
-                      paid:false}]);
-                    toast(`$${t} ${isMain?'EFYC':'tip'} for ${a.name} (added to current billing cycle)`)}}
+                // Closed → open tip modal (replaces old prompt-based flow)
+                if(k==='closed'){setTipModal({appt:a,fromMet:false});setTipAmountInput('')}
               }} style={{flex:1,padding:'8px 2px',borderRadius:8,background:bg,color:c,fontSize:10,fontWeight:700}}>{l}</button>
             )}
           </div>}
@@ -3347,7 +3380,10 @@ function App(){
           </div>}
           
           {/* Met: show as completed */}
-          {a.followUp==='met'&&<p style={{fontSize:10,color:'var(--green)',marginTop:4}}>✓ Meeting completed {a.followUpDate?new Date(a.followUpDate).toLocaleDateString('en-SG'):''}</p>}
+          {a.followUp==='met'&&<div style={{marginTop:6,display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+            <p style={{margin:0,fontSize:10,color:'var(--green)'}}>✓ Meeting completed {a.followUpDate?new Date(a.followUpDate).toLocaleDateString('en-SG'):''}</p>
+            <button onClick={e=>{e.stopPropagation();setTipModal({appt:a,fromMet:true});setTipAmountInput('')}} style={{padding:'6px 12px',borderRadius:8,background:'linear-gradient(135deg,rgba(240,180,41,.15),rgba(240,180,41,.08))',color:'var(--gold)',fontSize:10,fontWeight:700,border:'1px solid rgba(240,180,41,.3)'}}>→ Closed 💰</button>
+          </div>}
           {a.followUp==='postponed'&&<p style={{fontSize:10,color:'var(--amber)',marginTop:4}}>⏳ Postponed {a.followUpDate?new Date(a.followUpDate).toLocaleDateString('en-SG'):''}</p>}
           
           {/* Edit fields (collapsed by default) */}
@@ -4137,6 +4173,54 @@ function App(){
               <input value={ac.bizName||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bizName:e.target.value}}))} placeholder="Business or full name" style={{fontSize:12,padding:'8px'}}/></div>
             <div style={{marginBottom:6}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>PayNow Number</label>
               <input value={ac.payNow||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],payNow:e.target.value}}))} placeholder="+65 9xxx xxxx" style={{fontSize:12,padding:'8px'}}/></div>
+            {/* ═══ Per-admin Calendar Sharing ═══ */}
+            {gOk&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                <label style={{fontSize:10,color:'#4285f4',fontWeight:700}}>📅 Share Calendars with {em.split('@')[0]}</label>
+                {!calList.length&&<button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>Load</button>}
+              </div>
+              {calList.filter(c=>c.accessRole==='owner').length===0&&<p style={{fontSize:10,color:'var(--text3)',margin:0}}>No owned calendars loaded yet</p>}
+              {calList.filter(c=>c.accessRole==='owner').map(c=>{
+                const current=(ac.sharedCals||[]).find(s=>s.id===c.id);
+                const isShared=!!current;
+                return<div key={c.id} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+                  <div style={{width:10,height:10,borderRadius:2,background:c.backgroundColor||'var(--accent)',flexShrink:0}}/>
+                  <span style={{flex:1,fontSize:11,color:isShared?'#f1f5f9':'var(--text3)',fontWeight:isShared?600:400,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.summary}</span>
+                  {isShared&&<label style={{display:'flex',alignItems:'center',gap:3,fontSize:9,color:'var(--text3)',cursor:'pointer'}}>
+                    <input type="checkbox" checked={!!current.hideDetails} onChange={e=>{
+                      const shares=[...(ac.sharedCals||[])];
+                      const idx=shares.findIndex(s=>s.id===c.id);
+                      if(idx>=0)shares[idx]={...shares[idx],hideDetails:e.target.checked};
+                      setAdminConfigs(p=>({...p,[em]:{...p[em],sharedCals:shares}}));
+                    }} style={{width:12,height:12,margin:0,cursor:'pointer'}}/>
+                    Busy only
+                  </label>}
+                  <button onClick={async()=>{
+                    const shares=[...(ac.sharedCals||[])];
+                    if(isShared){
+                      // Unshare: remove from list + revoke Google ACL
+                      const next=shares.filter(s=>s.id!==c.id);
+                      setAdminConfigs(p=>({...p,[em]:{...p[em],sharedCals:next}}));
+                      try{
+                        const acl=await gCalShare.getACL(c.id);
+                        const rule=acl.find(r=>r.scope?.value?.toLowerCase()===em.toLowerCase());
+                        if(rule)await gCalShare.unshare(c.id,rule.id);
+                        toast('Unshared "'+c.summary+'"');
+                      }catch(e){toast('Unshare failed: '+e.message,'err')}
+                    }else{
+                      // Share: add to list + grant Google ACL
+                      const ok=await gCalShare.share(c.id,em,'reader');
+                      if(ok){
+                        shares.push({id:c.id,name:c.summary,hideDetails:false});
+                        setAdminConfigs(p=>({...p,[em]:{...p[em],sharedCals:shares}}));
+                        toast('Shared "'+c.summary+'" with '+em);
+                      }else toast('Share failed — check Google permissions','err');
+                    }
+                  }} style={{padding:'4px 10px',borderRadius:6,background:isShared?'var(--rdim)':'var(--adim)',color:isShared?'var(--red)':'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0}}>{isShared?'Unshare':'Share'}</button>
+                </div>;
+              })}
+              {(ac.sharedCals||[]).length>0&&<p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>✓ {em.split('@')[0]} can see these calendars when booking. "Busy only" hides event titles/locations.</p>}
+            </div>}
             
           </div>}
         </div>)}
@@ -4198,12 +4282,12 @@ function App(){
               </div>})}
           </div>
         </div>
-        {isManageMode&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
+        {isManageMode&&isCreatorUser&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System {isCreatorUser&&'(Owner Edit)'}</p>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={{fontSize:10,color:'var(--text3)'}}>🏦 Star Bank:</span>
-              <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{starBank+totalStars} ⭐</span>
+              <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{Math.round(starBank+totalStars)} ⭐</span>
             </div>
           </div>
           {isCreatorUser?<>
@@ -4324,36 +4408,12 @@ function App(){
           {role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
       </div>}
 
-      {/* Calendar Sharing (Main only) */}
+      {/* Calendar defaults — sharing moved into Admin Pay (Per-Person) */}
       {isManageMode&&<div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Calendar Sharing</h3>
-        <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Share your Google Calendars with admins so they can see your availability.</p>
-        <div style={{marginBottom:8}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Calendar Defaults</h3>
+        <p style={{fontSize:10,color:'var(--text3)',marginBottom:8}}>Calendar sharing is configured per-admin in <b>Admin Pay (Per-Person)</b> above. Each admin can be given access to specific calendars, with the option to hide event details (show as "Busy" only).</p>
+        <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
           <input type="number" min="15" step="15" value={apptDuration} onChange={e=>setApptDuration(e.target.value===''?'':+e.target.value)} style={{textAlign:'center',width:120}}/></div>
-        {gOk&&<>
-          <button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:600,marginBottom:8}}>Load My Calendars</button>
-          {calList.length>0&&<div style={{marginBottom:10}}>
-            {calList.filter(c=>c.accessRole==='owner').map(c=><div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
-              <div style={{width:12,height:12,borderRadius:3,background:c.backgroundColor||'var(--accent)',flexShrink:0}}/>
-              <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{c.summary}</p></div>
-              <button onClick={()=>{
-                const email=prompt('Share with admin email:');if(!email||!email.includes('@'))return;
-                gCalShare.share(c.id,email,'reader').then(ok=>{
-                  if(ok){DB.shareCalendar(_user?.id,email,c.id,c.summary);toast(`Shared "${c.summary}" with ${email}`);setCalShares(p=>[...p,{shared_with_email:email,calendar_id:c.id,calendar_name:c.summary}])}
-                  else toast('Share failed','err')})
-              }} style={{padding:'5px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Share</button>
-            </div>)}
-          </div>}
-          {calShares.length>0&&<>
-            <p style={{fontSize:10,fontWeight:700,color:'var(--text2)',marginBottom:4}}>Active Shares:</p>
-            {calShares.map((s,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 0',fontSize:11}}>
-              <span style={{color:'var(--green)'}}>✓</span>
-              <span style={{color:'#f1f5f9'}}>{s.calendar_name||s.calendar_id}</span>
-              <span style={{color:'var(--text3)'}}>→ {s.shared_with_email}</span>
-            </div>)}
-          </>}
-        </>}
-        {!gOk&&<p style={{fontSize:11,color:'var(--text3)'}}>Connect Google to share calendars</p>}
       </div>}
 
       {/* WhatsApp Templates (Main) */}
@@ -4643,6 +4703,60 @@ function App(){
           </div>
           {apptLead?.notes&&<p style={{margin:'4px 0 0',fontSize:10,color:'var(--amber)'}}>📝 {apptLead.notes}</p>}
         </div>
+        {/* ═══ In-app calendar view — shows this week's events to prevent booking clashes ═══ */}
+        {gOk&&weekEvents.length>0&&(()=>{
+          // Group events by day
+          const byDay={};
+          weekEvents.forEach(ev=>{
+            const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
+            const dayKey=dt.toISOString().slice(0,10);
+            if(!byDay[dayKey])byDay[dayKey]=[];
+            byDay[dayKey].push(ev);
+          });
+          const days=Object.keys(byDay).sort();
+          // Detect clash with currently selected date+time
+          let clashEvent=null;
+          if(apptDate&&apptTime){
+            const sel=new Date(apptDate+'T'+apptTime);
+            const selEnd=new Date(sel.getTime()+(apptDuration||60)*60000);
+            clashEvent=weekEvents.find(ev=>{
+              const es=new Date(ev.start?.dateTime||ev.start?.date||0);
+              const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
+              return sel<ee&&selEnd>es;
+            });
+          }
+          return<div style={{marginBottom:10,padding:'10px',borderRadius:12,background:'rgba(66,133,244,.05)',border:'1px solid rgba(66,133,244,.2)',maxHeight:220,overflowY:'auto'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+              <p style={{margin:0,fontSize:11,fontWeight:800,color:'#4285f4',textTransform:'uppercase',letterSpacing:'.1em'}}>📅 This week's schedule</p>
+              <span style={{fontSize:9,color:'var(--text3)'}}>{weekEvents.length} events</span>
+            </div>
+            {clashEvent&&<div style={{padding:'6px 8px',borderRadius:8,background:'rgba(248,81,73,.12)',border:'1px solid rgba(248,81,73,.3)',marginBottom:6,fontSize:10,color:'var(--red)',fontWeight:700}}>
+              ⚠️ Clashes with: {clashEvent.summary||'Busy'} at {new Date(clashEvent.start?.dateTime||clashEvent.start?.date||0).toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})}
+            </div>}
+            {days.map(dayKey=>{
+              const dayDate=new Date(dayKey+'T00:00:00');
+              const label=dayDate.toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'});
+              const isToday=dayKey===new Date().toISOString().slice(0,10);
+              return<div key={dayKey} style={{marginBottom:6}}>
+                <p style={{margin:'0 0 3px',fontSize:10,fontWeight:700,color:isToday?'var(--accent2)':'var(--text2)'}}>{label}{isToday?' · Today':''}</p>
+                {byDay[dayKey].map((ev,i)=>{
+                  const es=new Date(ev.start?.dateTime||ev.start?.date||0);
+                  const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
+                  const timeStr=es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})+'–'+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'});
+                  return<div key={i} onClick={()=>{
+                    // Click an event to jump to its day (admin can see the busy slot clearly)
+                    setApptDate(dayKey);
+                  }} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',marginBottom:2,borderRadius:6,background:'rgba(66,133,244,.06)',cursor:'pointer',fontSize:10}}>
+                    <span className="mono" style={{color:'var(--text3)',minWidth:90}}>{timeStr}</span>
+                    <span style={{color:'#f1f5f9',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</span>
+                    {ev.location&&<span style={{color:'var(--text3)',fontSize:9,maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📍{ev.location}</span>}
+                  </div>;
+                })}
+              </div>;
+            })}
+          </div>;
+        })()}
+        {gOk&&!weekEvents.length&&<div style={{marginBottom:10,padding:'8px 10px',borderRadius:8,background:'var(--bg3)',fontSize:10,color:'var(--text3)',textAlign:'center'}}>📅 No events this week — you're free</div>}
         <p style={{margin:'0 0 10px',fontSize:12,color:'var(--text3)'}}>Add to Google Calendar</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
           <input type="date" value={apptDate} onChange={ev=>setApptDate(ev.target.value)} style={{colorScheme:'dark'}}/>
@@ -4685,6 +4799,79 @@ function App(){
         </div>
       </div>
     </div>}
+
+    {/* ═══ TIP INPUT MODAL — Met→Closed / Pending→Closed flow ═══ */}
+    {tipModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:101,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setTipModal(null)}>
+      <div onClick={e=>e.stopPropagation()} className="glass fi" style={{width:'100%',maxWidth:420,borderRadius:20,padding:'24px 22px',border:'1px solid rgba(240,180,41,.3)'}}>
+        <div style={{textAlign:'center',marginBottom:16}}>
+          <p style={{margin:0,fontSize:32}}>💰</p>
+          <h3 style={{margin:'6px 0 2px',fontSize:18,fontWeight:800,color:'var(--gold)'}}>{role==='main'?'EFYC Amount':'Tip Amount'}</h3>
+          <p style={{margin:0,fontSize:12,color:'var(--text3)'}}>{tipModal.fromMet?'Converting Met → Closed for ':'Closing deal for '}<b style={{color:'#f1f5f9'}}>{tipModal.appt.name}</b></p>
+        </div>
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:6}}>AMOUNT (SGD)</label>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 14px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.3)'}}>
+            <span style={{fontSize:22,fontWeight:800,color:'var(--gold)'}}>$</span>
+            <input type="number" min="0" step="1" value={tipAmountInput} onChange={e=>setTipAmountInput(e.target.value)} placeholder="0" autoFocus style={{flex:1,fontSize:24,fontWeight:800,color:'#f1f5f9',background:'transparent',border:'none',outline:'none',padding:0}}/>
+          </div>
+          {/* Quick-pick amount chips */}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
+            {[100,200,500,1000].map(v=><button key={v} onClick={()=>setTipAmountInput(String(v))} style={{padding:'6px 12px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:11,fontWeight:700,border:'1px solid var(--border)'}}>${v}</button>)}
+          </div>
+        </div>
+        {/* Live tier preview */}
+        {(()=>{const amt=parseFloat(tipAmountInput)||0;const tier=Math.min(10,Math.floor(amt/100));if(tier===0)return null;
+          const tierLabels=['','🎉 Nice!','🔥 Great!','⭐ Awesome!','💫 Stellar!','🌟 Brilliant!','🚀 Massive!','💎 Epic!','👑 Legendary!','🏆 Mythic!','🎆 GODLIKE!!'];
+          const tierColors=['','#22c55e','#10b981','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f59e0b'];
+          return<div style={{padding:'10px 14px',borderRadius:12,background:tierColors[tier]+'15',border:'1px solid '+tierColors[tier]+'40',marginBottom:14,textAlign:'center'}}>
+            <p style={{margin:0,fontSize:13,fontWeight:800,color:tierColors[tier]}}>{tierLabels[tier]}</p>
+            <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)'}}>Tier {tier}/10 · {'✨'.repeat(Math.min(tier,10))}</p>
+          </div>;
+        })()}
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>setTipModal(null)} style={{flex:1,padding:'12px',borderRadius:12,background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:700}}>Cancel</button>
+          <button onClick={()=>{
+            const amt=parseFloat(tipAmountInput)||0;
+            if(amt<=0){toast('Enter an amount','err');return}
+            const a=tipModal.appt;const isMain=role==='main';const now=new Date().toISOString();
+            const update=isMain?{efyc:amt,followUp:'closed',followUpDate:now}:{tip:amt,followUp:'closed',followUpDate:now};
+            setAppointments(p=>p.map(x=>x.id===a.id?{...x,...update}:x));
+            // If converting from Met, remove the old Met incentive (it'll be replaced by the EFYC/tip)
+            if(tipModal.fromMet){
+              setIncentives(p=>p.filter(inc=>!(inc.type==='met'&&inc.leadName===a.name&&(inc.admin||'').toLowerCase()===(a.admin||myEmail).toLowerCase())));
+            }
+            // Add the new EFYC/tip incentive — synced to admin's Pay tab via existing incv cloud sync
+            setIncentives(p=>[...p,{id:Date.now()+Math.random(),admin:a.admin||myEmail,leadName:a.name,type:isMain?'efyc':'tip',
+              amount:amt,date:now,apptOriginalDate:a.createdAt,paid:false}]);
+            // Trigger celebration overlay — tier scales with $100 steps up to $1000
+            const tier=Math.min(10,Math.floor(amt/100));
+            if(tier>0){setCelebration({amount:amt,tier,name:a.name});setTimeout(()=>setCelebration(null),Math.min(6000,2500+tier*350))}
+            else toast('$'+amt+' '+(isMain?'EFYC':'tip')+' added');
+            setTipModal(null);setTipAmountInput('');
+          }} style={{flex:2,padding:'12px',borderRadius:12,background:'linear-gradient(135deg,var(--gold),#d97706)',color:'#fff',fontSize:13,fontWeight:800,boxShadow:'0 4px 16px rgba(240,180,41,.3)'}}>💰 Mark Closed</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* ═══ TIP CELEBRATION OVERLAY — intensity scales by $100 up to $1000 ═══ */}
+    {celebration&&(()=>{const t=celebration.tier;
+      const tierColors=['','#22c55e','#10b981','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f59e0b'];
+      const tierLabels=['','Nice work!','Great close!','Awesome!','Stellar!','Brilliant!','Massive!','EPIC!','LEGENDARY!','MYTHIC!','GODLIKE!!'];
+      const tierEmojis=['','🎉','🔥','⭐','💫','🌟','🚀','💎','👑','🏆','🎆'];
+      const color=tierColors[t];const sparkleCount=t*6;
+      return<div style={{position:'fixed',inset:0,zIndex:200,pointerEvents:'none',display:'flex',alignItems:'center',justifyContent:'center',background:'radial-gradient(ellipse at center,'+color+'25,rgba(0,0,0,.9))'}}>
+        {/* Sparkle particles */}
+        {Array.from({length:sparkleCount}).map((_,i)=><div key={i} style={{position:'absolute',left:(50+(Math.random()-.5)*80)+'%',top:(50+(Math.random()-.5)*70)+'%',fontSize:14+Math.random()*18,animation:'confetti '+(1.5+Math.random()*2)+'s ease-out forwards',animationDelay:(Math.random()*.8)+'s'}}>{['✨','⭐','💫','🌟','💎'][i%5]}</div>)}
+        {/* Central card */}
+        <div style={{textAlign:'center',animation:'celebrate .6s cubic-bezier(.34,1.56,.64,1)',padding:'40px 32px',borderRadius:28,background:'linear-gradient(135deg,'+color+'30,rgba(0,0,0,.6))',border:'2px solid '+color,boxShadow:'0 0 100px '+color+'80, 0 0 40px '+color+'60, inset 0 1px 0 rgba(255,255,255,.15)',maxWidth:380,backdropFilter:'blur(20px)'}}>
+          <div style={{fontSize:64+t*4,marginBottom:8,filter:'drop-shadow(0 0 20px '+color+')',animation:'pulse 1.2s ease-in-out infinite'}}>{tierEmojis[t]}</div>
+          <p className="mono" style={{margin:'0 0 6px',fontSize:52+t*2,fontWeight:900,color:'#fff',textShadow:'0 0 30px '+color+',0 0 60px '+color+'80',letterSpacing:'-.02em'}}>${celebration.amount}</p>
+          <p style={{margin:'0 0 8px',fontSize:14+t,fontWeight:800,color,textTransform:'uppercase',letterSpacing:'.15em',textShadow:'0 2px 12px '+color+'80'}}>{tierLabels[t]}</p>
+          <p style={{margin:0,fontSize:12,color:'var(--text2)'}}>{role==='main'?'EFYC':'Tip'} for <b style={{color:'#f1f5f9'}}>{celebration.name}</b></p>
+          <p style={{margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>Tier {t}/10 · added to current billing cycle</p>
+        </div>
+      </div>;
+    })()}
 
     {/* ═══ WhatsApp Template Modal ═══ */}    {/* ═══ WhatsApp Template Modal ═══ */}
     {showWA&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowWA(null)}>
