@@ -1,18 +1,6 @@
 # 📞 AutoDial Pro — User Guide
 
-**The cold-calling power tool for Singapore financial consultants.**
-
----
-
-## 🚀 Getting Started
-
-### For Owners (Team Leaders)
-
-1. Open AutoDial at your GitHub Pages URL
-2. Log in with your email via Supabase
-3. You're automatically assigned the **Main** role as the Owner
-4. Go to **Settings** → connect Google → link your lead sheet
-5. Configure rank thresholds and milestone stars for your team
+**The cold-calling power tool
 
 ### For Mains (Callers)
 
@@ -22,7 +10,7 @@
 4. Go to **Leads** tab → **Fetch Leads** → start dialing!
 5. Earn ⭐ stars with every dial and rank up monthly
 
-### For Admins (Managers)
+### For Admins
 
 1. Log in → select **Admin** role
 2. Wait for Owner approval (one-time)
