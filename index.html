@@ -53,6 +53,7 @@ button:active{transform:scale(.97)}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes glow{0%,100%{box-shadow:var(--glow)}50%{box-shadow:0 0 60px rgba(99,102,241,.25)}}
+@keyframes glowEmerald{0%,100%{box-shadow:0 0 28px rgba(16,185,129,.5),0 6px 20px rgba(6,182,212,.35),inset 0 1px 0 rgba(255,255,255,.2)}50%{box-shadow:0 0 44px rgba(16,185,129,.75),0 8px 28px rgba(6,182,212,.5),inset 0 1px 0 rgba(255,255,255,.3)}}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 @keyframes confetti{0%{transform:translateY(0) rotate(0);opacity:1}100%{transform:translateY(-200px) rotate(720deg);opacity:0}}
 @keyframes celebrate{0%{transform:scale(.8);opacity:0}50%{transform:scale(1.05)}100%{transform:scale(1);opacity:1}}
@@ -445,11 +446,14 @@ window.gSheets={
 window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]}};
 window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spreadsheet'";if(q)fq+=" and name contains '"+q.replace(/'/g,"\\'")+"'";return(await(await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(fq)+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20')).json()).files||[]}};
 
-// ══════ GEMINI AI ══════
-window.geminiKey=function(){return localStorage.getItem('autodial_gemini')||localStorage.getItem('geminiKey')||''};
-window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)return null;
-  var today=new Date().toISOString().slice(0,10);
-  var prompt='You are a data analyst for Singapore insurance cold-calling. Analyze this spreadsheet and return a JSON mapping.\n'+
+// ══════ AI PROMPTS — centralized ══════
+// All Claude/Gemini prompts live here so they can be edited in one place
+// without touching business logic. Each prompt is a function that takes
+// its template variables and returns the final string.
+const PROMPTS={
+  // ─── Gemini: sheet analysis ───
+  geminiAnalyzeSheet:(today,headers,rows)=>
+    'You are a data analyst for Singapore insurance cold-calling. Analyze this spreadsheet and return a JSON mapping.\n'+
     'TODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 30):\n'+rows.slice(0,30).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
     '\n\nIMPORTANT: This sheet may contain MULTIPLE BATCHES of leads from different providers pasted together.\n'+
     'Signs of misalignment: phone numbers suddenly appear in a different column, names shift columns, some rows have data in columns that were previously empty.\n'+
@@ -487,16 +491,13 @@ window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)r
     '  * If genuinely UNSURE, set status="review" and put full text in notes\n'+
     '- If status is ambiguous or you are unsure, set status="pending" and put the full text in notes for user review\n'+
     '- Return statuses for ALL '+rows.length+' data rows, not just the sample\n'+
-    '- For rows beyond the sample, set status="pending" and notes="" unless you can infer from the pattern';
-  try{var r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:16000,temperature:.05}})});
-    var d=await r.json();if(d.error){console.warn('[AI]',d.error.message);return null}var t=(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();return JSON.parse(t)}catch(e){console.warn('[AI Parse]',e.message);return null}};
+    '- For rows beyond the sample, set status="pending" and notes="" unless you can infer from the pattern',
 
-// ═══ CLAUDE AI — sheet analysis via Cloudflare Worker proxy ═══
-window.claudeAnalyzeSheet=async function(headers,rows){
-  if(!WORKER_URL)return null;
-  var today=new Date().toISOString().slice(0,10);
-  var sysPrompt='You are a data analyst for Singapore insurance cold-calling. Analyze spreadsheets and return ONLY valid JSON (no markdown, no backticks, no explanation).';
-  var userPrompt='Analyze this spreadsheet.\nTODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 30):\n'+rows.slice(0,30).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
+  // ─── Claude: sheet analysis (via Cloudflare Worker) ───
+  claudeAnalyzeSheetSystem:
+    'You are a data analyst for Singapore insurance cold-calling. Analyze spreadsheets and return ONLY valid JSON (no markdown, no backticks, no explanation).',
+  claudeAnalyzeSheetUser:(today,headers,rows)=>
+    'Analyze this spreadsheet.\nTODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 30):\n'+rows.slice(0,30).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
     '\n\nThis sheet may contain MULTIPLE BATCHES from different providers pasted together.\n'+
     'Signs: phone numbers shift columns, names suddenly in different positions, format changes mid-sheet.\n\n'+
     'Return JSON:\n{\n  "columns": {\n    "phone": <0-based col index or -1>,\n    "first_name": <index or -1>,\n    "last_name": <index or -1>,\n    "full_name": <index or -1>,\n    "email": <index or -1>,\n    "age": <index or -1>,\n    "nric": <index or -1>,\n    "birthday": <index or -1>,\n    "race": <index or -1>,\n    "gender": <index or -1>,\n    "status": <index or -1>,\n    "remarks": <index or -1>\n  },\n'+
@@ -509,7 +510,68 @@ window.claudeAnalyzeSheet=async function(headers,rows){
     '- Remarks: "NI"/"not interested"/"WN"/"wrong number"/"deceased"/"DNC" → ni\n'+
     '  "NP"/"no pick"/"NPx2" → np (extract count). "CB"/"callback" → cb. "appt set"/date+time+location → set\n'+
     '- Return statuses for ALL '+rows.length+' rows. Rows beyond sample: status="pending", notes=""\n'+
-    '- If a batch has different column layout, map the PRIMARY batch (first/largest)';
+    '- If a batch has different column layout, map the PRIMARY batch (first/largest)',
+
+  // ─── Claude: post-process (column validation + remark classification + name extraction) ───
+  claudePostProcessSystem:
+    'You validate cold-calling lead data for Singapore insurance consultants. Return ONLY valid JSON.',
+  claudePostProcess:(colMap,headers,rawRows,unrec,nameless)=>{
+    var p='You are a Singapore insurance cold-calling data assistant.\n\n';
+    if(colMap&&headers){
+      p+='TASK 1: Validate this column mapping and rate confidence 1-10 for each.\n'+
+        'Headers: '+JSON.stringify(headers.slice(0,15))+'\nSample row 1: '+JSON.stringify((rawRows[0]||[]).slice(0,15))+'\nSample row 2: '+JSON.stringify((rawRows[1]||[]).slice(0,15))+'\n'+
+        'Current mapping: '+JSON.stringify(colMap)+'\n\n';
+    }
+    if(unrec.length){
+      p+='TASK 2: Classify these unrecognized remarks into statuses.\n'+
+        unrec.slice(0,50).map(function(u){return'['+u.idx+'] "'+u.remark+'"'}).join('\n')+'\n\n';
+    }
+    if(nameless.length){
+      p+='TASK 3: Extract the person\'s name from these raw rows (name was not auto-detected).\n'+
+        nameless.slice(0,30).map(function(n){return'['+n.idx+'] phone='+n.phone+' row='+JSON.stringify(n.row)}).join('\n')+'\n\n';
+    }
+    p+='Return ONLY JSON (no markdown):\n{\n'+
+      '  "column_fixes": {"phone":<new idx or null>, "first_name":<or null>, ...only include fixes, null=keep current},\n'+
+      '  "confidence": {"phone":8, "first_name":7, ...1-10 for each mapped column},\n'+
+      '  "low_confidence_columns": ["field1","field2"], // any column scored <6\n'+
+      '  "remark_statuses": [{"idx":0, "status":"ni|np|cb|set|pending", "reason":"short explanation"}],\n'+
+      '  "names": [{"idx":0, "name":"extracted name"}],\n'+
+      '  "warnings": ["any issues found"]\n}';
+    return p;
+  },
+
+  // ─── Claude: dedup ───
+  claudeDedupSystem:
+    'Identify duplicate leads. Return ONLY JSON array of duplicate groups.',
+  claudeDedup:(chunk)=>
+    'Find duplicates in this lead list (same person, different format/spelling).\n'+
+    JSON.stringify(chunk)+'\n\nReturn JSON: {"duplicates":[[idx1,idx2],[idx3,idx4,idx5]]} — groups of indices that are the same person.\nOnly flag CLEAR duplicates (same phone, or very similar name+phone). Return empty array if none found.',
+
+  // ─── Claude: learn pattern from remark→status correction ───
+  claudeLearnPatternSystem:
+    'Extract generalizable patterns from remark→status corrections for Singapore cold-calling.',
+  claudeLearnPattern:(remark,status,learnedPatterns)=>
+    'The user corrected this remark to status "'+status+'":\nRemark: "'+remark+'"\n\n'+
+    'Existing patterns: '+JSON.stringify(Object.keys(learnedPatterns||{}).slice(0,20))+'\n\n'+
+    'Return JSON: {"patterns":["pattern1","pattern2"]} — list of lowercase text patterns that should map to "'+status+'" in the future.\n'+
+    'Include the exact remark plus any reasonable generalizations (e.g. "refund" → also add "refund case", "refund pending").\n'+
+    'Only return patterns you are confident about. Max 5 patterns.'
+};
+
+// ══════ GEMINI AI ══════
+window.geminiKey=function(){return localStorage.getItem('autodial_gemini')||localStorage.getItem('geminiKey')||''};
+window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)return null;
+  var today=new Date().toISOString().slice(0,10);
+  var prompt=PROMPTS.geminiAnalyzeSheet(today,headers,rows);
+  try{var r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:16000,temperature:.05}})});
+    var d=await r.json();if(d.error){console.warn('[AI]',d.error.message);return null}var t=(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();return JSON.parse(t)}catch(e){console.warn('[AI Parse]',e.message);return null}};
+
+// ═══ CLAUDE AI — sheet analysis via Cloudflare Worker proxy ═══
+window.claudeAnalyzeSheet=async function(headers,rows){
+  if(!WORKER_URL)return null;
+  var today=new Date().toISOString().slice(0,10);
+  var sysPrompt=PROMPTS.claudeAnalyzeSheetSystem;
+  var userPrompt=PROMPTS.claudeAnalyzeSheetUser(today,headers,rows);
   try{
     var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:8192,system:sysPrompt,messages:[{role:'user',content:userPrompt}]})});
@@ -531,31 +593,11 @@ window.claudePostProcess=async function(leads,headers,rawRows,colMap){
       nameless.push({idx:i,phone:l.phone,row:rowData.map(function(v){return String(v||'').slice(0,40)}).slice(0,10)})}
   });
   if(!unrec.length&&!nameless.length&&colMap)return leads; // Nothing to fix
-  var prompt='You are a Singapore insurance cold-calling data assistant.\n\n';
-  // Feature 1+4: Column validation + confidence
-  if(colMap&&headers){
-    prompt+='TASK 1: Validate this column mapping and rate confidence 1-10 for each.\n'+
-      'Headers: '+JSON.stringify(headers.slice(0,15))+'\nSample row 1: '+JSON.stringify((rawRows[0]||[]).slice(0,15))+'\nSample row 2: '+JSON.stringify((rawRows[1]||[]).slice(0,15))+'\n'+
-      'Current mapping: '+JSON.stringify(colMap)+'\n\n'}
-  // Feature 2: Batch remark classification
-  if(unrec.length){
-    prompt+='TASK 2: Classify these unrecognized remarks into statuses.\n'+
-      unrec.slice(0,50).map(function(u){return'['+u.idx+'] "'+u.remark+'"'}).join('\n')+'\n\n'}
-  // Feature 3: Name extraction
-  if(nameless.length){
-    prompt+='TASK 3: Extract the person\'s name from these raw rows (name was not auto-detected).\n'+
-      nameless.slice(0,30).map(function(n){return'['+n.idx+'] phone='+n.phone+' row='+JSON.stringify(n.row)}).join('\n')+'\n\n'}
-  prompt+='Return ONLY JSON (no markdown):\n{\n'+
-    '  "column_fixes": {"phone":<new idx or null>, "first_name":<or null>, ...only include fixes, null=keep current},\n'+
-    '  "confidence": {"phone":8, "first_name":7, ...1-10 for each mapped column},\n'+
-    '  "low_confidence_columns": ["field1","field2"], // any column scored <6\n'+
-    '  "remark_statuses": [{"idx":0, "status":"ni|np|cb|set|pending", "reason":"short explanation"}],\n'+
-    '  "names": [{"idx":0, "name":"extracted name"}],\n'+
-    '  "warnings": ["any issues found"]\n}';
+  var prompt=PROMPTS.claudePostProcess(colMap,headers,rawRows,unrec,nameless);
   try{
     var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:4096,
-        system:'You validate cold-calling lead data for Singapore insurance consultants. Return ONLY valid JSON.',
+        system:PROMPTS.claudePostProcessSystem,
         messages:[{role:'user',content:prompt}]})});
     if(!r.ok)return leads;
     var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
@@ -588,9 +630,8 @@ window.claudeDedup=async function(leads){
   try{
     var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:2048,
-        system:'Identify duplicate leads. Return ONLY JSON array of duplicate groups.',
-        messages:[{role:'user',content:'Find duplicates in this lead list (same person, different format/spelling).\n'+
-          JSON.stringify(chunk)+'\n\nReturn JSON: {"duplicates":[[idx1,idx2],[idx3,idx4,idx5]]} — groups of indices that are the same person.\nOnly flag CLEAR duplicates (same phone, or very similar name+phone). Return empty array if none found.'}]})});
+        system:PROMPTS.claudeDedupSystem,
+        messages:[{role:'user',content:PROMPTS.claudeDedup(chunk)}]})});
     if(!r.ok)return{dupes:[],leads:leads};
     var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
     var result=JSON.parse(text);
@@ -611,12 +652,8 @@ window.claudeLearnPattern=async function(remark,status,learnedPatterns){
   try{
     var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:512,
-        system:'Extract generalizable patterns from remark→status corrections for Singapore cold-calling.',
-        messages:[{role:'user',content:'The user corrected this remark to status "'+status+'":\nRemark: "'+remark+'"\n\n'+
-          'Existing patterns: '+JSON.stringify(Object.keys(learnedPatterns||{}).slice(0,20))+'\n\n'+
-          'Return JSON: {"patterns":["pattern1","pattern2"]} — list of lowercase text patterns that should map to "'+status+'" in the future.\n'+
-          'Include the exact remark plus any reasonable generalizations (e.g. "refund" → also add "refund case", "refund pending").\n'+
-          'Only return patterns you are confident about. Max 5 patterns.'}]})});
+        system:PROMPTS.claudeLearnPatternSystem,
+        messages:[{role:'user',content:PROMPTS.claudeLearnPattern(remark,status,learnedPatterns)}]})});
     if(!r.ok)return null;
     var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
     var result=JSON.parse(text);
@@ -1762,7 +1799,14 @@ function App(){
       return updated});
     toast('Learned: "'+remark.slice(0,30)+'…" = '+status.toUpperCase())};
   // Appointments tracking
-  const[appointments,setAppointments]=useState(load('appts')||[]);
+  // Dedup helper: groups duplicates by leadId (preferred) or phone+apptDate+followUp, keeping best-status/newest
+  const _dedupAppts=(arr)=>{const map=new Map();const prio={closed:4,met:3,postponed:2,pending:1,flykite:0};
+    (arr||[]).forEach(a=>{if(!a)return;const key=a.leadId||((a.phone||'')+'|'+(a.apptDate||'')+'|'+(a.followUp||'pending'));
+      const ex=map.get(key);if(!ex){map.set(key,a);return}
+      const pA=prio[a.followUp]??-1,pE=prio[ex.followUp]??-1;
+      if(pA>pE||(pA===pE&&new Date(a.followUpDate||a.createdAt||0)>new Date(ex.followUpDate||ex.createdAt||0)))map.set(key,a)});
+    return Array.from(map.values())};
+  const[appointments,setAppointments]=useState(_dedupAppts(load('appts')||[]));
   const[incentives,setIncentives]=useState(load('incv')||[]); // {id,admin,leadName,type:'met'|'closed',amount,date(current!),apptDate(original),paid}
   const[apptSearch,setApptSearch]=useState('');
   const[tsSearch,setTsSearch]=useState('');
@@ -1804,9 +1848,19 @@ function App(){
   // Safe numeric accessor — config values may be '' (empty string) while user is typing
   const n=(v,def)=>{try{return v===''||v===null||v===undefined||isNaN(+v)?def:+v}catch(e){return def}};
 
-  useEffect(()=>{save('data',{leads,cfg});cloudSave('data',{leads,cfg});
+  useEffect(()=>{const _cfgTs=Date.now();save('data',{leads,cfg,_cfgTs});cloudSave('data',{leads,cfg,_cfgTs});
     // Hard sync leads count + cfg to Supabase
     if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'usercfg_'+_user.email.toLowerCase(),biz_name:JSON.stringify({...cfg,_leadsCount:leads.length,_lastSync:Date.now()})},{onConflict:'admin_email'}).catch(function(){})}},[leads,cfg]);
+
+  // Publish calling script + reference notes to shared_script (Main only, auto-syncs to all admins)
+  useEffect(()=>{
+    if(role!=='main'||!_SB||!window._cloudReady)return;
+    if(!cfg.callingScript&&!cfg.refNotes)return; // nothing to publish
+    const payload={html:cfg.callingScript||'',notes:cfg.refNotes||'',ts:Date.now()};
+    _SB.from('autodial_admin_config').upsert({admin_email:'shared_script',biz_name:JSON.stringify(payload)},{onConflict:'admin_email'})
+      .then(()=>console.log('[AutoDial] Published calling script to all admins'))
+      .catch(function(e){console.warn('[AutoDial] script publish failed',e?.message||e)});
+  },[cfg.callingScript,cfg.refNotes,role]);
 
   // Auto re-fetch if cached leads are stale (no notes)
   useEffect(()=>{
@@ -1947,7 +2001,7 @@ function App(){
           try{
             const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_script').single();
             if(sr.data&&sr.data.biz_name){const s=JSON.parse(sr.data.biz_name);
-              if(s.html&&!localStorage.getItem('scriptHtml')){setScriptHtml(s.html);if(s.notes)setNotesHtml(s.notes);console.log('[AutoDial] Loaded shared script from Main')}}
+              if(s.html){setCfg(p=>({...p,callingScript:s.html,refNotes:s.notes||p.refNotes||''}));console.log('[AutoDial] Loaded shared script from Main')}}
           }catch(e){}
         }
         // Load shared appointments from Main
@@ -1959,7 +2013,7 @@ function App(){
                 const existIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
                 const newAppts=shared.filter(a=>{return!existIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds)});
                 if(newAppts.length)console.log('[AutoDial] Loaded '+newAppts.length+' shared appointments');
-                return newAppts.length?[...prev,...newAppts]:prev})}}}catch(e){}
+                return newAppts.length?_dedupAppts([...prev,...newAppts]):prev})}}}catch(e){}
           // Load session log from Supabase
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
@@ -1986,7 +2040,7 @@ function App(){
             if(ar.data&&ar.data.biz_name){const myA=JSON.parse(ar.data.biz_name);
               if(myA.length){const delIds=_getDelIds();
                 const filtered=myA.filter(a=>!isApptDeleted(a,delIds));
-                if(filtered.length>appointments.length){setAppointments(filtered);console.log('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
+                if(filtered.length>appointments.length){setAppointments(_dedupAppts(filtered));console.log('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
               if(sl.length>sessionLog.length){setSessionLog(sl);console.log('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}}catch(e){}
@@ -2003,15 +2057,19 @@ function App(){
             const cl=cloud.leads.leads||[];
             const validated=validateStatuses(cl);
             setLeads(validated);
-            if(cloud.leads.cfg)setCfg(prev=>({...prev,...cloud.leads.cfg}));
+            // Only override cfg if cloud is newer than local (fixes rank editor reset bug)
+            const _cloudTs=cloud.leads._cfgTs||0,_localTs=stored._cfgTs||0;
+            if(cloud.leads.cfg&&(_cloudTs>_localTs||!stored.cfg))setCfg(prev=>({...prev,...cloud.leads.cfg}));
             toast('☁️ '+cl.length+' leads synced from cloud','info');
           }else if(cloud.leads?.cfg&&!cfg.sheetId){
-            setCfg(prev=>({...prev,...cloud.leads.cfg}));
+            // Bootstrap: only pull cloud cfg if local cfg is genuinely newer or missing
+            const _cloudTs=cloud.leads._cfgTs||0,_localTs=stored._cfgTs||0;
+            if(_cloudTs>_localTs||!stored.cfg)setCfg(prev=>({...prev,...cloud.leads.cfg}));
           }
           if(cloud.adminConfigs&&!Object.keys(adminConfigs).length)setAdminConfigs(cloud.adminConfigs);
           if(cloud.sessions?.length&&!sessionLog.length)setSessionLog(cloud.sessions);
           if(cloud.appointments?.length&&!appointments.length){const _dIds=_getDelIds();
-            const _filt=cloud.appointments.filter(a=>!isApptDeleted(a,_dIds));if(_filt.length)setAppointments(_filt)}
+            const _filt=cloud.appointments.filter(a=>!isApptDeleted(a,_dIds));if(_filt.length)setAppointments(_dedupAppts(_filt))}
           if(cloud.incentives?.length&&!incentives.length)setIncentives(cloud.incentives);
           if(cloud.payments?.length&&!paymentHistory.length)setPaymentHistory(cloud.payments);
           if(cloud.userState){
@@ -2145,7 +2203,7 @@ function App(){
                 followUpDate:a.follow_up_date||null,
                 location:'',industry:'',remarks:'',gender:'',age:''
               })});
-            return merged});
+            return _dedupAppts(merged)});
         }
       }catch(e){console.warn('[HardSync]',e.message)}
     })();
@@ -2223,7 +2281,7 @@ function App(){
           const filtered=ap.filter(a=>!isApptDeleted(a,delIds));
           const localIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
           const newFromCloud=filtered.filter(a=>!localIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds));
-          return newFromCloud.length?[...prev,...newFromCloud]:prev});
+          return newFromCloud.length?_dedupAppts([...prev,...newFromCloud]):prev});
         const ts=p('ts_');if(ts?.ts)setTotalSets(prev=>ts.ts>prev?ts.ts:prev);
 
         window._lastPull=Date.now();
@@ -2411,10 +2469,14 @@ function App(){
       if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=n(myCfg.npMax,5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
       else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
       else if(status==='set'){u.status='set';syncSheet(u,'set');
-        // Auto-create appointment entry
-        setAppointments(p=>[...p,{id:Date.now()+Math.random(),leadId:u.id,name:u.name,phone:u.phone,gender:u.gender||detectGender(u)||'',age:u.age||'',
-          apptDate:'',apptTime:'',location:'',industry:'',remarks:'',
-          followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail}])}
+        // Auto-create appointment entry — but dedup: don't create if an open (pending) appt already exists for this lead
+        setAppointments(p=>{
+          const existing=p.find(a=>(a.leadId===u.id||(a.phone===u.phone&&a.phone))&&(!a.followUp||a.followUp==='pending'));
+          if(existing)return p; // lead already has an open appointment — don't duplicate
+          return[...p,{id:Date.now()+Math.random(),leadId:u.id,name:u.name,phone:u.phone,gender:u.gender||detectGender(u)||'',age:u.age||'',
+            apptDate:'',apptTime:'',location:'',industry:'',remarks:'',
+            followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail}];
+        })}
       else if(status==='ni'){u.status='ni';syncSheet(u,'ni')}else u.status=status;return u}));
     // Log action for session replay
     if(cur)DB.logAction(session?.id||null,_user?.id,status,cur.name,cur.phone,{npCount:cur.npCount,cbDate:extra.cbDate,cbTime:extra.cbTime});
@@ -2927,10 +2989,11 @@ function App(){
         <button onClick={doUndo} style={{padding:'6px 14px',borderRadius:8,background:'var(--amdim)',color:'var(--amber)',fontSize:11,fontWeight:700,flexShrink:0,border:'1px solid rgba(240,180,41,.3)'}}>↩️ Undo</button>
       </div>}
 
-      {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:12,borderColor:'rgba(99,102,241,.2)'}}>
-        <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent)',textTransform:'uppercase',letterSpacing:'.1em'}}>Quick note (optional)</p>
-        <input value={postCallNote} onChange={e=>setPostCallNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')finishPostCall()}} placeholder="Receptiveness, tone, objections..." style={{marginBottom:8,fontSize:12}} autoFocus/>
-        <button onClick={finishPostCall} style={{width:'100%',padding:'12px',background:postCallNote.trim()?'linear-gradient(135deg,var(--accent),#8b5cf6)':'var(--adim)',color:postCallNote.trim()?'#fff':'var(--accent2)',fontSize:13,fontWeight:700,borderRadius:12}}>{postCallNote.trim()?'💾 Save & Next Lead →':'➡️ Next Lead'}</button>
+      {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:12,borderColor:'rgba(16,185,129,.3)',background:'linear-gradient(135deg,rgba(16,185,129,.05),rgba(6,182,212,.03))'}}>
+        <button onClick={finishPostCall} style={{width:'100%',padding:'18px',background:'linear-gradient(135deg,#10b981 0%,#06b6d4 50%,#3b82f6 100%)',color:'#fff',fontSize:17,fontWeight:800,borderRadius:14,textTransform:'uppercase',letterSpacing:'.08em',boxShadow:'0 0 28px rgba(16,185,129,.5),0 6px 20px rgba(6,182,212,.35),inset 0 1px 0 rgba(255,255,255,.2)',border:'1px solid rgba(255,255,255,.15)',textShadow:'0 1px 2px rgba(0,0,0,.3)',marginBottom:10,animation:'glowEmerald 2.5s ease-in-out infinite'}}>➡️  NEXT LEAD  →</button>
+        <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.1em'}}>Quick note (optional)</p>
+        <input value={postCallNote} onChange={e=>setPostCallNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')finishPostCall()}} placeholder="Receptiveness, tone, objections..." style={{marginBottom:0,fontSize:12}} autoFocus/>
+        {postCallNote.trim()&&<p style={{margin:'6px 0 0',fontSize:10,color:'var(--green)',textAlign:'center'}}>💾 Note will be saved when you tap Next Lead</p>}
       </div>}
 
       {/* ═══ NEXT LEAD PREVIEW ═══ */}
@@ -3105,7 +3168,15 @@ function App(){
           </div>
           <div style={{flex:1}}>
             <p style={{margin:0,fontSize:13,fontWeight:isActive?800:600,color:isActive?r.color:'var(--text2)'}}>{r.label}</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{isAdminRank?(tierMin>0?'≥'+tierMin+' all-time appts · $'+(myCfg.payRates||[8,10,12,16,20,25])[Math.min(i,(myCfg.payRates||[]).length-1)]+'/hr':'Start · base tier · $'+(myCfg.payRates||[8])[0]+'/hr'):(r.cumStars>0?'≥'+r.cumStars+' appts/month':'Start')+(!isAdminRank?' · '+(r.starsNeeded<999?r.starsNeeded+' ⭐ to next':'∞ glory'):'')}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{(()=>{
+              if(isAdminRank)return tierMin>0?'≥'+tierMin+' all-time appts · $'+(myCfg.payRates||[8,10,12,16,20,25])[Math.min(i,(myCfg.payRates||[]).length-1)]+'/hr':'Start · base tier · $'+(myCfg.payRates||[8])[0]+'/hr';
+              const thresholds=cfg.starThresholds||[0,5,10,15,25,35,50];
+              const threshold=thresholds[i]||0;
+              const base=threshold>0?'≥'+threshold+' appts/month':'Start';
+              if(i===ML_RANKS.length-1)return base+' · ∞ glory';
+              if(monthlyAppts>=threshold)return base+' · ✓ unlocked';
+              return base+' · '+(threshold-monthlyAppts)+' ⭐ to reach';
+            })()}</p>
           </div>
           {isActive&&<span className="pill" style={{background:r.color+'20',color:r.color}}>NOW</span>}
           {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
@@ -3136,17 +3207,7 @@ function App(){
 
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {tab==='appts'&&<div className='content-pad'>
-      {appointments.length===0&&<div style={{textAlign:'center',padding:'40px 20px'}}>
-        <p style={{fontSize:40,margin:'0 0 12px'}}>📅</p>
-        <p style={{fontSize:14,fontWeight:700,color:'#f1f5f9',margin:'0 0 6px'}}>No appointments yet</p>
-        <p style={{fontSize:12,color:'var(--text3)',margin:0}}>Set appointments during calls — they'll appear here</p>
-      </div>}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-      {appointments.length===0&&<div style={{textAlign:'center',padding:'48px 20px'}}>
-        <p style={{fontSize:36,margin:'0 0 12px'}}>📅</p>
-        <h3 style={{fontSize:18,fontWeight:800,color:'#f1f5f9',margin:'0 0 8px'}}>No appointments yet</h3>
-        <p style={{fontSize:12,color:'var(--text3)'}}>Set appointments during your calling sessions and they'll appear here</p>
-      </div>}
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
@@ -3855,12 +3916,12 @@ function App(){
 
     {tab==='settings'&&<div className='content-pad'>
       {/* Creator user management */}
-      {role!=='admin'&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 10px'}}>
+      {isManageMode&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 10px'}}>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
         <span style={{fontSize:10,fontWeight:700,color:'var(--accent2)',letterSpacing:1}}>👥 TEAM MANAGEMENT</span>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
       </div>}
-      {isCreatorUser&&<div className="card" style={{marginBottom:12}}>
+      {isCreatorUser&&isManageMode&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
           <h3 style={{fontSize:14,fontWeight:700,color:'var(--accent2)'}}>👥 Users</h3>
           <button onClick={async()=>{try{toast('Loading users...','info');const r=await _SB.from('profiles').select('*');if(r.error){toast('DB error: '+r.error.message,'err');return}setUsersList(r.data||[]);setPendingUsers((r.data||[]).filter(u=>!u.approved&&!isCreator(u.email)));toast((r.data||[]).length+' users loaded')}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'5px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Load</button>
@@ -3875,7 +3936,7 @@ function App(){
       
 
             {/* Per-admin config */}
-      {role==='main'&&<div className="card" style={{marginBottom:12}}>
+      {isManageMode&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>👥 Admin Pay (Per-Person)</h3>
         <div style={{display:'flex',gap:6,marginBottom:10}}>
           <div style={{flex:1,position:'relative'}}>
@@ -4083,7 +4144,7 @@ function App(){
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
-        {role!=='admin'?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>☁️ Sync All</button></div>:<>
+        {isManageMode?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>☁️ Sync All</button></div>:<>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>Call Rules</h3>
         {adminConfigs[myEmail]&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
           <p style={{fontSize:10,fontWeight:700,color:'var(--green)',margin:'0 0 4px'}}>☁️ SYNCED FROM MANAGER</p>
@@ -4101,7 +4162,7 @@ function App(){
         </div>}
         </>}
         {/* DNC Hours - Main only edits */}
-        {role!=='admin'?<div style={{marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+        {isManageMode?<div style={{marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
             <div>
               <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>⛔ DNC Hours</p>
@@ -4137,7 +4198,7 @@ function App(){
               </div>})}
           </div>
         </div>
-        {role!=='admin'&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
+        {isManageMode&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System {isCreatorUser&&'(Owner Edit)'}</p>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -4173,7 +4234,7 @@ function App(){
               </div>})}
           </div>}
         </div>}
-        {role!=='admin'&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+        {isManageMode&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div>
             <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
             <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-convert to NI after this many No Picks</p>
@@ -4184,7 +4245,7 @@ function App(){
             <button onClick={()=>setCfg(s=>({...s,npMax:Math.min(20,(s.npMax||5)+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
           </div>
         </div>}
-        {role==='main'&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+        {isManageMode&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Cost per lead</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI in Analytics</p></div>
           <div style={{display:'flex',alignItems:'center',gap:4}}>
             <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
@@ -4243,7 +4304,7 @@ function App(){
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
         <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
-          {role!=='admin'&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
+          {isManageMode&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
           {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
@@ -4259,12 +4320,12 @@ function App(){
         <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
         <input value={localStorage.getItem('autodial_claude_key')||''} onChange={e=>{localStorage.setItem('autodial_claude_key',e.target.value.trim());e.target.parentElement.querySelector('.ck-status').textContent=e.target.value.trim()?'✓ Key saved':'No key'}} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
         <p className="ck-status" style={{margin:0,fontSize:10,color:localStorage.getItem('autodial_claude_key')?'var(--green)':'var(--text3)'}}>{localStorage.getItem('autodial_claude_key')?'✓ Key saved — Claude will analyze your leads':'No key — using Gemini only'}</p>
-          {role!=='admin'&&<button onClick={()=>{const k=localStorage.getItem('autodial_claude_key');if(!k)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:k}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
+          {isManageMode&&<button onClick={()=>{const k=localStorage.getItem('autodial_claude_key');if(!k)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:k}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
           {role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
       </div>}
 
       {/* Calendar Sharing (Main only) */}
-      {role==='main'&&<div className="card" style={{marginBottom:12}}>
+      {isManageMode&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Calendar Sharing</h3>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Share your Google Calendars with admins so they can see your availability.</p>
         <div style={{marginBottom:8}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
@@ -4296,7 +4357,7 @@ function App(){
       </div>}
 
       {/* WhatsApp Templates (Main) */}
-      {<div className="card" style={{marginBottom:12}}>
+      {isManageMode&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates</h3>
           {waTemplates.length>0&&<button onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>Delete All</button>}
