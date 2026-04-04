@@ -3591,17 +3591,27 @@ function App(){
               </div>})}
           </div>
         </div>
-        {role!=='admin'&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
-          <p style={{margin:'0 0 6px',fontSize:11,fontWeight:700,color:'var(--gold)'}}>⭐ Star Ranks (for Main Callers)</p>
-          <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
-            {ML_RANKS.map((r,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:3,fontSize:9}}>
-              <span>{r.emoji}</span>
-              <span style={{color:'var(--text3)'}}>{r.label}:</span>
-              <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??''} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:36,fontSize:9,textAlign:'center',padding:'2px'}} disabled={i===0}/>
-            </div>)}
-          </div>
+        {role!=='admin'&&<div style={{padding:'10px 12px',borderRadius:10,background:'var(--bg)',border:'1px solid rgba(240,180,41,.2)',marginBottom:10}}>
+          <p style={{margin:'0 0 8px',fontSize:12,fontWeight:700,color:'var(--gold)'}}>⭐ Star Ranks {isCreatorUser?'(Edit Thresholds)':'(for Main Callers)'}</p>
+          {isCreatorUser?
+            <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+              {ML_RANKS.map((r,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:3,fontSize:9}}>
+                <span>{r.emoji}</span>
+                <span style={{color:'var(--text3)'}}>{r.label}:</span>
+                <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??''} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:36,fontSize:9,textAlign:'center',padding:'2px'}} disabled={i===0}/>
+              </div>)}
+            </div>
+          :<div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            {ML_RANKS.map((r,i)=>{const threshold=(cfg.starThresholds||[0,5,10,15,25,35,50])[i]||0;const isActive=monthlyAppts>=threshold;
+              return<div key={i} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:8,
+                background:isActive?r.color+'18':'var(--bg3)',border:'1px solid '+(isActive?r.color+'40':'var(--border)'),opacity:isActive?1:0.5}}>
+                <span style={{fontSize:14}}>{r.emoji}</span>
+                <div><p style={{margin:0,fontSize:9,fontWeight:700,color:isActive?r.color:'var(--text3)'}}>{r.label}</p>
+                <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{threshold} appts</p></div>
+              </div>})}
+          </div>}
         </div>}
-        {role!=='admin'&&<div style={{marginBottom:12,padding:'10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
+        {isCreatorUser&&<div style={{marginBottom:12,padding:'10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
           <p style={{margin:'0 0 6px',fontSize:12,fontWeight:700,color:'var(--accent2)'}}>⭐ Star System (Calling Mode)</p>
           <div style={{display:'flex',gap:6,marginBottom:6}}>
             <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Set</label>
