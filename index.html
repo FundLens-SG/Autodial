@@ -447,7 +447,7 @@ window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)r
     'RULES:\n'+
     '- "Transaction ID" or 8-digit number columns = phone\n'+
     '- "Residential Status" = race\n'+
-    '- NRIC DETECTION: Singapore NRIC format is [STFGM]\\d{7}[A-Z] (e.g. S9012345A, T0512345B). If a column has NRIC values:\n'+
+    '- NRIC DETECTION: Singapore NRIC can be [STFGM]\\d{7}[A-Z] (full) OR just \\d{7}[A-Z] (partial, no prefix) (e.g. S9012345A, T0512345B). If a column has NRIC values:\n'+
     '  * Map it as "nric" column\n'+
     '  * Calculate age: prefix S/F = born 19xx, prefix T/G/M = born 20xx, where xx = first 2 digits after prefix\n'+
     '  * Example: S9012345A → born 1990 → age = '+today.slice(0,4)+' - 1990 = '+(new Date().getFullYear()-1990)+'\n'+
@@ -492,7 +492,7 @@ window.claudeAnalyzeSheet=async function(headers,rows){
     '- Singapore phones: 8 digits starting with 8 or 9. With +65 prefix = same. "Transaction ID" that looks like 8-digit number starting with 8/9 = phone\n'+
     '- Dates like DD-MM-YYYY or DD/MM/YYYY = birthday, NOT phone. Calculate age from birthday\n'+
     '- "Residential Status" = race column\n'+
-    '- NRIC [STFGM]\\d{7}[A-Z]: S/F=19xx, T/G/M=20xx born. Calculate age, NEVER output raw NRIC\n'+
+    '- NRIC: Full format [STFGM]\\d{7}[A-Z] OR partial format \\d{7}[A-Z] (without prefix). If a column has these values, map it as nric column. Calculate age from NRIC, NEVER put raw NRIC in notes or remarks\n'+
     '- Remarks: "NI"/"not interested"/"WN"/"wrong number"/"deceased"/"DNC" → ni\n'+
     '  "NP"/"no pick"/"NPx2" → np (extract count). "CB"/"callback" → cb. "appt set"/date+time+location → set\n'+
     '- Return statuses for ALL '+rows.length+' rows. Rows beyond sample: status="pending", notes=""\n'+
@@ -692,9 +692,12 @@ window.parseNRIC=function(val){
   return{birthYear:birthYear,age:age};
 };
 window.isNRICLike=function(val){
-  if(!val)return false;
-  return/^[STFGM]\d{7}[A-Z]$/i.test(String(val).trim());
-};
+  if(!val)return false;var s=String(val).trim().toUpperCase();
+  // Full NRIC: [STFGM]1234567[A-Z]
+  if(/^[STFGM]\d{7}[A-Z]$/.test(s))return true;
+  // Partial NRIC without prefix: 7 digits + letter (e.g., 7531438H)
+  if(/^\d{7}[A-Z]$/.test(s))return true;
+  return false};
 
 window.detectGender=function(l){if(l.gender){var g=l.gender.toLowerCase();if(/^(m|male|mr)$/i.test(g))return'male';if(/^(f|female|mrs|ms|miss|mdm)$/i.test(g))return'female'}var n=(l.name||'');if(/^(mr\.?|encik)\s/i.test(n))return'male';if(/^(mrs\.?|ms\.?|miss|mdm)\s/i.test(n))return'female';return null};
 window.parseAgeRange=function(a){if(!a)return null;var s=String(a).trim(),d=parseInt(s);if(!isNaN(d)&&s.length<=3)return{min:d,max:d};var m=s.match(/(\d+)\s*(?:to|-)\s*(\d+)/i);return m?{min:+m[1],max:+m[2]}:null};
@@ -1594,7 +1597,7 @@ function App(){
     if(emptyNotes>fixed.length*0.7&&stored.cfg?.sheetId)window._needsRefetch=true;
     return fixed;
   });
-  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
+  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:3,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
   const[isOffline,setIsOffline]=useState(!navigator.onLine);
   useEffect(()=>{const on=()=>setIsOffline(false);const off=()=>{setIsOffline(true);toast('📴 Offline — changes saved locally','info')};
@@ -2292,10 +2295,10 @@ function App(){
     s.rank=rank.label;s.monthlyAppts=monthlyAppts;
     const actualH=elapsed/3600;
     // ═══ SMART PAY LOGIC — SELECTED SLOT ═══
-    const slots=(myCfg.sessionSlots||[{hours:n(myCfg.sessionDur,5),apptsBar:n(myCfg.mThresh,2),bonusBar:n(myCfg.nThresh,4)}])
+    const slots=(myCfg.sessionSlots||[{hours:n(myCfg.sessionDur,5),apptsBar:n(myCfg.mThresh,2),bonusBar:n(myCfg.nThresh,3)}])
       .filter(sl=>n(sl.hours,0)>0).sort((a,b)=>n(a.hours,0)-n(b.hours,0));
     // Use the slot the admin CHOSE at session start, or fall back to auto-match
-    let matchedSlot=s.selectedSlot||slots[0]||{hours:5,apptsBar:2,bonusBar:4};
+    let matchedSlot=s.selectedSlot||slots[0]||{hours:5,apptsBar:2,bonusBar:3};
     if(!s.selectedSlot){for(let i=slots.length-1;i>=0;i--){if(actualH>=n(slots[i].hours,0)-0.33){matchedSlot=slots[i];break}}}
     const sessionDurH=n(matchedSlot.hours,5);const mThresh=n(matchedSlot.apptsBar,2);const nThresh=n(matchedSlot.bonusBar,4);
     const full=s.sets>=mThresh;const bonus=s.sets>=nThresh;
@@ -2361,7 +2364,7 @@ function App(){
     setCallLog(p=>[...p,{action:status,lead_name:cur?.name,lead_phone:cur?.phone,ts:new Date().toISOString()}]);
     // Add to CB queue if callback
     if(status==='cb'&&cur&&extra.cbDate)DB.addCB({adminId:_user?.id,admin:myEmail,name:cur.name,phone:cur.phone,cbDate:extra.cbDate,cbTime:extra.cbTime||''});
-    if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};if(role!=='admin')setTotalStars(prev=>prev+(cfg.starsPerDial||0.1));if(s.dialed===1)checkAchievement('first_dial','Let\'s Go!','🚀');if(s.dialed===50)checkAchievement('dial50','Half Century!','🏏');if(s.dialed===100)checkAchievement('dial100','Centurion!','💯');
+    if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};if(s.dialed===1)checkAchievement('first_dial','Let\'s Go!','🚀');if(s.dialed===50)checkAchievement('dial50','Half Century!','🏏');if(s.dialed===100)checkAchievement('dial100','Centurion!','💯');
       const spd=s.dialed/((Date.now()-session.startTime)/3600000);
       if(spd>=30&&s.dialed>=10)checkAchievement('speed30','Speed Demon!','🏎️');
       if(spd>=50&&s.dialed>=15)checkAchievement('speed50','Lightning Dialer!','⚡');
@@ -2651,67 +2654,79 @@ function App(){
             <span className="mono" style={{fontSize:12,fontWeight:700,color:'var(--accent2)'}}>{(session.dialed/(elapsed/3600)).toFixed(1)}/hr</span>
           </div>}
         </div>
-        {/* ═══ GAMIFIED PROGRESS BARS ═══ */}
+        {/* ═══ GAMIFIED PROGRESS BAR ═══ */}
         {(()=>{
-          const aBar=n(session.selectedSlot?.apptsBar||myCfg.mThresh,2);
-          const bBar=n(session.selectedSlot?.bonusBar||myCfg.nThresh,4);
           const sets=session.sets||0;
-          const metAppts=sets>=aBar;
-          const metBonus=sets>=bBar;
-          const apptPct=Math.min(100,(sets/Math.max(1,aBar))*100);
-          const bonusPct=metAppts?Math.min(100,((sets-aBar)/Math.max(1,bBar-aBar))*100):0;
           const rate=(myCfg.payRates||[8,10,12])[0]||8;
           const bonusMult=n(myCfg.bonusMult,1.5);
-          return<div style={{marginBottom:8}}>
-            {/* Appts Bar */}
-            <div style={{padding:'10px 12px',borderRadius:12,background:metAppts?'rgba(63,185,80,.08)':'var(--bg)',border:'1px solid '+(metAppts?'rgba(63,185,80,.3)':'var(--border)'),marginBottom:6,transition:'all .5s'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                <span style={{fontSize:12,fontWeight:700,color:metAppts?'var(--green)':'#f1f5f9'}}>
-                  {metAppts?'✅ APPTS BAR HIT!':'🎯 Appts Bar'}
-                </span>
-                <span className="mono" style={{fontSize:14,fontWeight:800,color:metAppts?'var(--green)':'var(--accent2)'}}>{sets}/{aBar}</span>
-              </div>
-              <div style={{height:10,borderRadius:5,background:'var(--bg3)',overflow:'hidden',marginBottom:4}}>
-                <div style={{height:'100%',borderRadius:5,width:apptPct+'%',background:metAppts?'linear-gradient(90deg,#22c55e,#4ade80)':'linear-gradient(90deg,var(--accent),#818cf8)',transition:'width .5s',boxShadow:metAppts?'0 0 12px rgba(34,197,94,.4)':'none'}}/>
-              </div>
-              {!metAppts&&<p style={{margin:0,fontSize:9,color:'var(--text3)'}}>
-                {aBar-sets===1?'🔥 Just 1 more appointment!':sets===0?'Set your first appointment to get started':''+( aBar-sets)+' more to hit the bar → full session pay'}
-              </p>}
-              {metAppts&&!metBonus&&<p style={{margin:0,fontSize:10,color:'var(--green)',fontWeight:600}}>
-                Full session pay locked in! 💪
-              </p>}
-            </div>
+          const aBar=n(session.selectedSlot?.apptsBar||myCfg.mThresh,2);
+          const bBar=n(session.selectedSlot?.bonusBar||myCfg.nThresh,3);
+          const maxBar=10;
+          const uName=(window._prof?.full_name||myEmail||'Caller').split(/[\s@]/)[0];
 
-            {/* Bonus Bar - appears with animation when appts bar is met */}
-            {metAppts&&<div style={{padding:'10px 12px',borderRadius:12,background:metBonus?'rgba(255,215,0,.1)':'rgba(255,215,0,.03)',border:'1px solid '+(metBonus?'rgba(255,215,0,.4)':'rgba(255,215,0,.15)'),animation:'slideDown .5s ease-out',transition:'all .5s'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                <span style={{fontSize:12,fontWeight:700,color:metBonus?'var(--gold)':'#f1f5f9'}}>
-                  {metBonus?'🔥 BONUS UNLOCKED!':'✨ Bonus Bar'}
-                  {!metBonus&&<span style={{fontSize:10,color:'var(--gold)',marginLeft:6,animation:'pulse 1.5s infinite'}}>×{bonusMult}</span>}
-                </span>
-                <span className="mono" style={{fontSize:14,fontWeight:800,color:metBonus?'var(--gold)':'var(--amber)'}}>{sets}/{bBar}</span>
+          // ═══ ADMIN: Keep pay-based bars ═══
+          if(role==='admin'){
+            const metAppts=sets>=aBar;const metBonus=sets>=bBar;
+            const apptPct=Math.min(100,(sets/Math.max(1,aBar))*100);
+            return<div style={{marginBottom:8}}>
+              <div style={{padding:'10px 12px',borderRadius:12,background:metAppts?'rgba(63,185,80,.08)':'var(--bg)',border:'1px solid '+(metAppts?'rgba(63,185,80,.3)':'var(--border)'),marginBottom:6}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                  <span style={{fontSize:12,fontWeight:700,color:metAppts?'var(--green)':'#f1f5f9'}}>{metAppts?'✅ APPTS BAR HIT!':'🎯 Appts Bar'}</span>
+                  <span className="mono" style={{fontSize:14,fontWeight:800,color:metAppts?'var(--green)':'var(--accent2)'}}>{sets}/{aBar}</span>
+                </div>
+                <div style={{height:8,borderRadius:4,background:'var(--bg3)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:4,width:apptPct+'%',background:metAppts?'linear-gradient(90deg,#22c55e,#4ade80)':'linear-gradient(90deg,var(--accent),#818cf8)',transition:'width .5s'}}/></div>
               </div>
-              <div style={{height:10,borderRadius:5,background:'var(--bg3)',overflow:'hidden',marginBottom:4}}>
-                <div style={{height:'100%',borderRadius:5,width:bonusPct+'%',background:'linear-gradient(90deg,#f59e0b,#fbbf24,#fcd34d)',transition:'width .5s',boxShadow:metBonus?'0 0 16px rgba(255,215,0,.5)':'none'}}/>
+              <div style={{display:'flex',justifyContent:'center',gap:12,fontSize:10,color:'var(--text3)'}}>
+                <span>{'💵 ~$'+(metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate)).toFixed(0)+' est.'}</span>
               </div>
-              {!metBonus&&<p style={{margin:0,fontSize:9,color:'var(--gold)'}}>
-                {bBar-sets===1?'⚡ ONE MORE for ×'+bonusMult+' bonus!':''+( bBar-sets)+' more appointments → ×'+bonusMult+' pay multiplier'}
-              </p>}
-              {metBonus&&<p style={{margin:0,fontSize:11,color:'var(--gold)',fontWeight:700,textAlign:'center'}}>
-                🎉 ×{bonusMult} multiplier on full session! 🎉
-              </p>}
             </div>}
 
-            {/* Earnings / Stars preview */}
+          // ═══ MAIN: Single unified gamified milestone bar ═══
+          const milestones=[
+            {at:0,title:'Ready to Dial',sub:'Set your first appointment!',color:'var(--text3)',emoji:'🎯'},
+            {at:1,title:'FIRST BLOOD',sub:'1 more to hit the bar!',color:'#EF4444',emoji:'🩸'},
+            {at:2,title:'Good work '+uName+'!!',sub:'One more to be a CHAMPION!',color:'#F59E0B',emoji:'🌟'},
+            {at:3,title:'CHAMPION UNLOCKED',sub:'You\'re on fire! Keep going!',color:'#22C55E',emoji:'🏆'},
+            {at:4,title:'DOMINATOR',sub:uName+' is dominating!',color:'#8B5CF6',emoji:'💎'},
+            {at:5,title:'UNSTOPPABLE',sub:'Nobody can stop '+uName+'!',color:'#EC4899',emoji:'⚡'},
+            {at:6,title:'LEGENDARY',sub:uName+' has entered legend status!',color:'#F97316',emoji:'👑'},
+            {at:7,title:'GODLIKE',sub:'Is '+uName+' even human?!',color:'#EF4444',emoji:'🔱'},
+            {at:8,title:'BEYOND GODLIKE',sub:'The office is shaking!',color:'#DC2626',emoji:'💀'},
+            {at:9,title:'RAMPAGE',sub:uName+' cannot be contained!',color:'#7C3AED',emoji:'🌋'},
+            {at:10,title:'IMMORTAL',sub:'🎉 '+uName+' has transcended! 🎉',color:'#FFD700',emoji:'☀️'}
+          ];
+          const current=milestones.filter(m=>m.at<=sets).pop()||milestones[0];
+          const next=milestones.find(m=>m.at>sets);
+          const pct=Math.min(100,(sets/maxBar)*100);
+          const barColor=sets===0?'var(--accent)':sets<3?'linear-gradient(90deg,#EF4444,#F59E0B)':sets<6?'linear-gradient(90deg,#22C55E,#4ade80)':sets<8?'linear-gradient(90deg,#F59E0B,#EC4899)':'linear-gradient(90deg,#FFD700,#EF4444,#7C3AED)';
+
+          return<div style={{marginBottom:8}}>
+            <div style={{padding:'12px 14px',borderRadius:14,background:sets>=3?'rgba(255,215,0,.06)':'var(--bg)',border:'1px solid '+(sets>=3?'rgba(255,215,0,.25)':'var(--border)'),transition:'all .5s'}}>
+              {/* Title + count */}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div>
+                  <span style={{fontSize:sets>=3?15:13,fontWeight:800,color:current.color,letterSpacing:sets>=3?'.05em':'0'}}>
+                    {current.emoji} {current.title}
+                  </span>
+                </div>
+                <span className="mono" style={{fontSize:16,fontWeight:900,color:current.color}}>{sets}/{maxBar}</span>
+              </div>
+              {/* Progress bar */}
+              <div style={{height:12,borderRadius:6,background:'var(--bg3)',overflow:'hidden',marginBottom:6,position:'relative'}}>
+                <div style={{height:'100%',borderRadius:6,width:pct+'%',background:barColor,transition:'width .6s ease-out',boxShadow:sets>=3?'0 0 16px rgba(255,215,0,.3)':'none'}}/>
+                {/* Milestone markers */}
+                {[3,5,8].map(m=><div key={m} style={{position:'absolute',left:(m/maxBar*100)+'%',top:0,height:'100%',width:2,background:'rgba(255,255,255,.15)'}}/>)}
+              </div>
+              {/* Subtitle */}
+              <p style={{margin:0,fontSize:10,color:next?current.color:'var(--gold)',fontWeight:sets>=3?600:400,textAlign:sets>=3?'center':'left'}}>
+                {current.sub}
+              </p>
+            </div>
+            {/* Stars + Rank */}
             <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:10,color:'var(--text3)'}}>
-              {role==='admin'?<>
-                <span>💵 ~${(metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate)).toFixed(0)} est.</span>
-                {metAppts&&!metBonus&&<span style={{color:'var(--gold)'}}>+${((n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*(bonusMult-1))).toFixed(0)} if bonus</span>}
-              </>:<>
-                <span>⭐ {sets} star{sets!==1?'s':''} earned</span>
-                <span style={{color:rank.color}}>{rank.emoji} {rank.label}</span>
-                {nextRank&&<span style={{color:'var(--text3)'}}>{nextRank.cumStars-monthlyAppts-sets} to {nextRank.emoji}</span>}
-              </>}
+              <span>⭐ {sets} star{sets!==1?'s':''} earned</span>
+              <span style={{color:rank.color}}>{rank.emoji} {rank.label}</span>
+              {nextRank&&<span>{nextRank.cumStars-monthlyAppts-sets} to {nextRank.emoji}</span>}
             </div>
           </div>})()}
         {/* Rank progress */}
@@ -3975,8 +3990,7 @@ function App(){
               </div>)}
             </div>
             <div style={{display:'flex',gap:6}}>
-              <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Dial</label>
-              <input type="number" min="0" step="0.1" value={cfg.starsPerDial||0.1} onChange={e=>setCfg(s=>({...s,starsPerDial:parseFloat(e.target.value)||0.1}))} style={{textAlign:'center',fontSize:12,padding:'6px'}}/></div>
+              
             </div>
           </>:<div style={{display:'flex',flexWrap:'wrap',gap:6}}>
             {ML_RANKS.map((r,i)=>{const threshold=(cfg.starThresholds||[0,5,10,15,25,35,50])[i]||0;
@@ -4072,7 +4086,7 @@ function App(){
           {leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginLeft:6}}>🧠 Re-analyze Leads</button>}
       </div>
 
-      {WORKER_URL&&<div className="card" style={{marginBottom:12}}>
+      {WORKER_URL&&role!=='admin'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:9,fontWeight:400,color:'var(--text3)'}}>(smarter sheet analysis)</span></h3>
         <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
         <input value={localStorage.getItem('autodial_claude_key')||''} onChange={e=>{localStorage.setItem('autodial_claude_key',e.target.value.trim());e.target.parentElement.querySelector('.ck-status').textContent=e.target.value.trim()?'✓ Key saved':'No key'}} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
@@ -4189,7 +4203,7 @@ function App(){
             <h3 style={{fontSize:13,fontWeight:700,color:'var(--gold)',margin:'0 0 6px'}}>⭐ Stars & Ranking</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
               <p style={{margin:'0 0 4px'}}>You earn <b style={{color:'var(--gold)'}}>stars</b>, not pay. Stars are your achievement currency!</p>
-              <p style={{margin:'0 0 4px'}}><b>0.1⭐ per dial</b> — every call earns stars, even NP</p>
+              <p style={{margin:'0 0 4px'}}>Earn <b style={{color:'var(--gold)'}}>milestone ⭐</b> when you rank up each month</p>
               <p style={{margin:'0 0 4px'}}><b>Milestone ⭐ on rank-up</b> — Elite +10⭐, Master +25⭐ … Mythic +500⭐</p>
               <p style={{margin:'0 0 4px'}}>Rank resets monthly → stars get <b>banked forever</b> 🏦</p>
               <p style={{margin:0}}>Check <b>Rank</b> tab for progress + <b>🏆 Live Leaderboard</b></p>
@@ -4328,7 +4342,7 @@ function App(){
           <p style={{margin:'6px 0 0',fontSize:12,color:'var(--text3)'}}>Higher stakes = bigger rewards. Hit the appts bar to earn full session pay.</p>
         </div>
         {(()=>{
-          const slots=(myCfg.sessionSlots||[{hours:n(myCfg.sessionDur,5),apptsBar:n(myCfg.mThresh,2),bonusBar:n(myCfg.nThresh,4)}])
+          const slots=(myCfg.sessionSlots||[{hours:n(myCfg.sessionDur,5),apptsBar:n(myCfg.mThresh,2),bonusBar:n(myCfg.nThresh,3)}])
             .filter(sl=>n(sl.hours,0)>0).sort((a,b)=>n(a.hours,0)-n(b.hours,0));
           const diffLabels=['🟢 Warm-up','🔵 Standard','🟡 Grind','🟠 Push','🔴 Beast Mode','💀 Legendary'];
           const diffColors=['#22c55e','#3b82f6','#eab308','#f97316','#ef4444','#a855f7'];
