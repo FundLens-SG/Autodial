@@ -1309,6 +1309,10 @@ function App(){
   useEffect(()=>{if(sTabs.length)save('stabs',sTabs)},[sTabs]);const[sLoad,setSLoad]=useState(false);
   const[sheetQ,setSheetQ]=useState('');const[sheetResults,setSheetResults]=useState([]);const[sheetSearching,setSheetSearching]=useState(false);
   const[session,setSession]=useState(()=>load('activeSession')||null);
+  const[streak,setStreak]=useState(0);
+  const[bestStreak,setBestStreak]=useState(load('bestStreak')||0);
+  const[achievements,setAchievements]=useState(load('achievements')||[]);
+  const[showAchievement,setShowAchievement]=useState(null);
   useEffect(()=>{save('activeSession',session)},[session]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[promotionLog,setPromotionLog]=useState(load('promo')||[]);  // [{date,fromTier,toTier,atSets,newRate}]
@@ -1901,9 +1905,9 @@ function App(){
 
     {/* Row 2: Rank chip + Mode toggle */}
     <div className="hdr-row2">
-      {isCallMode&&_showRank?<div className="rank-chip" style={{background:(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'18',color:(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color,border:'1px solid '+(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'30'}}>
-        <span style={{fontSize:15}}>{(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).emoji}</span>
-        <span>{(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).label}</span>
+      {isCallMode&&_showRank?<div className="rank-chip" style={{background:(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'18',color:(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color,border:'1px solid '+(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'30'}}>
+        <span style={{fontSize:15}}>{(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).emoji}</span>
+        <span>{(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).label}</span>
         <span style={{opacity:.6,fontSize:10,fontWeight:600}}>{monthlyAppts} this month</span>
       </div>
       :<div className="rank-chip" style={{background:'var(--rdim)',color:'var(--red)',border:'1px solid rgba(248,81,73,.2)'}}>
@@ -2174,14 +2178,14 @@ function App(){
     {tab==='rank'&&isCallMode&&(()=>{
       // Admin uses pay tier ranks, Main uses ML ranks
       const isAdminRank=role==='admin';
-      const tierRank=isAdminRank?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
-      const nextTier=isAdminRank?getNextTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
+      const tierRank=isAdminRank?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
+      const nextTier=isAdminRank?getNextTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
       const displayRank=isAdminRank?tierRank:rank;
       const displayNext=isAdminRank?nextTier:nextRank;
-      const starsInTier=isAdminRank?(nextTier?monthlyAppts-(tierRank.threshold||0):monthlyAppts):rank.stars;
+      const starsInTier=isAdminRank?(nextTier?totalSets-(tierRank.threshold||0):totalSets):rank.stars;
       const starsNeeded=isAdminRank?(nextTier?(nextTier.threshold-tierRank.threshold):10):rank.starsNeeded;
       const progressPct=displayNext?Math.min(100,(starsInTier/Math.max(1,starsNeeded))*100):100;
-      const starsToNext=isAdminRank?(nextTier?nextTier.threshold-monthlyAppts:0):(nextRank?(nextRank.cumStars-monthlyAppts):0);
+      const starsToNext=isAdminRank?(nextTier?nextTier.threshold-totalSets:0):(nextRank?(nextRank.cumStars-monthlyAppts):0);
       // Monthly stats
       const now=new Date(),y=now.getFullYear(),m=now.getMonth();
       const monthSessions=sessionLog.filter(s=>{const d=new Date(s.startTime);return d.getFullYear()===y&&d.getMonth()===m&&(!isManageMode||(s.email||'')!==myEmail)});
@@ -2202,7 +2206,7 @@ function App(){
       {displayNext&&<div className="card" style={{marginBottom:14,borderColor:displayNext.color+'30'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {displayNext.emoji} {displayNext.label}</span>
-          <span className="mono" style={{fontSize:12,fontWeight:700,color:displayNext.color}}>{monthlyAppts}/{isAdminRank?displayNext.threshold:nextRank.cumStars}</span>
+          <span className="mono" style={{fontSize:12,fontWeight:700,color:displayNext.color}}>{isAdminRank?totalSets:monthlyAppts}/{isAdminRank?displayNext.threshold:nextRank.cumStars}</span>
         </div>
         <div style={{height:10,borderRadius:5,background:'var(--bg)',overflow:'hidden',marginBottom:6}}>
           <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+displayRank.color+','+displayNext.color+')',transition:'width .5s',boxShadow:'0 0 12px '+displayNext.color+'40'}}/>
@@ -2236,7 +2240,7 @@ function App(){
           </div>
           <div style={{flex:1}}>
             <p style={{margin:0,fontSize:13,fontWeight:isActive?800:600,color:isActive?r.color:'var(--text2)'}}>{r.label}</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{isAdminRank?(tierMin>0?'≥'+tierMin+' appts/month · $'+(myCfg.payRates||[8,10,12,16,20,25])[Math.min(i,(myCfg.payRates||[]).length-1)]+'/hr':'Start · base tier · $'+(myCfg.payRates||[8])[0]+'/hr'):(r.cumStars>0?'≥'+r.cumStars+' appts/month':'Start')+(!isAdminRank?' · '+(r.starsNeeded<999?r.starsNeeded+' ⭐ to next':'∞ glory'):'')}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{isAdminRank?(tierMin>0?'≥'+tierMin+' all-time appts · $'+(myCfg.payRates||[8,10,12,16,20,25])[Math.min(i,(myCfg.payRates||[]).length-1)]+'/hr':'Start · base tier · $'+(myCfg.payRates||[8])[0]+'/hr'):(r.cumStars>0?'≥'+r.cumStars+' appts/month':'Start')+(!isAdminRank?' · '+(r.starsNeeded<999?r.starsNeeded+' ⭐ to next':'∞ glory'):'')}</p>
           </div>
           {isActive&&<span className="pill" style={{background:r.color+'20',color:r.color}}>NOW</span>}
           {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
