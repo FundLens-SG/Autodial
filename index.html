@@ -1274,6 +1274,7 @@ function parseSheetMultiBatch(headers,rows){
   return{leads:allLeads,count:allLeads.length,batches:batches.length,summary:batchSummary};
 }
 window.parseSheetMultiBatch=parseSheetMultiBatch;
+window.detectBatchColumns=detectBatchColumns;
 window.detectBatches=detectBatches;
 
 const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction\s*id|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,nric:/^(nric|ic|ic.?no|nric.?no|identification|id.?number)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
@@ -1335,7 +1336,7 @@ async function aiParse(rows,h){const ai=await aiAnalyzeSheet(h,rows);if(!ai?.col
     // AI notes override if present
     const notes=a.notes||remarks;
     leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age:String(age),race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status:a.status||'pending',npCount:a.np_count||0,cbDate:a.cb_date||'',cbTime:a.cb_time||'',cbHistory:[],calledAt:null,notes,sheetRow:ri+2,statusCol:c.status!=null?c.status:(c.remarks!=null?c.remarks:-1)})}
-  return{leads,count:leads.length}}
+  return{leads,count:leads.length,colMap:c}}
 
 // ═══ STATUS VALIDATION SAFETY NET ═══
 // Runs AFTER any import (AI or manual) to catch missed statuses
@@ -2141,7 +2142,9 @@ function App(){
 
   const proceedToLead=useCallback((idx)=>{
     if(idx===-1||idx>=leads.length){setRunning(false);setPhase('idle');setCurIdx(-1);setShowNextPreview(false);return}
-    setCurIdx(idx);setPhase('waiting');setCountdown(cfg.delay);setShowNextPreview(false)},[cfg.delay,leads]);
+    setCurIdx(idx);setRunning(true);setPhase('calling');setShowNextPreview(false);
+    // Dial immediately — user already clicked "Dial", no need for countdown
+    setTimeout(()=>dial(leads[idx].phone),300)},[cfg.delay,leads,dial]);
 
   const handleOutcome=useCallback((status,extra={})=>{
     if(status==='set'){
@@ -2176,14 +2179,12 @@ function App(){
       }
     }
     setShowPostCall(null);
-    // Now show next lead preview — use functional update to get LATEST leads
+    // Show next lead preview — leads is current because user interacted (React re-rendered)
+    const savedLeadIdx=showPostCall?.leadIdx??curIdx;
     setTimeout(()=>{
-      setLeads(currentLeads=>{
-        const startFrom=showPostCall?.leadIdx??curIdx;
-        const nextIdx=getNextDialable(currentLeads,startFrom,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
-        if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
-        else{setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')}
-        return currentLeads}) // Don't modify leads, just read them
+      const nextIdx=getNextDialable(leads,savedLeadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
+      else{setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')}
     },100)
   },[postCallNote,showPostCall,leads,curIdx,filters,cfg,myCfg]);
 
@@ -2243,6 +2244,7 @@ function App(){
       if(ai?.leads.length){const validated=validateStatuses(ai.leads,r,rmkCol);setLeads(validated);const ni=validated.filter(l=>l.status==='ni').length,set=validated.filter(l=>l.status==='set').length,cb=validated.filter(l=>l.status==='cb').length,pend=validated.filter(l=>l.status==='pending').length;toast('✨ '+ai.count+' leads | '+pend+' callable, '+ni+' NI, '+set+' Set, '+cb+' CB');setSLoad(false);return}
       // No AI — use basic parser
       const res=parseSheet(r,h);if(res.error){toast(res.error,'err');setSLoad(false);return}
+      if(res.colMap)setDetectedColMap(res.colMap);
       // Check for ambiguous status/remarks columns — find candidates
       const statusCandidates=h.map((col,i)=>({idx:i,name:col})).filter(({name})=>/status|remark|notes?|comment|result|outcome/i.test(name));
       if(statusCandidates.length>1){
@@ -3070,7 +3072,10 @@ function App(){
       <input ref={fileRef} type="file" accept=".csv,.tsv,.xlsx,.xls" onChange={handleFile} style={{display:'none'}}/>
       <button onClick={()=>fileRef.current?.click()} style={{width:'100%',padding:'14px',borderRadius:12,border:'2px dashed var(--border2)',background:'transparent',color:'var(--text2)',fontSize:12,fontWeight:600,marginBottom:8}}>📁 Upload CSV/Excel</button>
       {leads.length>0&&<>
-        <input value={leadSearch} onChange={e=>setLeadSearch(e.target.value)} placeholder="🔍 Search leads by name, phone…" style={{marginBottom:8}}/>
+        <div style={{display:'flex',gap:6,marginBottom:8}}>
+          <input value={leadSearch} onChange={e=>setLeadSearch(e.target.value)} placeholder="🔍 Search leads by name, phone…" style={{flex:1}}/>
+          {rawSheet&&<button onClick={()=>setShowColMap(true)} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0,border:'1px solid var(--border)'}}>🔧 Columns</button>}
+        </div>
         <p style={{fontSize:11,color:'var(--text3)',marginBottom:6}}>{leads.filter(l=>!leadSearch||(l.name||'').toLowerCase().includes(leadSearch.toLowerCase())||(l.phone||'').includes(leadSearch)).length} of {leads.length} leads</p>
       </>}
       {leads.filter(l=>!leadSearch||(l.name||'').toLowerCase().includes(leadSearch.toLowerCase())||(l.phone||'').includes(leadSearch)).slice(0,50).map(l=><div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
@@ -4138,6 +4143,87 @@ function App(){
             {samples.length>0&&<p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)'}}>Samples: {samples.join(' | ')}</p>}
           </button>})}
         <button onClick={()=>setShowColPicker(null)} style={{width:'100%',padding:'12px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,marginTop:4}}>Skip — keep all as Pending</button>
+      </div>
+    </div>}
+
+    {/* ═══ Session Replay Modal ═══ */}
+
+    {/* ═══ Column Map Override Modal ═══ */}
+    {showColMap&&rawSheet&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowColMap(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
+        <h3 style={{margin:'0 0 4px',fontSize:16,fontWeight:800,color:'#f1f5f9'}}>🔧 Column Mapping</h3>
+        <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)'}}>Tap a role to reassign. Changes re-import your leads.</p>
+        {(()=>{
+          // Build current map from headers
+          const h=rawSheet.headers;const r=rawSheet.rows;
+          const currentMap=detectedColMap||detectBatchColumns(r,0,Math.min(15,r.length),h)||{};
+          const ROLES=[['phone','📞 Phone'],['first','👤 First Name'],['last','👤 Last Name'],['name','👤 Full Name'],['email','📧 Email'],['age','🎂 Age'],['dob','📅 DOB/Birthday'],['gender','⚧ Gender'],['race','🌍 Race'],['remarks','📝 Remarks']];
+          const roleMap={};ROLES.forEach(([k])=>{if(currentMap[k]!=null&&currentMap[k]!==-1)roleMap[currentMap[k]]=k});
+          return<div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {h.map((header,ci)=>{
+              const role=roleMap[ci]||'';
+              const roleLabel=ROLES.find(([k])=>k===role)?.[1]||'';
+              const samples=r.slice(0,3).map(row=>String(row[ci]||'').trim()).filter(Boolean).slice(0,2);
+              return<div key={ci} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',borderRadius:10,background:role?'rgba(99,102,241,.06)':'var(--bg)',border:'1px solid '+(role?'rgba(99,102,241,.2)':'var(--border)')}}>
+                <span className="mono" style={{fontSize:10,color:'var(--text3)',fontWeight:700,minWidth:16}}>{String.fromCharCode(65+ci)}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1'}}>{header||'(empty)'}</p>
+                  {samples.length>0&&<p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{samples.join(', ')}</p>}
+                </div>
+                <select value={role} onChange={e=>{
+                  const newRole=e.target.value;
+                  const newMap={...currentMap};
+                  // Clear old assignment for this role
+                  if(newRole)Object.keys(newMap).forEach(k=>{if(newMap[k]===ci)newMap[k]=-1});
+                  // Clear any column that had this role
+                  if(newRole)Object.keys(newMap).forEach(k=>{if(newMap[k]===newMap[newRole]){}});
+                  // If another column had this role, unset it
+                  ROLES.forEach(([k])=>{if(k===newRole&&newMap[k]!==-1&&newMap[k]!==ci)newMap[k]=-1});
+                  if(newRole)newMap[newRole]=ci;
+                  else{Object.keys(newMap).forEach(k=>{if(newMap[k]===ci)newMap[k]=-1})}
+                  setDetectedColMap(newMap);
+                }} style={{fontSize:10,padding:'4px 6px',background:'var(--bg3)',color:role?'var(--accent2)':'var(--text3)',border:'1px solid var(--border)',borderRadius:6,maxWidth:110}}>
+                  <option value="">— skip —</option>
+                  {ROLES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>})}
+            <button onClick={()=>{
+              // Re-parse leads with overridden column map
+              const map=detectedColMap||{};
+              if(map.phone===-1||map.phone==null){toast('Assign a Phone column first','err');return}
+              const h2=rawSheet.headers;const r2=rawSheet.rows;
+              const newLeads=[];
+              for(let ri=0;ri<r2.length;ri++){
+                const row=r2[ri];
+                const ph=String(row[map.phone]||'').trim();if(!ph||ph.length<5)continue;
+                let fn=map.first>=0?String(row[map.first]||'').trim():'';
+                let ln=map.last>=0?String(row[map.last]||'').trim():'';
+                if(!fn&&map.name>=0)fn=String(row[map.name]||'').trim();
+                let age=map.age>=0?String(row[map.age]||'').trim():'';
+                if(!age&&map.dob>=0){const bd=parseDateValue(row[map.dob]);if(bd)age=String(Math.floor((Date.now()-bd.getTime())/31557600000))}
+                const rmk=map.remarks>=0?String(row[map.remarks]||'').trim():'';
+                let status='pending',npCount=0,cbDate='',cbTime='',needsReview=false;
+                if(rmk){const fz=fuzzyStatusMatch(rmk);if(fz)status=fz;
+                  else{const rl=rmk.toLowerCase();
+                    if(/^ni$/i.test(rmk)||/\bnot interested\b/i.test(rl))status='ni';
+                    else if(/np/i.test(rl)&&rl.length<10){status='np';const m2=rl.match(/np\s*x?\s*(\d+)/i);npCount=m2?parseInt(m2[1]):1}
+                    else if(/\bappt\b|\bappointment\b/i.test(rl))status='set';
+                    else if(/\bcallback\b|\bcall back\b|\bcb\b/i.test(rl)){status='cb';const _p=parseCBTime(rl);if(_p){cbDate=_p.cbDate;cbTime=_p.cbTime}}
+                    else if(rl.length>3)needsReview=true}}
+                newLeads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,
+                  email:map.email>=0?String(row[map.email]||'').trim():'',age,
+                  gender:map.gender>=0?String(row[map.gender]||'').trim():'',
+                  race:map.race>=0?String(row[map.race]||'').trim():'',income:'',
+                  status,npCount,cbDate,cbTime,cbHistory:[],calledAt:null,notes:rmk,needsReview,
+                  sheetRow:ri+2,statusCol:map.remarks>=0?map.remarks:-1})}
+              setLeads(newLeads);setShowColMap(false);
+              const ni=newLeads.filter(l=>l.status==='ni').length;const pend=newLeads.filter(l=>l.status==='pending').length;
+              toast('✅ Re-imported '+newLeads.length+' leads | '+pend+' callable, '+ni+' NI');
+              save('colMapOverride',detectedColMap) // Remember for next fetch
+            }} style={{width:'100%',padding:'14px',borderRadius:14,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,marginTop:8}}>✅ Apply & Re-import</button>
+            <button onClick={()=>setShowColMap(false)} style={{width:'100%',padding:'10px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:12,marginTop:2}}>Cancel</button>
+          </div>
+        })()}
       </div>
     </div>}
 
