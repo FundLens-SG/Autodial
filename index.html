@@ -1021,14 +1021,17 @@ function publishAdminConfigs(configs){
     try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_admincfg_'+email.toLowerCase(),biz_name:JSON.stringify(clean)},{onConflict:'admin_email'}).then(function(){},function(){})}catch(e){}
   });
 }
-const cloudSave=(k,v)=>{if(!window._cloudReady)return;const bucket=SYNC_MAP[k];if(bucket&&window.CloudSync._userId){
-  if(bucket==='userState'){// Bundle all userState keys together
-    const us=load('_cloudUserState')||{};us[k]=v;save('_cloudUserState',us);CloudSync.save('userState',us)}
-  else if(bucket==='leads'){// leads+cfg bundled in 'data' key
-    const d=load('data')||{};if(k==='data'){CloudSync.save('leads',v)}else{d[k]=v;CloudSync.save('leads',d)}}
-  else{CloudSync.save(bucket,v)}}
-  // Bump sync version (debounced) so other devices know to pull
-  window._bumpSyncVer&&window._bumpSyncVer()};
+const _cloudDebounceTimers={};
+const _cloudDebounce={};
+const cloudSave=(k,v)=>{if(!window._cloudReady)return;
+  clearTimeout(_cloudDebounce[k]);
+  _cloudDebounce[k]=setTimeout(()=>{
+    const bucket=SYNC_MAP[k];if(!bucket||!window.CloudSync._userId)return;
+    if(bucket==='userState'){const us=load('_cloudUserState')||{};us[k]=v;save('_cloudUserState',us);CloudSync.save('userState',us)}
+    else if(bucket==='leads'){const d=load('data')||{};if(k==='data'){CloudSync.save('leads',v)}else{d[k]=v;CloudSync.save('leads',d)}}
+    else{CloudSync.save(bucket,v)}
+    window._bumpSyncVer&&window._bumpSyncVer()
+  },800)};
 
 // ══════════════════════════════════════════════════════
 //  LIVE SYNC — Cross-device real-time state sync
@@ -2624,8 +2627,9 @@ function App(){
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
   const _showRank=true;
-  const _baseTabs=[['dial','Dial'],['analytics','📊 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
-  const callTabs=_showRank?[['dial','Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:_baseTabs;
+  const _baseTabs=[['dial','Dial'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const cbDue=cbQueue.filter(cb=>cb.status!=='called').length;
+  const callTabs=[['dial','Dial'+(cbDue?' 🔔'+cbDue:'')],['rank','📊 Rank'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
@@ -2651,9 +2655,9 @@ function App(){
       {(isCreatorUser||isCreator(window._user?.email||''))&&<button onClick={()=>{setShowApprovalModal(true);if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data)}}).catch(e=>console.warn('[Users]',e))}} style={{padding:'4px 10px',borderRadius:8,background:pendingUsers.length?'var(--rdim)':'var(--adim)',border:'1px solid '+(pendingUsers.length?'rgba(248,81,73,.3)':'rgba(99,102,241,.2)'),color:pendingUsers.length?'var(--red)':'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0,marginRight:2}}>
         👥{pendingUsers.length>0?' '+pendingUsers.length:''}
       </button>}
-      {isOffline&&<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:8,padding:'2px 7px'}}>OFFLINE</span>}
-            {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
-      {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:8,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
+      {isOffline&&<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:10,padding:'2px 7px'}}>OFFLINE</span>}
+            {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:10,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
+      {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:10,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
       <button onClick={()=>setShowHelp(true)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:12,fontWeight:700}}>?</button>
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -2693,14 +2697,14 @@ function App(){
           <span className="mono" style={{fontSize:22,fontWeight:800,color:'var(--accent2)'}}>{fmtTime(elapsed)}</span>
           <div style={{display:'flex',alignItems:'center',gap:6}}>
             <span style={{fontSize:14,fontWeight:700,color:rank.color}}>{rank.emoji} {rank.label}</span>
-            {session.selectedSlot&&<span className="pill" style={{background:'var(--golddim)',color:'var(--gold)',fontSize:8}}>{n(session.selectedSlot.hours,5)}h 🎯{n(session.selectedSlot.apptsBar,2)}</span>}
+            {session.selectedSlot&&<span className="pill" style={{background:'var(--golddim)',color:'var(--gold)',fontSize:10}}>{n(session.selectedSlot.hours,5)}h 🎯{n(session.selectedSlot.apptsBar,2)}</span>}
             <button onClick={()=>{if(confirm('End session?'))endSession()}} style={{padding:'5px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600}}>End</button>
           </div>
         </div>
         <div style={{display:'flex',gap:6,marginBottom:8}}>
           {[['D',session.dialed,'var(--text2)'],['Set',session.sets,'var(--green)'],['NP',session.np,'var(--amber)'],['CB',session.cb,'var(--blue)'],['NI',session.ni,'var(--red)']].map(([l,v,c])=>
             <div key={l} style={{flex:1,textAlign:'center',padding:'6px 0',borderRadius:8,background:'var(--bg)'}}>
-              <p style={{margin:0,fontSize:16,fontWeight:800,color:c}}>{v}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{l}</p></div>)}
+              <p style={{margin:0,fontSize:16,fontWeight:800,color:c}}>{v}</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{l}</p></div>)}
         </div>
         {/* Streak + Speed */}
         <div style={{display:'flex',gap:6,marginBottom:8}}>
@@ -2834,7 +2838,7 @@ function App(){
                 {current.sub}
               </p>
               {/* Next milestone teaser */}
-              {next&&dailySets>0&&<p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>
+              {next&&dailySets>0&&<p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)',textAlign:'center'}}>
                 Next: {next.emoji} {next.title} at {next.at} sets
               </p>}
             </div>
@@ -2845,8 +2849,8 @@ function App(){
               {nextRank&&<span>{nextRank.cumStars-monthlyAppts-sets} to {nextRank.emoji}</span>}
             </div>
           </div>})()}
-        {/* Rank progress */}
-        {nextRank&&<div>
+        {/* Rank progress — hide during active calling to reduce clutter */}
+        {nextRank&&(!running||phase==='idle')&&<div>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
             <span>{rank.emoji} → {nextRank.emoji} {nextRank.label}</span>
             <span style={{color:nextRank.color,fontWeight:700}}>{monthlyAppts+session.sets}/{nextRank.cumStars} ⭐</span>
@@ -2856,7 +2860,7 @@ function App(){
       </div>}
 
       {/* Call card */}
-      <div className="card" style={{marginBottom:10,borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
+      <div className="card" style={{marginBottom:12,borderColor:phase==='calling'?'rgba(99,102,241,.3)':'var(--border)'}}>
         {cur&&running&&phase!=='preview'?(
           <>
             <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
@@ -2890,10 +2894,10 @@ function App(){
             </div>}
             {phase==='calling'&&<>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,width:'100%'}}>
-                <button onClick={()=>handleOutcome('np')} style={{padding:'12px 0',background:'var(--amdim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP</button>
-                <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
-                <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
-                <button onClick={()=>handleOutcome('set')} disabled={setDone||showPostCall?.status==='set'} style={{padding:'12px 0',background:setDone?'var(--bg3)':'var(--gdim)',color:setDone?'var(--text3)':'var(--green)',fontSize:13,fontWeight:700,opacity:setDone?.5:1}}>{setDone?'✓ Set':'Set'}</button>
+                <button onClick={()=>handleOutcome('np')} style={{padding:'14px 0',borderRadius:14,background:'linear-gradient(135deg,rgba(245,158,11,.15),rgba(245,158,11,.08))',color:'var(--amber)',fontSize:14,fontWeight:700,minHeight:48,border:'1px solid rgba(245,158,11,.2)'}}>NP</button>
+                <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'14px 0',background:'linear-gradient(135deg,rgba(56,132,244,.15),rgba(56,132,244,.08))',color:'var(--blue)',fontSize:14,fontWeight:700,borderRadius:14,minHeight:48,border:'1px solid rgba(56,132,244,.2)'}}>CB</button>
+                <button onClick={()=>handleOutcome('ni')} style={{padding:'14px 0',borderRadius:14,background:'linear-gradient(135deg,rgba(248,81,73,.15),rgba(248,81,73,.08))',color:'var(--red)',fontSize:14,fontWeight:700,minHeight:48,border:'1px solid rgba(248,81,73,.2)'}}>NI</button>
+                <button onClick={()=>handleOutcome('set')} disabled={setDone||showPostCall?.status==='set'} style={{padding:'12px 0',background:setDone?'var(--bg3)':'linear-gradient(135deg,rgba(63,185,80,.15),rgba(63,185,80,.08))',color:setDone?'var(--text3)':'var(--green)',fontSize:14,fontWeight:700,borderRadius:14,minHeight:48,border:'1px solid '+(setDone?'var(--border)':'rgba(63,185,80,.2)'),opacity:setDone?.5:1}}>{setDone?'✓ Set':'Set'}</button>
                 <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip → (don't mark)</button>
               </div>
               {/* Adjustable delay timer ±1s */}
@@ -2923,14 +2927,14 @@ function App(){
         <button onClick={doUndo} style={{padding:'6px 14px',borderRadius:8,background:'var(--amdim)',color:'var(--amber)',fontSize:11,fontWeight:700,flexShrink:0,border:'1px solid rgba(240,180,41,.3)'}}>↩️ Undo</button>
       </div>}
 
-      {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.2)'}}>
+      {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:12,borderColor:'rgba(99,102,241,.2)'}}>
         <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent)',textTransform:'uppercase',letterSpacing:'.1em'}}>Quick note (optional)</p>
         <input value={postCallNote} onChange={e=>setPostCallNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')finishPostCall()}} placeholder="Receptiveness, tone, objections..." style={{marginBottom:8,fontSize:12}} autoFocus/>
         <button onClick={finishPostCall} style={{width:'100%',padding:'12px',background:postCallNote.trim()?'linear-gradient(135deg,var(--accent),#8b5cf6)':'var(--adim)',color:postCallNote.trim()?'#fff':'var(--accent2)',fontSize:13,fontWeight:700,borderRadius:12}}>{postCallNote.trim()?'💾 Save & Next Lead →':'➡️ Next Lead'}</button>
       </div>}
 
       {/* ═══ NEXT LEAD PREVIEW ═══ */}
-      {showNextPreview&&nextPreviewLead&&running&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.3)',background:'linear-gradient(135deg,rgba(99,102,241,.04),transparent)'}}>
+      {showNextPreview&&nextPreviewLead&&running&&<div className="card fi" style={{marginBottom:12,borderColor:'rgba(99,102,241,.3)',background:'linear-gradient(135deg,rgba(99,102,241,.04),transparent)'}}>
         <p style={{margin:'0 0 8px',fontSize:10,fontWeight:800,textTransform:'uppercase',letterSpacing:'.15em',color:'var(--accent)'}}>⏭ Next Lead</p>
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
           <div style={{width:48,height:48,borderRadius:14,background:'linear-gradient(135deg,var(--accent),#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:800,color:'#fff',flexShrink:0}}>{nextPreviewLead.name.charAt(0)}</div>
@@ -2964,10 +2968,10 @@ function App(){
       <button onClick={()=>setShowFilters(p=>!p)} style={{width:'100%',padding:'10px',borderRadius:10,background:showFilters?'var(--adim)':'var(--bg3)',color:showFilters?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:600,marginBottom:showFilters?0:10,border:'1px solid '+(showFilters?'rgba(99,102,241,.2)':'var(--border)')}}>
         {showFilters?'▾ Hide Filters':'▸ Filters'} {(filters.skipAllNP||filters.includeCB||filters.genderFilter!=='all'||filters.ageFilter)?'(active)':''}
       </button>
-      {showFilters&&<div className="card" style={{marginBottom:10,marginTop:6}}>
+      {showFilters&&<div className="card" style={{marginBottom:12,marginTop:6}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
           <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Skip Statuses</span>
-          <button onClick={()=>setFilters({genderFilter:'all',ageFilter:false,ageMin:'',ageMax:'',skipAllNP:false,includeCB:false})} style={{padding:'4px 10px',borderRadius:6,background:'var(--bg)',color:'var(--text3)',fontSize:9,fontWeight:600}}>Reset</button>
+          <button onClick={()=>setFilters({genderFilter:'all',ageFilter:false,ageMin:'',ageMax:'',skipAllNP:false,includeCB:false})} style={{padding:'4px 10px',borderRadius:6,background:'var(--bg)',color:'var(--text3)',fontSize:10,fontWeight:600}}>Reset</button>
         </div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
           <button onClick={()=>setFilters(p=>({...p,skipAllNP:!p.skipAllNP}))} style={{padding:'6px 14px',borderRadius:8,background:filters.skipAllNP?'var(--amdim)':'var(--bg)',color:filters.skipAllNP?'var(--amber)':'var(--text3)',fontSize:11,fontWeight:600,border:'1px solid '+(filters.skipAllNP?'rgba(210,153,34,.3)':'var(--border)')}}>
@@ -3010,7 +3014,32 @@ function App(){
     </div>}
 
     {/* Other tabs render here - keeping compact */}
-    {/* ═══ RANK TAB (ML-style monthly) ═══ */}
+
+    {/* ═══ CB DUE — compact list in Dial tab ═══ */}
+    {tab==='dial'&&isCallMode&&cbQueue.filter(cb=>cb.status!=='called').length>0&&<div className="card" style={{marginBottom:12}}>
+      <h3 style={{fontSize:12,fontWeight:700,color:'var(--blue)',margin:'0 0 8px'}}>🔔 Callbacks Due ({cbQueue.filter(cb=>cb.status!=='called').length})</h3>
+      {cbQueue.filter(cb=>cb.status!=='called').slice(0,5).map(cb=><div key={cb.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+        <div style={{flex:1,minWidth:0}}>
+          <span style={{fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{cb.lead_name||cb.lead_phone}</span>
+          <span style={{fontSize:10,color:'var(--text3)',marginLeft:8}}>{cb.cb_date} {cb.cb_time}</span>
+        </div>
+        <button onClick={()=>{window.location.href='tel:'+cb.lead_phone.replace(/[^+\d]/g,'')}} style={{padding:'4px 12px',borderRadius:8,background:'linear-gradient(135deg,rgba(56,139,253,.15),rgba(56,139,253,.08))',color:'var(--blue)',fontSize:10,fontWeight:600,border:'1px solid rgba(56,139,253,.2)'}}>Call</button>
+      </div>)}
+    </div>}
+
+    {/* ═══ RANK TAB — Stats + Ranking merged ═══ */}
+    {tab==='rank'&&isCallMode&&session&&!session.ended&&<div className="card" style={{marginBottom:12}}>
+      <h3 style={{fontSize:14,fontWeight:800,color:'#f1f5f9',margin:'0 0 10px'}}>📊 Session Stats</h3>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,textAlign:'center'}}>
+        {[['Dialed',session.dialed,'var(--text2)'],['Set',session.sets,'var(--green)'],['NP',session.np,'var(--amber)'],['CB',session.cb,'var(--blue)'],['NI',session.ni,'var(--red)']].map(([l,v,co])=>
+          <div key={l}><p className="mono" style={{margin:0,fontSize:18,fontWeight:800,color:co}}>{v}</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{l}</p></div>)}
+      </div>
+      {elapsed>0&&<div style={{display:'flex',justifyContent:'center',gap:16,marginTop:8,fontSize:10,color:'var(--text3)'}}>
+        <span>Hit Rate: {session.dialed?Math.round((session.sets/(session.dialed||1))*100):0}%</span>
+        <span>Calls/hr: {(session.dialed/(elapsed/3600)).toFixed(1)}</span>
+        <span>Streak: {streak}×</span>
+      </div>}
+    </div>}
     {tab==='rank'&&isCallMode&&(()=>{
       // Admin uses pay tier ranks, Main uses ML ranks
       const isAdminRank=role==='admin';
@@ -3061,7 +3090,7 @@ function App(){
           {[['Dialed',monthDialed,'var(--text2)'],['Appts',monthlyAppts,'var(--green)'],['NP',monthNP,'var(--amber)'],['NI',monthNI,'var(--red)']].map(([l,v,c])=>
             <div key={l} style={{textAlign:'center',padding:'10px 0',borderRadius:10,background:'var(--bg)'}}>
               <p style={{margin:0,fontSize:18,fontWeight:800,color:c}}>{v}</p>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>{l}</p></div>)}
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{l}</p></div>)}
         </div>
         <p style={{margin:'10px 0 0',fontSize:10,color:'var(--text3)',textAlign:'center'}}>{monthSessions.length} sessions this month · {totalSets} all-time appts</p>
       </div>
@@ -3096,18 +3125,28 @@ function App(){
               {isLive&&<span style={{width:6,height:6,borderRadius:'50%',background:'var(--green)',flexShrink:0}}/>}
               {isMe&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:7}}>YOU</span>}
             </div>
-            <span style={{fontSize:9,color:'var(--text3)'}}>{s.rank||''}</span>
+            <span style={{fontSize:10,color:'var(--text3)'}}>{s.rank||''}</span>
           </div>
           <div style={{textAlign:'right'}}>
             <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{s.sets}</p>
-            <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{s.dialed} dials</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{s.dialed} dials</p>
           </div>
         </div>})}
     </div>}
 
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {tab==='appts'&&<div className='content-pad'>
+      {appointments.length===0&&<div style={{textAlign:'center',padding:'40px 20px'}}>
+        <p style={{fontSize:40,margin:'0 0 12px'}}>📅</p>
+        <p style={{fontSize:14,fontWeight:700,color:'#f1f5f9',margin:'0 0 6px'}}>No appointments yet</p>
+        <p style={{fontSize:12,color:'var(--text3)',margin:0}}>Set appointments during calls — they'll appear here</p>
+      </div>}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+      {appointments.length===0&&<div style={{textAlign:'center',padding:'48px 20px'}}>
+        <p style={{fontSize:36,margin:'0 0 12px'}}>📅</p>
+        <h3 style={{fontSize:18,fontWeight:800,color:'#f1f5f9',margin:'0 0 8px'}}>No appointments yet</h3>
+        <p style={{fontSize:12,color:'var(--text3)'}}>Set appointments during your calling sessions and they'll appear here</p>
+      </div>}
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
@@ -3121,7 +3160,7 @@ function App(){
               if(_SB&&role!=='admin'){Object.keys(adminConfigs).forEach(email=>{
                 _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+email.toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})});
 
-                _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+(_user?.email||'').toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})};toast('All appointments cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:8,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
+                _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+(_user?.email||'').toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})};toast('All appointments cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
 
         </div>
       </div>
@@ -3166,7 +3205,7 @@ function App(){
           <span style={{fontSize:10,color:'var(--text3)'}}>{a._count} appts</span></div>;
         const isMain=role==='main';const statusColors={pending:'var(--accent)',met:'var(--green)',postponed:'var(--amber)',flykite:'var(--red)',closed:'var(--gold)'};
         const statusLabels={pending:'Pending',met:'Met ✅',postponed:'Postponed',flykite:'Fly Kite 🪁',closed:'Closed 💰'};
-        return<div key={a.id} className="card" style={{marginBottom:8,borderColor:(statusColors[a.followUp]||'var(--border)')+'30'}}>
+        return<div key={a.id} className="card" style={{marginBottom:12,borderColor:(statusColors[a.followUp]||'var(--border)')+'30'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
             <div style={{flex:1}}>
               <div style={{display:'flex',alignItems:'center',gap:6}}>
@@ -3320,16 +3359,16 @@ function App(){
               <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{email}</p></div>
               <div style={{textAlign:'right'}}>
                 <p className="mono" style={{margin:0,fontSize:20,fontWeight:900,color:totalOwed>0?'var(--gold)':'var(--green)'}}>${totalOwed.toFixed(2)}</p>
-                <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Sessions: ${unpaid.toFixed(2)}{adminIncentiveUnpaid>0&&` + Incentives: $${adminIncentiveUnpaid.toFixed(2)}`}</p>
+                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Sessions: ${unpaid.toFixed(2)}{adminIncentiveUnpaid>0&&` + Incentives: $${adminIncentiveUnpaid.toFixed(2)}`}</p>
               </div>
             </div>
             <div style={{display:'flex',gap:6,marginBottom:8}}>
               <div style={{flex:1,textAlign:'center',padding:'6px',borderRadius:8,background:'var(--bg)'}}>
-                <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--accent2)'}}>{sessions.length}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>Sessions</p></div>
+                <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--accent2)'}}>{sessions.length}</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Sessions</p></div>
               <div style={{flex:1,textAlign:'center',padding:'6px',borderRadius:8,background:'var(--bg)'}}>
-                <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--blue)'}}>{totalHrs.toFixed(1)}h</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>Hours</p></div>
+                <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--blue)'}}>{totalHrs.toFixed(1)}h</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Hours</p></div>
               <div style={{flex:1,textAlign:'center',padding:'6px',borderRadius:8,background:'var(--bg)'}}>
-                <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{totalAppts}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>Appts</p></div>
+                <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{totalAppts}</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Appts</p></div>
             </div>
             {periodFrom&&<p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Period: {periodFrom}{periodTo?' — '+periodTo:''}{adminIncentiveCount>0&&' · '+adminIncentiveCount+' incentive'+(adminIncentiveCount>1?'s':'')}</p>}
             {totalOwed>0&&<div style={{display:'flex',gap:6}}>
@@ -3360,7 +3399,7 @@ function App(){
                   adminIncentives.forEach(x=>{rows.push([new Date(x.date).toLocaleDateString('en-SG',{day:'numeric',month:'short'}),(x.type==='met'?'Met incentive':'Tip')+': '+x.leadName,'','','$'+x.amount.toFixed(2)])});
                   const grandTotal=unpaid+incentiveTotal;
                   doc.autoTable({startY:payNow?75:65,head:[['Date','Description','Hours','Rate','Amount']],body:rows,
-                    styles:{fontSize:9,cellPadding:4},headStyles:{fillColor:[99,102,241]},
+                    styles:{fontSize:10,cellPadding:4},headStyles:{fillColor:[99,102,241]},
                     foot:[['','Total: '+sessions.filter(s=>!s.paid).length+' sessions'+(adminIncentives.length?' + '+adminIncentives.length+' incentives':''),totalHrs.toFixed(1)+' hrs','TOTAL','$'+grandTotal.toFixed(2)]],
                     footStyles:{fillColor:[240,240,240],textColor:[0],fontStyle:'bold'}});
                   const fY=doc.lastAutoTable.finalY+15;
@@ -3397,7 +3436,7 @@ function App(){
           catch(err){toast('Upload failed: '+err.message,'err')}
           setUploadingScreenshot(false);if(screenshotRef.current)screenshotRef.current.value=''}}/>
 
-        {paymentHistory.map((p,i)=><div key={i} className="card" style={{marginBottom:8,padding:'14px',background:'linear-gradient(135deg,rgba(63,185,80,.03),transparent)',borderColor:p.screenshotId?'rgba(63,185,80,.2)':'var(--border)'}}>
+        {paymentHistory.map((p,i)=><div key={i} className="card" style={{marginBottom:12,padding:'14px',background:'linear-gradient(135deg,rgba(63,185,80,.03),transparent)',borderColor:p.screenshotId?'rgba(63,185,80,.2)':'var(--border)'}}>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <div style={{width:40,height:40,borderRadius:12,background:p.screenshotId?'var(--gdim)':'var(--amdim)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
               <span style={{fontSize:16}}>{p.screenshotId?'✅':'💳'}</span>
@@ -3446,13 +3485,13 @@ function App(){
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:16,marginBottom:8}}>
         <h3 style={{fontSize:14,fontWeight:700,color:'#f1f5f9',margin:0}}>Sessions</h3>
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
-          <span style={{fontSize:9,color:'var(--text3)'}}>{sessionLog.length} sessions</span>
-          {role!=='admin'&&sessionLog.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+sessionLog.length+' sessions?\n\nThis will reset pay history and cannot be undone.'))return;setSessionLog([]);save('slog',[]);cloudSave('slog',[]);toast('All sessions cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:8,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
+          <span style={{fontSize:10,color:'var(--text3)'}}>{sessionLog.length} sessions</span>
+          {role!=='admin'&&sessionLog.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+sessionLog.length+' sessions?\n\nThis will reset pay history and cannot be undone.'))return;setSessionLog([]);save('slog',[]);cloudSave('slog',[]);toast('All sessions cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
         </div>
       </div>
       <input value={tsSearch} onChange={e=>setTsSearch(e.target.value)} placeholder="🔍 Search by date, tier…" style={{marginBottom:8,fontSize:12}}/>
       {sessionLog.filter(s=>!tsSearch||s.tier?.toLowerCase().includes(tsSearch.toLowerCase())||new Date(s.startTime).toLocaleDateString().includes(tsSearch)).map((s,i)=>{const d=new Date(s.startTime);
-        return<div key={i} className="card" style={{marginBottom:6,opacity:s.paid?.6:1}}>
+        return<div key={i} className="card" style={{marginBottom:12,opacity:s.paid?.6:1}}>
           <div style={{display:'flex',justifyContent:'space-between'}}>
             <div><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p>
               <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</p></div>
@@ -3462,22 +3501,22 @@ function App(){
             <span>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span>NP:{s.np}</span><span>{s.tier}</span>
             {s.overtime&&<span style={{color:'var(--amber)'}}>⚠OT</span>}
             {s.creditHours&&<span style={{color:'var(--text3)'}}>{Number(s.creditHours).toFixed(1)}h</span>}
-            {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>📹 Replay</button>}
+            {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>📹 Replay</button>}
           </div>
           {role==='main'&&!s.paid&&<button onClick={()=>setSessionLog(p=>p.map((x,j)=>j===i?{...x,paid:true,paidDate:new Date().toISOString()}:x))} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
-          <button onClick={()=>{if(!confirm('Delete this session?'))return;setSessionLog(p=>p.filter((_,j)=>j!==i))}} style={{marginTop:4,width:'100%',padding:'4px',borderRadius:8,background:'var(--bg3)',color:'var(--red)',fontSize:9,fontWeight:600,border:'1px solid rgba(248,81,73,.15)'}}>🗑 Delete</button>
+          <button onClick={()=>{if(!confirm('Delete this session?'))return;setSessionLog(p=>p.filter((_,j)=>j!==i))}} style={{marginTop:4,width:'100%',padding:'4px',borderRadius:8,background:'var(--bg3)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.15)'}}>🗑 Delete</button>
         </div>})}
       {!sessionLog.length&&incentives.length===0&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{color:'var(--text3)'}}>Complete sessions to see timesheet</p></div>}
 
       {/* Incentives (Met/Closed/Tips) — timestamped to CURRENT billing cycle */}
       {incentives.length>0&&<>
         <h3 style={{fontSize:14,fontWeight:700,color:'var(--gold)',marginTop:16,marginBottom:8}}>🎯 Incentives & Tips {unpaidIncentiveTotal>0&&<span className="mono" style={{color:'var(--amber)'}}>(${unpaidIncentiveTotal.toFixed(2)} unpaid)</span>}</h3>
-        {incentives.map((x,i)=><div key={x.id} className="card" style={{marginBottom:6,padding:'10px 12px',opacity:x.paid?.5:1,borderColor:x.paid?'var(--border)':'rgba(240,180,41,.2)'}}>
+        {incentives.map((x,i)=><div key={x.id} className="card" style={{marginBottom:12,padding:'10px 12px',opacity:x.paid?.5:1,borderColor:x.paid?'var(--border)':'rgba(240,180,41,.2)'}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
             <span className="pill" style={{background:x.type==='met'?'var(--gdim)':'var(--golddim)',color:x.type==='met'?'var(--green)':'var(--gold)'}}>{x.type==='met'?'Met':x.type==='efyc'?'EFYC':'Tip'}</span>
             <div style={{flex:1}}>
               <p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{x.leadName}</p>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>
                 Billed: {new Date(x.date).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'})}
                 {x.apptOriginalDate&&<span> · Appt set: {new Date(x.apptOriginalDate).toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</span>}
               </p>
@@ -3490,7 +3529,20 @@ function App(){
     </div>}
 
     {tab==='leads'&&<div className='content-pad'>
-      {role==='admin'?<div className="card" style={{marginBottom:10}}>
+      {leads.length===0&&!sLoad&&<div style={{textAlign:'center',padding:'40px 20px'}}>
+        <p style={{fontSize:40,margin:'0 0 12px'}}>📋</p>
+        <p style={{fontSize:14,fontWeight:700,color:'#f1f5f9',margin:'0 0 6px'}}>No leads yet</p>
+        <p style={{fontSize:12,color:'var(--text3)',margin:'0 0 16px'}}>Fetch leads from your Google Sheet to start calling</p>
+        <button onClick={fetchLeads} style={{padding:'12px 24px',borderRadius:12,background:'var(--accent)',color:'#fff',fontSize:14,fontWeight:700}}>Fetch Leads</button>
+      </div>}
+      {role==='admin'?<div className="card" style={{marginBottom:12}}>
+      {leads.length===0&&!sLoad&&<div style={{textAlign:'center',padding:'48px 20px'}}>
+        <p style={{fontSize:36,margin:'0 0 12px'}}>📋</p>
+        <h3 style={{fontSize:18,fontWeight:800,color:'#f1f5f9',margin:'0 0 8px'}}>No leads yet</h3>
+        <p style={{fontSize:12,color:'var(--text3)',margin:'0 0 16px'}}>Fetch leads from your Google Sheet to start calling</p>
+        {cfg.sheetId&&<button onClick={fetchLeads} style={{padding:'12px 24px',borderRadius:12,background:'linear-gradient(135deg,var(--accent),#818cf8)',color:'#fff',fontSize:14,fontWeight:700}}>Fetch Leads</button>}
+        {!cfg.sheetId&&<p style={{fontSize:11,color:'var(--amber)'}}>Link a Google Sheet in Settings first</p>}
+      </div>}
         {myCfg.timesheetId?<>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--green)'}}>📋 {myCfg._tsName||'Shared Sheet'}</p>
@@ -3504,7 +3556,7 @@ function App(){
           <p style={{margin:'4px 0 0',fontSize:10,color:'var(--text3)'}}>Your manager will link a Google Sheet for you</p>
         </div>}
       </div>:
-      <div className="card" style={{marginBottom:10}}>
+      <div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--accent2)'}}>📊 Google Sheets</p>
           {!gOk?<button onClick={connectG} style={{padding:'6px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:600}}>Connect</button>
@@ -3545,15 +3597,15 @@ function App(){
         <div style={{width:32,height:32,borderRadius:10,background:ST[l.status]?.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:ST[l.status]?.c,flexShrink:0}}>{l.name.charAt(0)}</div>
         <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</p>
         <span className="mono" style={{fontSize:10,color:'var(--text3)'}}>{l.phone}</span> <Badge s={l.status} np={l.npCount} cbh={l.cbHistory}/>
-        {l.notes&&<p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'100%'}}>📝 {l.notes.slice(0,50)}{l.notes.length>50?'…':''}</p>}
+        {l.notes&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'100%'}}>📝 {l.notes.slice(0,50)}{l.notes.length>50?'…':''}</p>}
         </div>
       </div>)}
       <div style={{height:80}}/>
     </div>}
 
-    {tab==='analytics'&&isCallMode&&<div className='content-pad'>
+    {tab==='rank'&&isCallMode&&false&&/*moved to rank*/<div className='content-pad'>
       {/* Session Target - Main only */}
-      {role!=='admin'&&<div className="card" style={{marginBottom:10}}>
+      {role!=='admin'&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',margin:0}}>Session Target</h3>
           {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>{Math.round(((sessionTarget.type==='dials'?session.dialed:sessionTarget.type==='connected'?(session.dialed-(session.np||0)):session.sets)/(sessionTarget.count||1))*100)}%</span>}
@@ -3586,35 +3638,35 @@ function App(){
         const cpl=cfg.cpl||0;const cost=td*cpl;
         const efycTotal=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||0),0);const tipTotal=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.tip||0),0);
         return<>
-        <div className="card" style={{marginBottom:10}}>
+        <div className="card" style={{marginBottom:12}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',margin:'0 0 10px'}}>Hit Rates</h3>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
             <div style={{textAlign:'center',padding:12,borderRadius:10,background:'var(--bg)'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>TODAY</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700}}>TODAY</p>
               <p className="mono" style={{margin:'4px 0',fontSize:22,fontWeight:900,color:'var(--accent2)'}}>{dDialed>0?((dSets/dDialed)*100).toFixed(1):'0'}%</p>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Dialed ({dSets}/{dDialed})</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Set/Dialed ({dSets}/{dDialed})</p>
               <p className="mono" style={{margin:'4px 0 0',fontSize:15,fontWeight:700,color:'var(--green)'}}>{dConn>0?((dSets/dConn)*100).toFixed(1):'0'}%</p>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Connected ({dSets}/{dConn})</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Set/Connected ({dSets}/{dConn})</p>
             </div>
             <div style={{textAlign:'center',padding:12,borderRadius:10,background:'var(--bg)'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>LIFETIME</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700}}>LIFETIME</p>
               <p className="mono" style={{margin:'4px 0',fontSize:22,fontWeight:900,color:'var(--accent2)'}}>{td>0?((tSets/td)*100).toFixed(1):'0'}%</p>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Dialed ({tSets}/{td})</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Set/Dialed ({tSets}/{td})</p>
               <p className="mono" style={{margin:'4px 0 0',fontSize:15,fontWeight:700,color:'var(--green)'}}>{tConn>0?((tSets/tConn)*100).toFixed(1):'0'}%</p>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Set/Connected ({tSets}/{tConn})</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Set/Connected ({tSets}/{tConn})</p>
             </div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6}}>
             {[['Dialed',dDialed,td,'var(--text2)'],['NP',dNP,tNP,'var(--amber)'],['Conn',dConn,tConn,'var(--blue)'],['Set',dSets,tSets,'var(--green)']].map(([l,d,t,cl])=>
               <div key={l} style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
                 <p style={{margin:0,fontSize:14,fontWeight:800,color:cl}}>{d}</p>
-                <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{l} today</p>
+                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{l} today</p>
                 <p className="mono" style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{t} total</p>
               </div>)}
           </div>
         </div>
 
-        {cpl>0&&role==='main'&&<div className="card" style={{marginBottom:10,borderColor:'rgba(240,180,41,.2)'}}>
+        {cpl>0&&role==='main'&&<div className="card" style={{marginBottom:12,borderColor:'rgba(240,180,41,.2)'}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'var(--gold)',margin:'0 0 8px'}}>ROI</h3>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
             <div style={{textAlign:'center'}}><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Cost</p><p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:'var(--red)'}}>${cost.toFixed(0)}</p></div>
@@ -3624,23 +3676,23 @@ function App(){
         </div>}
 
         {/* Main-only: Business KPIs */}
-        {role==='main'&&cpl>0&&<div className="card" style={{marginBottom:10,borderColor:'rgba(99,102,241,.2)'}}>
+        {role==='main'&&cpl>0&&<div className="card" style={{marginBottom:12,borderColor:'rgba(99,102,241,.2)'}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 10px'}}>Business KPIs</h3>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
             <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Cost / Connected</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700}}>Cost / Connected</p>
               <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--amber)'}}>{tConn>0?'$'+((td*cpl)/tConn).toFixed(2):'--'}</p>
             </div>
             <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Cost / Appt Set</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700}}>Cost / Appt Set</p>
               <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--amber)'}}>{tSets>0?'$'+((td*cpl)/tSets).toFixed(2):'--'}</p>
             </div>
             <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Avg EFYC / Closed</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700}}>Avg EFYC / Closed</p>
               <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const cl=appointments.filter(a=>a.followUp==='closed');return cl.length?'$'+(cl.reduce((a,x)=>a+(x.efyc||0),0)/cl.length).toFixed(0):'--'})()}</p>
             </div>
             <div style={{padding:10,borderRadius:10,background:'var(--bg)',textAlign:'center'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:700}}>Revenue / 100 Dials</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700}}>Revenue / 100 Dials</p>
               <p className="mono" style={{margin:'4px 0 0',fontSize:16,fontWeight:800,color:'var(--green)'}}>{(()=>{const rev=appointments.filter(a=>a.followUp==='closed').reduce((a,x)=>a+(x.efyc||0),0);return td>0?'$'+((rev/td)*100).toFixed(0):'--'})()}</p>
             </div>
           </div>
@@ -3652,24 +3704,24 @@ function App(){
                 <div style={{width:Math.max(20,Math.min(100,(val/(leads.length||1))*100))+'%',height:18,borderRadius:5,background:color+'20',display:'flex',alignItems:'center',paddingLeft:6,minWidth:40}}>
                   <span style={{fontSize:10,fontWeight:700,color}}>{val}</span>
                 </div>
-                <span style={{fontSize:9,color:'var(--text3)',flexShrink:0}}>{label}{i>0&&arr[i-1][1]>0?' ('+((val/arr[i-1][1])*100).toFixed(0)+'%)':''}</span>
+                <span style={{fontSize:10,color:'var(--text3)',flexShrink:0}}>{label}{i>0&&arr[i-1][1]>0?' ('+((val/arr[i-1][1])*100).toFixed(0)+'%)':''}</span>
               </div>)})()}
           </div>
         </div>}
 
-        {role==='main'&&tSets>0&&<div className="card" style={{marginBottom:10,borderColor:'rgba(99,102,241,.15)'}}>
+        {role==='main'&&tSets>0&&<div className="card" style={{marginBottom:12,borderColor:'rgba(99,102,241,.15)'}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 8px'}}>Main Insights</h3>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
             <div style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>EFYC/Appt</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>EFYC/Appt</p>
               <p className="mono" style={{margin:0,fontSize:14,fontWeight:800,color:'var(--gold)'}}>${tSets>0?(efycTotal/tSets).toFixed(0):'--'}</p>
             </div>
             <div style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Cost/Appt</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Cost/Appt</p>
               <p className="mono" style={{margin:0,fontSize:14,fontWeight:800,color:'var(--red)'}}>${tSets>0&&cpl>0?(cost/tSets).toFixed(1):'--'}</p>
             </div>
             <div style={{textAlign:'center',padding:'8px 0',borderRadius:8,background:'var(--bg)'}}>
-              <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>Close Rate</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Close Rate</p>
               <p className="mono" style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{tSets>0?((appointments.filter(a=>a.followUp==='closed').length/tSets)*100).toFixed(0):'--'}%</p>
             </div>
           </div>
@@ -3678,22 +3730,22 @@ function App(){
         {(()=>{const phones={};leads.forEach(l=>{const p=l.phone.replace(/[^\d]/g,'');if(p.length>=7){if(!phones[p])phones[p]=[];phones[p].push(l)}});
           const dupes=Object.entries(phones).filter(([_,a])=>a.length>1);
           if(!dupes.length)return null;
-          return<div className="card" style={{marginBottom:10,borderColor:'rgba(248,81,73,.2)'}}>
+          return<div className="card" style={{marginBottom:12,borderColor:'rgba(248,81,73,.2)'}}>
             <h3 style={{fontSize:13,fontWeight:700,color:'var(--red)',margin:'0 0 8px'}}>Dupes ({dupes.length})</h3>
             {dupes.slice(0,8).map(([ph,arr])=><div key={ph} style={{display:'flex',alignItems:'center',gap:6,padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
               <span className="mono" style={{fontSize:10,color:'var(--text2)'}}>{ph}</span>
-              <span style={{fontSize:9,color:'var(--text3)',flex:1}}>{arr.map(l=>l.name).join(', ')}</span>
-              <button onClick={()=>{setLeads(p=>{const seen=new Set();return p.filter(l=>{const k=l.phone.replace(/[^\d]/g,'');if(k===ph){if(seen.has(k))return false;seen.add(k)}return true})});toast('Deduped '+ph)}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600,flexShrink:0}}>x1</button>
+              <span style={{fontSize:10,color:'var(--text3)',flex:1}}>{arr.map(l=>l.name).join(', ')}</span>
+              <button onClick={()=>{setLeads(p=>{const seen=new Set();return p.filter(l=>{const k=l.phone.replace(/[^\d]/g,'');if(k===ph){if(seen.has(k))return false;seen.add(k)}return true})});toast('Deduped '+ph)}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,flexShrink:0}}>x1</button>
             </div>)}
           </div>})()}
 
         <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',margin:'0 0 8px'}}>Sessions</h3>
         {sessionLog.slice(0,15).map((s,i)=>{const d=new Date(s.startTime);
-          return<div key={i} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+          return<div key={i} className="card" style={{marginBottom:12,padding:'10px 12px'}}>
             <div style={{display:'flex',justifyContent:'space-between'}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p><span style={{fontSize:11,color:rank.color}}>{s.rank||s.tier||''}</span></div>
             <div style={{display:'flex',gap:5,fontSize:10,color:'var(--text3)',marginTop:4}}>
               <span>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span>NP:{s.np}</span>
-              {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>Replay</button>}
+              {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Replay</button>}
             </div>
           </div>})}
         </>})()}
@@ -3730,11 +3782,11 @@ function App(){
       {/* Notifications */}
       {notifications.filter(n=>!n.read).length>0&&<>
         <h3 style={{fontSize:14,fontWeight:700,color:'var(--amber)',marginTop:16,marginBottom:8}}>🔔 Notifications ({notifications.filter(n=>!n.read).length})</h3>
-        {notifications.filter(n=>!n.read).slice(0,10).map(n=><div key={n.id} className="card" style={{marginBottom:6,padding:'10px 12px',borderColor:'rgba(210,153,34,.2)'}}>
+        {notifications.filter(n=>!n.read).slice(0,10).map(n=><div key={n.id} className="card" style={{marginBottom:12,padding:'10px 12px',borderColor:'rgba(210,153,34,.2)'}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
             <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{n.title}</p>
               {n.body&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{n.body}</p>}</div>
-            <button onClick={()=>{DB.markRead(n.id);setNotifications(p=>p.map(x=>x.id===n.id?{...x,read:true}:x))}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9}}>✓</button>
+            <button onClick={()=>{DB.markRead(n.id);setNotifications(p=>p.map(x=>x.id===n.id?{...x,read:true}:x))}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>✓</button>
           </div>
         </div>)}
       </>}
@@ -3753,7 +3805,7 @@ function App(){
         return<>
           {overdue.length>0&&<>
             <p style={{fontSize:12,fontWeight:700,color:'var(--red)',marginBottom:6}}>⚠️ Overdue ({overdue.length})</p>
-            {overdue.map(c=><div key={c.id} className="card" style={{marginBottom:6,padding:'10px 12px',borderColor:'rgba(248,81,73,.2)'}}>
+            {overdue.map(c=><div key={c.id} className="card" style={{marginBottom:12,padding:'10px 12px',borderColor:'rgba(248,81,73,.2)'}}>
               <div style={{display:'flex',alignItems:'center',gap:8}}>
                 <div style={{flex:1}}><p style={{margin:0,fontSize:13,fontWeight:600,color:'var(--red)'}}>{c.lead_name}</p>
                   <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{c.lead_phone} · Was due {c.scheduled_date} {c.scheduled_time}</p>
@@ -3767,7 +3819,7 @@ function App(){
           </>}
           {upcoming.length>0&&<>
             <p style={{fontSize:12,fontWeight:700,color:'var(--accent2)',marginTop:overdue.length?12:0,marginBottom:6}}>📅 Upcoming ({upcoming.length})</p>
-            {upcoming.map(c=><div key={c.id} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+            {upcoming.map(c=><div key={c.id} className="card" style={{marginBottom:12,padding:'10px 12px'}}>
               <div style={{display:'flex',alignItems:'center',gap:8}}>
                 <div style={{flex:1}}><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>{c.lead_name}</p>
                   <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{c.lead_phone} · {c.scheduled_date} {c.scheduled_time}</p>
@@ -3796,7 +3848,7 @@ function App(){
         {[['NP','var(--amber)','var(--amdim)','np'],['CB','var(--blue)','var(--bdim)','cb'],['NI','var(--red)','var(--rdim)','ni'],['Set','var(--green)','var(--gdim)','set']].map(([l,c,bg,k])=>
           <div key={k} style={{textAlign:'center',padding:'10px 0',borderRadius:12,background:bg}}>
             <p style={{margin:0,fontSize:18,fontWeight:800,color:c}}>{leads.filter(x=>x.status===k).length}</p>
-            <p style={{margin:0,fontSize:9,color:'var(--text3)',fontWeight:600}}>{l}</p></div>)}
+            <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:600}}>{l}</p></div>)}
       </div>
       <button onClick={exportCSV} style={{width:'100%',padding:'10px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600}}>⬇ Export Report</button>
     </div>}
@@ -3805,7 +3857,7 @@ function App(){
       {/* Creator user management */}
       {role!=='admin'&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 10px'}}>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
-        <span style={{fontSize:9,fontWeight:700,color:'var(--accent2)',letterSpacing:1}}>👥 TEAM MANAGEMENT</span>
+        <span style={{fontSize:10,fontWeight:700,color:'var(--accent2)',letterSpacing:1}}>👥 TEAM MANAGEMENT</span>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
       </div>}
       {isCreatorUser&&<div className="card" style={{marginBottom:12}}>
@@ -3815,7 +3867,7 @@ function App(){
         </div>
         {usersList.map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
           <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{u.full_name||u.email}</p>
-            <span style={{fontSize:10,color:'var(--text3)'}}>{u.email}</span> <span className="pill" style={{background:u.approved?'var(--gdim)':'var(--rdim)',color:u.approved?'var(--green)':'var(--red)',fontSize:8}}>{u.approved?'OK':'PENDING'}</span></div>
+            <span style={{fontSize:10,color:'var(--text3)'}}>{u.email}</span> <span className="pill" style={{background:u.approved?'var(--gdim)':'var(--rdim)',color:u.approved?'var(--green)':'var(--red)',fontSize:10}}>{u.approved?'OK':'PENDING'}</span></div>
           {!isCreator(u.email)&&<button onClick={async()=>{try{await _SB.from('profiles').update({approved:!u.approved}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:!x.approved}:x));setPendingUsers(p=>u.approved?[...p,{...u,approved:false}]:p.filter(x=>x.id!==u.id));toast(u.approved?'Revoked':'Approved')}catch(e){toast('Error: '+e.message,'err')}}} style={{padding:'4px 10px',borderRadius:6,background:u.approved?'var(--rdim)':'var(--gdim)',color:u.approved?'var(--red)':'var(--green)',fontSize:10,fontWeight:600}}>{u.approved?'Revoke':'Approve'}</button>}
         </div>)}
       </div>}
@@ -3856,32 +3908,32 @@ function App(){
               {TIER_META.map((t,i)=>{const _on=!(ac.enabledTiers&&ac.enabledTiers[i]===false);return<div key={i} style={{background:_on?'var(--bg)':'var(--bg3)',border:'1px solid '+(_on?t.color+'20':'var(--border)'),borderRadius:8,padding:'4px',textAlign:'center',opacity:_on?1:.35,position:'relative'}}>
                 <button onClick={(ev)=>{ev.stopPropagation();const et=[...(ac.enabledTiers||[true,true,true,true,true,true])];et[i]=!et[i];setAdminConfigs(p=>({...p,[em]:{...p[em],enabledTiers:et}}))}} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:11,background:_on?'#22c55e':'#ef4444',color:'#fff',fontSize:11,fontWeight:800,border:'2px solid var(--bg2)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,zIndex:2,boxShadow:'0 2px 6px rgba(0,0,0,.3)'}}>{_on?'✓':'✗'}</button>
                 <span style={{fontSize:12}}>{t.emoji}</span>
-                <p style={{margin:0,fontSize:8,fontWeight:700,color:t.color}}>{t.label}</p>
+                <p style={{margin:0,fontSize:10,fontWeight:700,color:t.color}}>{t.label}</p>
                 <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>$/hr</label>
-                <div style={{position:'relative'}}><span style={{position:'absolute',left:4,top:'50%',transform:'translateY(-50%)',fontSize:9,color:'var(--text3)',pointerEvents:'none'}}>$</span>
+                <div style={{position:'relative'}}><span style={{position:'absolute',left:4,top:'50%',transform:'translateY(-50%)',fontSize:10,color:'var(--text3)',pointerEvents:'none'}}>$</span>
                 <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':+e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} style={{fontSize:10,textAlign:'center',padding:'4px 4px 4px 14px',marginTop:1}}/></div>
                 <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>Min appts</label>
                 <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':+e.target.value;
-                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} style={{fontSize:9,textAlign:'center',padding:'3px',marginTop:1}} disabled={i===0}/>
+                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} style={{fontSize:10,textAlign:'center',padding:'3px',marginTop:1}} disabled={i===0}/>
               </div>})}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
-              <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Session(h)</label>
+              <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Session(h)</label>
                 <input type="number" value={ac.sessionDur??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sessionDur:e.target.value===''?'':+e.target.value}}))} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
-              <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Appts Bar</label>
+              <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Appts Bar</label>
                 <input type="number" min="1" value={ac.mThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setAdminConfigs(p=>({...p,[em]:{...p[em],mThresh:e.target.value===''?'':Math.max(0,+e.target.value)}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
-              <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Bonus Bar</label>
+              <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Bonus Bar</label>
                 <input type="number" min="1" value={ac.nThresh??''} onChange={e=>{const v=+e.target.value;if(v<0)v=0;setAdminConfigs(p=>({...p,[em]:{...p[em],nThresh:e.target.value===''?'':Math.max(0,+e.target.value)}}))}} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
-              <div><label style={{fontSize:9,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:2}}>Bonus ×</label>
+              <div><label style={{fontSize:10,color:'var(--gold)',fontWeight:700,display:'block',marginBottom:2}}>Bonus ×</label>
                 <input type="number" min="1" step="0.1" value={ac.bonusMult??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
-              <div><label style={{fontSize:9,color:'var(--amber)',fontWeight:700,display:'block',marginBottom:2}}>Met Incentive ($)</label>
+              <div><label style={{fontSize:10,color:'var(--amber)',fontWeight:700,display:'block',marginBottom:2}}>Met Incentive ($)</label>
                 <input type="number" value={ac.metIncentive??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],metIncentive:e.target.value===''?'':parseFloat(e.target.value)}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
             </div>
 
             <div style={{marginBottom:8}}>
-              <label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:2}}>📋 Leads Sheet</label>
+              <label style={{fontSize:10,color:'var(--green)',fontWeight:700,display:'block',marginBottom:2}}>📋 Leads Sheet</label>
               <div style={{position:'relative'}}>
                 <input value={ac._tsName||ac.timesheetId||''} onChange={e=>{const v=e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],_tsName:v}}));if(v.length>=2&&gOk){clearTimeout(window['_ts'+em]);window['_ts'+em]=setTimeout(()=>{gDrive.search(v).then(r=>{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:r}}))})},400)}else{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:[]}}))}}} placeholder="Type to search your Google Sheets..." style={{fontSize:12,padding:'10px'}}/>
                 {(ac._tsResults||[]).length>0&&<div style={{position:'absolute',left:0,right:0,zIndex:10,maxHeight:120,overflowY:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,marginTop:2,boxShadow:'0 8px 24px rgba(0,0,0,.4)'}}>
@@ -3899,11 +3951,11 @@ function App(){
               </div>
               {ac.timesheetId&&<>
                 <div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 0'}}>
-                  <p style={{fontSize:9,color:'var(--green)',margin:0,flex:1}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>
-                  <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:'',_tsName:'',sheetTab:'',_sheetTabs:[]}}))} style={{padding:'2px 8px',borderRadius:4,background:'var(--rdim)',color:'var(--red)',fontSize:8,fontWeight:600,border:'none',cursor:'pointer'}}>Unlink</button>
+                  <p style={{fontSize:10,color:'var(--green)',margin:0,flex:1}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>
+                  <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:'',_tsName:'',sheetTab:'',_sheetTabs:[]}}))} style={{padding:'2px 8px',borderRadius:4,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'none',cursor:'pointer'}}>Unlink</button>
                 </div>
                 <div style={{display:'flex',alignItems:'center',gap:4,margin:'6px 0 0'}}>
-                  <label style={{fontSize:9,color:'var(--accent2)',fontWeight:600}}>Tab:</label>
+                  <label style={{fontSize:10,color:'var(--accent2)',fontWeight:600}}>Tab:</label>
                   {ac._sheetTabs?.length>0?
                     <select value={ac.sheetTab||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sheetTab:e.target.value}}))} style={{flex:1,fontSize:11,padding:'6px',borderRadius:6,background:'var(--bg)',color:'var(--accent2)',border:'1px solid var(--border)'}}>
                       <option value="">Select tab...</option>
@@ -3918,11 +3970,11 @@ function App(){
                     let msg=tabs.length+' tabs found';
                     if(tsTab)msg+=' · 📊 Timesheet: '+tsTab;
                     if(apptTab)msg+=' · 📅 Appts: '+apptTab;
-                    toast(msg)}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,fontWeight:600,whiteSpace:'nowrap'}}>Load Tabs</button>
+                    toast(msg)}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:600,whiteSpace:'nowrap'}}>Load Tabs</button>
                 </div>
-                {ac.sheetTab&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>📋 {ac._tsName||'Sheet'} → <b>{ac.sheetTab}</b></p>}
+                {ac.sheetTab&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>📋 {ac._tsName||'Sheet'} → <b>{ac.sheetTab}</b></p>}
                 {(ac._detectedTs||ac._detectedAppt)&&<div style={{margin:'6px 0',padding:'8px',borderRadius:8,background:'rgba(99,102,241,.05)',border:'1px solid rgba(99,102,241,.15)'}}>
-                  <p style={{margin:'0 0 4px',fontSize:9,fontWeight:700,color:'var(--accent2)'}}>🔍 AI Detected Tabs</p>
+                  <p style={{margin:'0 0 4px',fontSize:10,fontWeight:700,color:'var(--accent2)'}}>🔍 AI Detected Tabs</p>
                   {ac._detectedAppt&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
                     <span style={{fontSize:10,color:'var(--text2)'}}>📅 Appointments: <b>{ac._detectedAppt}</b></span>
                     <button onClick={async()=>{try{toast('Importing appointments...','info');
@@ -3971,7 +4023,7 @@ function App(){
                           source:'imported'};
                         setAppointments(p=>[...p,appt]);imported++;existing.push(key)}
                       toast(imported+' appointments imported ✓');
-                    }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--gdim)',color:'var(--green)',fontSize:8,fontWeight:600}}>Import</button>
+                    }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>Import</button>
                   </div>}
                   {ac._detectedTs&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                     <span style={{fontSize:10,color:'var(--text2)'}}>📊 Timesheet: <b>{ac._detectedTs}</b></span>
@@ -4014,15 +4066,15 @@ function App(){
                           tier:'Imported',paid:true,paidDate:new Date().toISOString(),source:'imported',ended:true})}
                       if(pastSessions.length){setSessionLog(p=>[...pastSessions,...p]);setTotalSets(p=>p+totalImportedSets)}
                       toast(pastSessions.length+' sessions imported ('+totalImportedSets+' appts)'+(skipped?' · '+skipped+' skipped':''));
-                    }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--adim)',color:'var(--accent2)',fontSize:8,fontWeight:600}}>Import as Past Pay</button>
+                    }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Import as Past Pay</button>
                   </div>}
                 </div>}
               </>}
-              <p style={{fontSize:9,color:'var(--text3)',margin:'6px 0 0',lineHeight:1.4}}>💡 Just add the leads sheet — <b style={{color:'var(--accent2)'}}>Timesheet</b>, <b style={{color:'var(--accent2)'}}>Appointments</b> & <b style={{color:'var(--accent2)'}}>Pay</b> tabs are auto-created!</p>
+              <p style={{fontSize:10,color:'var(--text3)',margin:'6px 0 0',lineHeight:1.4}}>💡 Just add the leads sheet — <b style={{color:'var(--accent2)'}}>Timesheet</b>, <b style={{color:'var(--accent2)'}}>Appointments</b> & <b style={{color:'var(--accent2)'}}>Pay</b> tabs are auto-created!</p>
             </div>
-            <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Invoice Name</label>
+            <div style={{marginBottom:6}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Invoice Name</label>
               <input value={ac.bizName||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bizName:e.target.value}}))} placeholder="Business or full name" style={{fontSize:12,padding:'8px'}}/></div>
-            <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>PayNow Number</label>
+            <div style={{marginBottom:6}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>PayNow Number</label>
               <input value={ac.payNow||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],payNow:e.target.value}}))} placeholder="+65 9xxx xxxx" style={{fontSize:12,padding:'8px'}}/></div>
             
           </div>}
@@ -4031,10 +4083,10 @@ function App(){
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
-        {role!=='admin'?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>☁️ Sync All</button></div>:<>
+        {role!=='admin'?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>☁️ Sync All</button></div>:<>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>Call Rules</h3>
         {adminConfigs[myEmail]&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
-          <p style={{fontSize:9,fontWeight:700,color:'var(--green)',margin:'0 0 4px'}}>☁️ SYNCED FROM MANAGER</p>
+          <p style={{fontSize:10,fontWeight:700,color:'var(--green)',margin:'0 0 4px'}}>☁️ SYNCED FROM MANAGER</p>
           <div style={{display:'flex',flexWrap:'wrap',gap:6,fontSize:10,color:'var(--text2)'}}>
             <span>⏱ {myCfg.sessionDur||5}h session</span>
             <span>📊 {myCfg.mThresh||2} appts bar</span>
@@ -4043,7 +4095,7 @@ function App(){
             <span>🎁 ${myCfg.metIncentive||10} met incentive</span>
             {<span>⛔ DNC {(cfg.dncEnd||9)>12?(cfg.dncEnd||9)-12+'PM':(cfg.dncEnd||9)+'AM'}–{(cfg.dncStart||21)>12?(cfg.dncStart||21)-12+'PM':(cfg.dncStart||21)+'AM'}</span>}
           </div>
-          <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4,fontSize:9,color:'var(--text3)'}}>
+          <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4,fontSize:10,color:'var(--text3)'}}>
             {(myCfg.payRates||[8,10,12]).slice(0,3).map((r,i)=><span key={i}>{['🥉','🥈','🥇'][i]} ${r}/hr</span>)}
           </div>
         </div>}
@@ -4065,10 +4117,10 @@ function App(){
               {Array.from({length:24},(_,h)=><option key={h} value={h}>{h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'}</option>)}
             </select>
           </div>
-          <p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>Calls auto-pause outside {(cfg.dncEnd||9)>12?(cfg.dncEnd||9)-12+'PM':(cfg.dncEnd||9)+'AM'} – {(cfg.dncStart||21)>12?(cfg.dncStart||21)-12+'PM':(cfg.dncStart||21)+'AM'}</p>
+          <p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)',textAlign:'center'}}>Calls auto-pause outside {(cfg.dncEnd||9)>12?(cfg.dncEnd||9)-12+'PM':(cfg.dncEnd||9)+'AM'} – {(cfg.dncStart||21)>12?(cfg.dncStart||21)-12+'PM':(cfg.dncStart||21)+'AM'}</p>
         </div>:
         <div style={{marginBottom:12,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)'}}>
-          <p style={{margin:0,fontSize:11,color:'var(--text2)'}}>⛔ DNC: Calls allowed <b>{(()=>{const h=cfg.dncEnd||9;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> to <b>{(()=>{const h=cfg.dncStart||21;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> <span style={{fontSize:9,color:'var(--text3)'}}>(set by manager)</span></p>
+          <p style={{margin:0,fontSize:11,color:'var(--text2)'}}>⛔ DNC: Calls allowed <b>{(()=>{const h=cfg.dncEnd||9;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> to <b>{(()=>{const h=cfg.dncStart||21;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> <span style={{fontSize:10,color:'var(--text3)'}}>(set by manager)</span></p>
         </div>}
         {/* Queue Priority */}
         <div style={{marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
@@ -4089,16 +4141,16 @@ function App(){
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System {isCreatorUser&&'(Owner Edit)'}</p>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
-              <span style={{fontSize:9,color:'var(--text3)'}}>🏦 Star Bank:</span>
+              <span style={{fontSize:10,color:'var(--text3)'}}>🏦 Star Bank:</span>
               <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{starBank+totalStars} ⭐</span>
             </div>
           </div>
           {isCreatorUser?<>
-            <p style={{margin:'0 0 6px',fontSize:9,fontWeight:600,color:'var(--text3)'}}>Min Appts/Month per Rank + Milestone Stars Awarded:</p>
+            <p style={{margin:'0 0 6px',fontSize:10,fontWeight:600,color:'var(--text3)'}}>Min Appts/Month per Rank + Milestone Stars Awarded:</p>
             <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:10}}>
               {ML_RANKS.map((r,i)=><div key={i} style={{textAlign:'center',padding:'6px 4px',borderRadius:8,background:'var(--bg2)',border:'1px solid var(--border)'}}>
                 <span style={{fontSize:14}}>{r.emoji}</span>
-                <p style={{margin:'2px 0',fontSize:8,color:r.color,fontWeight:700}}>{r.label}</p>
+                <p style={{margin:'2px 0',fontSize:10,color:r.color,fontWeight:700}}>{r.label}</p>
                 <label style={{fontSize:7,color:'var(--text3)'}}>Min Appts</label>
                 <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??0} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px'}} disabled={i===0}/>
                 <label style={{fontSize:7,color:'var(--gold)'}}>⭐ Stars</label>
@@ -4116,7 +4168,7 @@ function App(){
                 background:isActive?r.color+'18':'var(--bg3)',border:'1px solid '+(isActive?r.color+'40':'var(--border)'),opacity:isActive?1:0.45,position:'relative'}}>
                 <span style={{fontSize:16}}>{r.emoji}</span>
                 <div><p style={{margin:0,fontSize:10,fontWeight:700,color:isActive?r.color:'var(--text3)'}}>{r.label}</p>
-                <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>≥{threshold} appts</p>
+                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>≥{threshold} appts</p>
                 {mStars>0&&<p style={{margin:0,fontSize:7,color:isAwarded?'var(--green)':'var(--gold)'}}>{isAwarded?'✓ ':''}+{mStars}⭐</p>}</div>
               </div>})}
           </div>}
@@ -4155,18 +4207,18 @@ function App(){
       {role==='admin'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>💳 Payment Details</h3>
         {myCfg.bizName&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 6px'}}>✓ Set by manager: <b>{myCfg.bizName}</b></p>}
-        <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Name (for invoice)</label>
+        <div style={{marginBottom:8}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Name (for invoice)</label>
         <input value={myCfg.bizName||localStorage.getItem('ad_bizname')||''} onChange={e=>localStorage.setItem('ad_bizname',e.target.value)} placeholder="Your name or business" disabled={!!myCfg.bizName} style={{opacity:myCfg.bizName?.6:1}}/></div>
-        <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>PayNow Number</label>
+        <div style={{marginBottom:8}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>PayNow Number</label>
         <input value={myCfg.payNow||localStorage.getItem('ad_paynow')||''} onChange={e=>localStorage.setItem('ad_paynow',e.target.value)} placeholder="+65 9xxx xxxx" disabled={!!myCfg.payNow} style={{opacity:myCfg.payNow?.6:1}}/></div>
-        {myCfg.timesheetId&&<div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📋 Linked Sheet</label>
+        {myCfg.timesheetId&&<div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📋 Linked Sheet</label>
         <p style={{fontSize:11,color:'var(--green)',margin:0}}>✓ {myCfg._tsName||'Sheet'}{myCfg.sheetTab?' → '+myCfg.sheetTab:''}</p></div>}
-        <p style={{fontSize:8,color:'var(--text3)',margin:'6px 0 0'}}>Payment details are managed by your team lead</p>
+        <p style={{fontSize:10,color:'var(--text3)',margin:'6px 0 0'}}>Payment details are managed by your team lead</p>
       </div>}
 
       <div style={{display:'flex',alignItems:'center',gap:6,margin:'16px 0 10px'}}>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
-        <span style={{fontSize:9,fontWeight:700,color:'var(--text3)',letterSpacing:1}}>🔗 INTEGRATIONS</span>
+        <span style={{fontSize:10,fontWeight:700,color:'var(--text3)',letterSpacing:1}}>🔗 INTEGRATIONS</span>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
       </div>
       {role!=='admin'?<div className="card" style={{marginBottom:12}}>
@@ -4184,15 +4236,15 @@ function App(){
           <p style={{margin:0,fontSize:11,color:'var(--green)',fontWeight:600}}>📋 {myCfg._tsName||'Shared Sheet'}</p>
           {myCfg.sheetTab&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--accent2)'}}>Tab: <b>{myCfg.sheetTab}</b></p>}
         </div>}
-        {!myCfg.timesheetId&&<p style={{fontSize:9,color:'var(--text3)',margin:'4px 0 0'}}>Waiting for manager to assign a sheet</p>}
-        {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Reset to manager connection');setTimeout(()=>location.reload(),500)}} style={{marginTop:8,padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,border:'1px solid var(--border)'}}>Reset Google connection</button>}
+        {!myCfg.timesheetId&&<p style={{fontSize:10,color:'var(--text3)',margin:'4px 0 0'}}>Waiting for manager to assign a sheet</p>}
+        {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Reset to manager connection');setTimeout(()=>location.reload(),500)}} style={{marginTop:8,padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,border:'1px solid var(--border)'}}>Reset Google connection</button>}
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
         <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
-          {role!=='admin'&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
-          {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:9,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
+          {role!=='admin'&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
+          {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
             else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
@@ -4203,19 +4255,19 @@ function App(){
       </div>
 
       {WORKER_URL&&role!=='admin'&&<div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:9,fontWeight:400,color:'var(--text3)'}}>(smarter sheet analysis)</span></h3>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:10,fontWeight:400,color:'var(--text3)'}}>(smarter sheet analysis)</span></h3>
         <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
         <input value={localStorage.getItem('autodial_claude_key')||''} onChange={e=>{localStorage.setItem('autodial_claude_key',e.target.value.trim());e.target.parentElement.querySelector('.ck-status').textContent=e.target.value.trim()?'✓ Key saved':'No key'}} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
         <p className="ck-status" style={{margin:0,fontSize:10,color:localStorage.getItem('autodial_claude_key')?'var(--green)':'var(--text3)'}}>{localStorage.getItem('autodial_claude_key')?'✓ Key saved — Claude will analyze your leads':'No key — using Gemini only'}</p>
-          {role!=='admin'&&<button onClick={()=>{const k=localStorage.getItem('autodial_claude_key');if(!k)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:k}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600,marginTop:6}}>Share key with admins</button>}
-          {role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
+          {role!=='admin'&&<button onClick={()=>{const k=localStorage.getItem('autodial_claude_key');if(!k)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:k}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
+          {role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
       </div>}
 
       {/* Calendar Sharing (Main only) */}
       {role==='main'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Calendar Sharing</h3>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Share your Google Calendars with admins so they can see your availability.</p>
-        <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
+        <div style={{marginBottom:8}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Default Appt Duration (mins)</label>
           <input type="number" min="15" step="15" value={apptDuration} onChange={e=>setApptDuration(e.target.value===''?'':+e.target.value)} style={{textAlign:'center',width:120}}/></div>
         {gOk&&<>
           <button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:600,marginBottom:8}}>Load My Calendars</button>
@@ -4247,7 +4299,7 @@ function App(){
       {<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates</h3>
-          {waTemplates.length>0&&<button onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>Delete All</button>}
+          {waTemplates.length>0&&<button onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>Delete All</button>}
         </div>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Message templates for WhatsApp. Placeholders: {'{{name}}, {{date}}, {{time}}, {{admin}}, {{company}}'}</p>
         {waTemplates.map((t,i)=><div key={t.id||i} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
@@ -4255,8 +4307,8 @@ function App(){
           <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{t.name}</p>
             <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.template}</p></div>
           <div style={{display:'flex',gap:4,flexShrink:0}}>
-            <button onClick={()=>{setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Editing — make changes and save')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>Edit</button>
-            <button onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Deleted')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>×</button>
+            <button onClick={()=>{setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Editing — make changes and save')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Edit</button>
+            <button onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Deleted')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>×</button>
           </div>
         </div>)}
         <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
@@ -4411,11 +4463,11 @@ function App(){
             <div style={{flex:1,minWidth:0}}>
               <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{u.full_name||'No name'}</p>
               <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{u.email}</p>
-              <span className="pill" style={{background:'var(--bg)',color:'var(--amber)',fontSize:8,marginTop:2}}>Requested: {u.requested_role||u.autodial_role||'admin'}</span>
+              <span className="pill" style={{background:'var(--bg)',color:'var(--amber)',fontSize:10,marginTop:2}}>Requested: {u.requested_role||u.autodial_role||'admin'}</span>
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0}}>
               <button onClick={async()=>{const role=u.requested_role||u.autodial_role||'admin';try{await _SB.from('profiles').update({approved:true,autodial_role:role,role:role}).eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));setUsersList(p=>{const exists=p.find(x=>x.id===u.id);if(exists)return p.map(x=>x.id===u.id?{...x,approved:true,autodial_role:role}:x);return[...p,{...u,approved:true,autodial_role:role}]});toast(u.full_name+' approved as '+role+' ✓')}catch(e){toast('Error','err')}}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>✓ Approve</button>
-              <button onClick={async()=>{if(!confirm('Reject '+u.full_name+'?'))return;try{await _SB.from('profiles').delete().eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));toast('Rejected')}catch(e){toast('Error','err')}}} style={{padding:'4px 14px',borderRadius:8,background:'var(--bg)',color:'var(--text3)',fontSize:9,fontWeight:600}}>Reject</button>
+              <button onClick={async()=>{if(!confirm('Reject '+u.full_name+'?'))return;try{await _SB.from('profiles').delete().eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));toast('Rejected')}catch(e){toast('Error','err')}}} style={{padding:'4px 14px',borderRadius:8,background:'var(--bg)',color:'var(--text3)',fontSize:10,fontWeight:600}}>Reject</button>
             </div>
           </div>)}
           <div style={{borderBottom:'1px solid var(--border)',margin:'12px 0'}}/>
@@ -4433,9 +4485,9 @@ function App(){
           {/* Role toggle */}
           <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0,alignItems:'flex-end'}}>
             <div style={{display:'flex',gap:3}}>
-              {['admin','main','both'].map(r=><button key={r} onClick={async()=>{try{await _SB.from('profiles').update({autodial_role:r,role:r}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,autodial_role:r,role:r}:x));toast(u.full_name+' → '+r)}catch(e){toast('Error','err')}}} style={{padding:'4px 8px',borderRadius:6,background:(u.autodial_role||u.role)=== r?'var(--adim)':'var(--bg)',color:(u.autodial_role||u.role)===r?'var(--accent2)':'var(--text3)',fontSize:9,fontWeight:700,border:'1px solid '+((u.autodial_role||u.role)===r?'var(--accent)':'var(--border)')}}>{r==='admin'?'📋':r==='main'?'👔':'🌟'} {r}</button>)}
+              {['admin','main','both'].map(r=><button key={r} onClick={async()=>{try{await _SB.from('profiles').update({autodial_role:r,role:r}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,autodial_role:r,role:r}:x));toast(u.full_name+' → '+r)}catch(e){toast('Error','err')}}} style={{padding:'4px 8px',borderRadius:6,background:(u.autodial_role||u.role)=== r?'var(--adim)':'var(--bg)',color:(u.autodial_role||u.role)===r?'var(--accent2)':'var(--text3)',fontSize:10,fontWeight:700,border:'1px solid '+((u.autodial_role||u.role)===r?'var(--accent)':'var(--border)')}}>{r==='admin'?'📋':r==='main'?'👔':'🌟'} {r}</button>)}
             </div>
-            <button onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}} style={{padding:'3px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>Revoke</button>
+            <button onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}} style={{padding:'3px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>Revoke</button>
           </div>
         </div>)}
 
@@ -4484,18 +4536,18 @@ function App(){
               <div style={{display:'flex',gap:8}}>
                 <div style={{flex:1,padding:'8px',borderRadius:8,background:'var(--bg)',textAlign:'center'}}>
                   <p style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>{ab}</p>
-                  <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>🎯 Appts Bar</p>
-                  <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>= full {hrs}h pay</p>
+                  <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>🎯 Appts Bar</p>
+                  <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>= full {hrs}h pay</p>
                 </div>
                 <div style={{flex:1,padding:'8px',borderRadius:8,background:'var(--bg)',textAlign:'center',border:'1px solid '+color+'20'}}>
                   <p style={{margin:0,fontSize:16,fontWeight:800,color:'var(--gold)'}}>{bb}</p>
-                  <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>🔥 Bonus Bar</p>
-                  <p className="mono" style={{margin:0,fontSize:9,color:'var(--gold)'}}>${bonusPay.toFixed(0)} ({n(myCfg.bonusMult,1.5)}×)</p>
+                  <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>🔥 Bonus Bar</p>
+                  <p className="mono" style={{margin:0,fontSize:10,color:'var(--gold)'}}>${bonusPay.toFixed(0)} ({n(myCfg.bonusMult,1.5)}×)</p>
                 </div>
                 <div style={{flex:1,padding:'8px',borderRadius:8,background:'var(--bg)',textAlign:'center'}}>
                   <p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color}}>${hourlyRate}</p>
-                  <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>💰 $/hr</p>
-                  <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>{tier.emoji} {tier.label}</p>
+                  <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>💰 $/hr</p>
+                  <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{tier.emoji} {tier.label}</p>
                 </div>
               </div>
             </button>})
@@ -4539,13 +4591,13 @@ function App(){
         {/* Invitees with memory */}
         <input value={apptInvite} onChange={ev=>setApptInvite(ev.target.value)} placeholder="Invite emails (comma sep)" style={{marginBottom:4}}/>
         {savedInvitees.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8}}>
-          {savedInvitees.slice(0,6).map(em=><button key={em} onClick={()=>setApptInvite(p=>p?(p+','+em):em)} style={{padding:'3px 8px',borderRadius:6,background:'var(--bg)',color:'var(--accent2)',fontSize:9,fontWeight:600,border:'1px solid var(--border)'}}>{em}</button>)}
+          {savedInvitees.slice(0,6).map(em=><button key={em} onClick={()=>setApptInvite(p=>p?(p+','+em):em)} style={{padding:'3px 8px',borderRadius:6,background:'var(--bg)',color:'var(--accent2)',fontSize:10,fontWeight:600,border:'1px solid var(--border)'}}>{em}</button>)}
         </div>}
         {/* FC Observations */}
         <textarea value={apptObs} onChange={ev=>setApptObs(ev.target.value)} rows={3} placeholder="Observations for specialist…" style={{width:'100%',marginBottom:4,background:'var(--bg2)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:12,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
-        <p style={{margin:'0 0 10px',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>Hint: Receptiveness, industry, tone, objections (questions ≠ objections), and any observations that could help your specialist</p>
+        <p style={{margin:'0 0 10px',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Hint: Receptiveness, industry, tone, objections (questions ≠ objections), and any observations that could help your specialist</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-          <div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
+          <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
             <input type="number" value={apptDuration} onChange={ev=>setApptDuration(ev.target.value===''?'':+ev.target.value)} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
         </div>
         <div style={{display:'flex',gap:8}}>
@@ -4657,7 +4709,7 @@ function App(){
                 <span className="mono" style={{fontSize:10,color:'var(--text3)',fontWeight:700,minWidth:16}}>{String.fromCharCode(65+ci)}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <p style={{margin:0,fontSize:12,fontWeight:600,color:'#cbd5e1'}}>{header||'(empty)'}</p>
-                  {samples.length>0&&<p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{samples.join(', ')}</p>}
+                  {samples.length>0&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{samples.join(', ')}</p>}
                 </div>
                 <select value={role} onChange={e=>{
                   const newRole=e.target.value;
@@ -4801,7 +4853,7 @@ function App(){
           {!scriptEditing&&<span onClick={()=>setScriptEditing(true)}>Edit</span>}
         </div>
         {scriptEditing?<>
-          <p style={{margin:'0 0 8px',fontSize:9,color:'var(--text3)'}}>{'{{name}} {{age}} {{race}} {{gender}} {{phone}} {{email}} {{income}} {{notes}} {{admin}} {{company}}'}</p>
+          <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>{'{{name}} {{age}} {{race}} {{gender}} {{phone}} {{email}} {{income}} {{notes}} {{admin}} {{company}}'}</p>
           <div className="sp-edit" contentEditable suppressContentEditableWarning
             ref={el=>{if(el&&!el._init&&(cfg.callingScript||scriptContent)){el.innerHTML=cfg.callingScript||scriptContent;el._init=true}}}
             onInput={e=>setScriptContent(e.currentTarget.innerHTML)}
