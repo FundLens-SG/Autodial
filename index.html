@@ -50,6 +50,7 @@ button{font-family:inherit;cursor:pointer;border:none;transition:all .2s;border-
 button:active{transform:scale(.97)}
 .mono{font-family:'JetBrains Mono',monospace}
 @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.06);opacity:.7}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes glow{0%,100%{box-shadow:var(--glow)}50%{box-shadow:0 0 60px rgba(99,102,241,.25)}}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
@@ -238,10 +239,16 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
       if(cr||firstUser){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role};authGrant();return}}
     authMsg('Created! Awaiting approval.','i');setTimeout(function(){authShow('pending')},1500)}catch(err){authMsg(err.message)}}
 
-async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
+async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');localStorage.removeItem('autodial_claude_key');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
 
-function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';localStorage.setItem('autodial_role',window._role);initSync();
+function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';
+  // ═══ HARD SYNC: Clear local data so cloud data takes priority ═══
+  var _prevUser=localStorage.getItem('autodial_last_user');var _curUser=(_prof?.email||_user?.email||'').toLowerCase();
+  if(_prevUser&&_prevUser!==_curUser){console.log('[AutoDial] Different user detected — clearing local data for cloud sync');
+    var _keep=['autodial_role','autodial_last_user','autodial_seen_help'];
+    Object.keys(localStorage).filter(function(k){return k.startsWith('autodial')||k.startsWith('ad_')}).forEach(function(k){if(_keep.indexOf(k)===-1)localStorage.removeItem(k)})}
+  localStorage.setItem('autodial_last_user',_curUser);localStorage.setItem('autodial_role',window._role);initSync();
   // Wait for Babel to compile initApp (defined in JSX section)
   var _mt=0;
   function tryMount(){
@@ -262,7 +269,13 @@ async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.
   // Always set _prof with auth email as fallback (profiles query may 403)
   _prof={email:_user.email,full_name:_user.user_metadata?.full_name||_user.email,role:'admin'};
   try{var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof=Object.assign({},_prof,p.data);if(!p.data.approved&&!isCreator(_user.email)){authShow('pending');return}}}catch(pe){console.warn('[Auth] Profile fetch failed, using session data')}
-  var sr=localStorage.getItem('autodial_role');if(sr){window._role=sr;if(isCreator((_prof?.email||_user?.email||'').toLowerCase()))window._role='main';authGrant()}else{if(isCreator(_user.email)){window._role='main';authGrant()}else{document.getElementById('auth-gate').style.display='flex'}}}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
+  // Use PROFILE role from DB (authoritative), not stale localStorage
+  var dbRole=_prof?.autodial_role||_prof?.role||null;
+  var sr=localStorage.getItem('autodial_role');
+  if(isCreator((_prof?.email||_user?.email||'').toLowerCase())){window._role='main';authGrant()}
+  else if(dbRole){window._role=dbRole;authGrant()}
+  else if(sr){window._role=sr;authGrant()}
+  else{document.getElementById('auth-gate').style.display='flex'}}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
 
 if(_SB){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};var _mt2=0;function _tryMount(){_mt2++;if(typeof window.initApp==='function'){if(!window._mounted){window._mounted=true;window.initApp()}}else if(_mt2<100){setTimeout(_tryMount,50)}else{console.error('[AutoDial] Babel timeout')}}setTimeout(_tryMount,100)}
 
@@ -699,6 +712,11 @@ window.isNRICLike=function(val){
   if(/^\d{7}[A-Z]$/.test(s))return true;
   return false};
 
+// ═══ DAILY SETS — resets at midnight SGT (UTC+8) ═══
+window.getTodaySGT=function(){var d=new Date();var sgt=new Date(d.getTime()+(8*60*60*1000));return sgt.toISOString().slice(0,10)};
+window.getDailySets=function(){var ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');if(ds.date!==getTodaySGT())return 0;return ds.count||0};
+window.incDailySets=function(){var today=getTodaySGT();var ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');if(ds.date!==today)ds={date:today,count:0};ds.count++;localStorage.setItem('autodial_daily_sets',JSON.stringify(ds));return ds.count};
+window.setDailySetsCount=function(n){var ds={date:getTodaySGT(),count:n};localStorage.setItem('autodial_daily_sets',JSON.stringify(ds))};
 window.detectGender=function(l){if(l.gender){var g=l.gender.toLowerCase();if(/^(m|male|mr)$/i.test(g))return'male';if(/^(f|female|mrs|ms|miss|mdm)$/i.test(g))return'female'}var n=(l.name||'');if(/^(mr\.?|encik)\s/i.test(n))return'male';if(/^(mrs\.?|ms\.?|miss|mdm)\s/i.test(n))return'female';return null};
 window.parseAgeRange=function(a){if(!a)return null;var s=String(a).trim(),d=parseInt(s);if(!isNaN(d)&&s.length<=3)return{min:d,max:d};var m=s.match(/(\d+)\s*(?:to|-)\s*(\d+)/i);return m?{min:+m[1],max:+m[2]}:null};
 window.getNextDialable=function(leads,after,f){f=f||{};var now=new Date();
@@ -1623,7 +1641,22 @@ function App(){
   const[search,setSearch]=useState('');
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);const[cbDate,setCbDate]=useState('');const[cbTime,setCbTime]=useState('');
-  const[showAppt,setShowAppt]=useState(false);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
+  const[showAppt,setShowAppt]=useState(false);const[setDone,setSetDone]=useState(false);
+  // Auto-advance 3s after appointment modal closes (Set flow)
+  useEffect(()=>{if(!showAppt&&setDone&&running){
+    setSetDone(false);
+    // Store undo info for Set
+    const li=showPostCall?.leadIdx??curIdx;
+    window._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now()};
+    setUndoInfo({leadIdx:li,name:leads[li]?.name||'',status:'set',ts:Date.now()});
+    // Auto-advance after 3 seconds
+    const nextIdx=nextLeadRef.current;
+    const timer=setTimeout(()=>{
+      setShowPostCall(null);
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
+      else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},400)}
+    },3000);
+    return()=>clearTimeout(timer)}},[showAppt,setDone,running]);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
   const[apptLocation,setApptLocation]=useState('');const[apptObs,setApptObs]=useState('');
   const[savedInvitees,setSavedInvitees]=useState(load('invitees')||[]);
   const[detailId,setDetailId]=useState(null);
@@ -1745,8 +1778,21 @@ function App(){
   useEffect(()=>{if(!undoInfo)return;const t=setTimeout(()=>setUndoInfo(null),10000);return()=>clearTimeout(t)},[undoInfo]);
   const doUndo=()=>{if(!undoInfo)return;const u=window._lastUndo;if(!u)return;
     setLeads(p=>p.map((l,i)=>i===u.leadIdx?{...l,status:u.prevStatus,npCount:u.prevNpCount}:l));
+    // If undoing a Set, reverse appointment count everywhere
+    if(u.status==='set'){
+      setSession(p=>p?{...p,sets:Math.max(0,(p.sets||1)-1)}:p);
+      setTotalSets(p=>Math.max(0,p-1));
+      setSetDone(false); // Re-enable Set button
+      // Decrement daily sets counter
+      var _ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');
+      if(_ds.date===getTodaySGT()&&_ds.count>0){_ds.count--;localStorage.setItem('autodial_daily_sets',JSON.stringify(_ds))}
+      // Remove the appointment
+      if(u.leadIdx>=0){const lead=leadsRef.current[u.leadIdx];
+        if(lead)setAppointments(p=>p.filter(a=>a.phone!==lead.phone||a.status!=='pending'))}
+      toast('↩️ Set undone — appointment reversed for '+undoInfo.name);
+    }else{toast('↩️ Undone — back to '+undoInfo.name)}
     setCurIdx(u.leadIdx);setPhase('calling');setRunning(true);
-    toast('↩️ Undone — back to '+undoInfo.name);setUndoInfo(null);window._lastUndo=null};
+    setUndoInfo(null);window._lastUndo=null};
   const[postCallNote,setPostCallNote]=useState('');
   const[sessionTarget,setSessionTarget]=useState(load('starget')||{type:'dials',count:50});
 
@@ -1790,6 +1836,11 @@ function App(){
     if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'ts_'+_user.email.toLowerCase(),biz_name:JSON.stringify({ts:totalSets})},{onConflict:'admin_email'}).catch(function(){})}
 
   },[totalSets]);
+  useEffect(()=>{
+    // Sync daily sets to cloud
+    if(_SB&&_user&&window._cloudReady){var ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');
+      _SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+_user.email.toLowerCase(),biz_name:JSON.stringify(ds)},{onConflict:'admin_email'}).catch(function(){})}
+  },[session?.sets]);
   useEffect(()=>{save('totalStars',totalStars);cloudSave('totalStars',totalStars);
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'stars_'+_user.email.toLowerCase(),biz_name:JSON.stringify({stars:totalStars,bank:starBank,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})},[totalStars]);
   useEffect(()=>{save('starBank',starBank)},[starBank]);
@@ -2037,7 +2088,10 @@ function App(){
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
         try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
       setSyncing(false);
-      cloudReady.current=true;window._cloudReady=true; // Safe to write to Supabase now
+      cloudReady.current=true;window._cloudReady=true;
+    // Restore daily sets from cloud
+    if(_SB&&_user){_SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dsets_'+_user.email.toLowerCase()).single().then(function(r){
+      if(r.data){try{var ds=JSON.parse(r.data.biz_name);if(ds.date===getTodaySGT()&&ds.count>getDailySets()){setDailySetsCount(ds.count);console.log('[CloudSync] Restored daily sets:',ds.count)}}catch(e){}}}).catch(function(){})}; // Safe to write to Supabase now
       // If Google was previously connected but token is missing/stale, auto-recover
 
     })();
@@ -2281,7 +2335,7 @@ function App(){
     sheetQueueRef.current.push({cell,value:v});
     // Debounce: flush after 3 seconds of no new writes
     clearTimeout(sheetFlushTimer.current);
-    sheetFlushTimer.current=setTimeout(()=>flushSheetQueue(),3000);
+    sheetFlushTimer.current=setTimeout(()=>flushSheetQueue(),500);
   },[cfg,flushSheetQueue]);
   // Flush queue on session end or unmount
   useEffect(()=>{
@@ -2370,7 +2424,12 @@ function App(){
       if(spd>=50&&s.dialed>=15)checkAchievement('speed50','Lightning Dialer!','⚡');
       if(spd>=80&&s.dialed>=20)checkAchievement('speed80','Hyperdrive!','🚀');
       if(status==='np')s.np++;if(status==='ni')s.ni++;if(status==='cb')s.cb++;
-      if(status==='set'){s.sets++;const nt=totalSets+1;setTotalSets(nt);
+      if(status==='set'){s.sets++;incDailySets();const nt=totalSets+1;setTotalSets(nt);
+        const _uName=(window._prof?.full_name||myEmail||'').split(/[\s@]/)[0];
+        const _ds=getDailySets();
+        if(_ds===1)toast('🩸 FIRST BLOOD — '+_uName+' draws first blood!');
+        if(_ds===2)toast('🌟 Good work '+_uName+'!! One more to be a CHAMPION!');
+        if(_ds===3)toast('🏆 CHAMPION '+_uName+'! You\'re on fire!');
         // ═══ RANK-UP CHECK (ML-style) ═══
         const newMonthly=monthlyAppts+1; // +1 for this new set
         const oldRank=getRank(monthlyAppts,cfg.starThresholds);const newRank=getRank(newMonthly);
@@ -2438,8 +2497,8 @@ function App(){
       if(session){const s=session.sets+1;
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
-        if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,4)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
-      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
+        if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,3)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
+      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true);setSetDone(true)}
     else{applyOutcome(status,extra)}
     // ═══ PRE-COMPUTE next lead by simulating status change ═══
     const simulated=leads.map((l,i)=>{
@@ -2664,67 +2723,124 @@ function App(){
           const maxBar=10;
           const uName=(window._prof?.full_name||myEmail||'Caller').split(/[\s@]/)[0];
 
-          // ═══ ADMIN: Keep pay-based bars ═══
+          // ═══ ADMIN: ELECTRIFIED pay-based bars ═══
           if(role==='admin'){
             const metAppts=sets>=aBar;const metBonus=sets>=bBar;
             const apptPct=Math.min(100,(sets/Math.max(1,aBar))*100);
+            const bonusPct=metAppts?Math.min(100,((sets-aBar)/Math.max(1,bBar-aBar))*100):0;
+            const estPay=metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate);
             return<div style={{marginBottom:8}}>
-              <div style={{padding:'10px 12px',borderRadius:12,background:metAppts?'rgba(63,185,80,.08)':'var(--bg)',border:'1px solid '+(metAppts?'rgba(63,185,80,.3)':'var(--border)'),marginBottom:6}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-                  <span style={{fontSize:12,fontWeight:700,color:metAppts?'var(--green)':'#f1f5f9'}}>{metAppts?'✅ APPTS BAR HIT!':'🎯 Appts Bar'}</span>
-                  <span className="mono" style={{fontSize:14,fontWeight:800,color:metAppts?'var(--green)':'var(--accent2)'}}>{sets}/{aBar}</span>
+              {/* ═══ Appts Bar ═══ */}
+              <div style={{padding:'12px 14px',borderRadius:14,background:metAppts?'linear-gradient(135deg,rgba(34,197,94,.1),rgba(34,197,94,.02))':'var(--bg)',border:'2px solid '+(metAppts?'rgba(34,197,94,.4)':'var(--border)'),marginBottom:6,boxShadow:metAppts?'0 0 25px rgba(34,197,94,.15)':'none',transition:'all .5s'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <span style={{fontSize:metAppts?15:13,fontWeight:800,color:metAppts?'#22C55E':'#f1f5f9',letterSpacing:metAppts?'.05em':'0',textShadow:metAppts?'0 0 15px rgba(34,197,94,.4)':'none'}}>
+                    {metAppts?'✅ APPTS BAR HIT!':'🎯 Appts Bar'}
+                  </span>
+                  <span className="mono" style={{fontSize:16,fontWeight:900,color:metAppts?'#22C55E':'var(--accent2)',textShadow:metAppts?'0 0 10px rgba(34,197,94,.5)':'none'}}>{sets}/{aBar}</span>
                 </div>
-                <div style={{height:8,borderRadius:4,background:'var(--bg3)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:4,width:apptPct+'%',background:metAppts?'linear-gradient(90deg,#22c55e,#4ade80)':'linear-gradient(90deg,var(--accent),#818cf8)',transition:'width .5s'}}/></div>
+                <div style={{height:metAppts?14:10,borderRadius:7,background:'rgba(255,255,255,.03)',overflow:'hidden',marginBottom:6,position:'relative',border:'1px solid rgba(255,255,255,.05)',transition:'height .3s'}}>
+                  <div style={{height:'100%',borderRadius:7,width:apptPct+'%',background:metAppts?'linear-gradient(90deg,#22c55e,#4ade80,#22c55e)':'linear-gradient(90deg,var(--accent),#818cf8)',transition:'width .6s cubic-bezier(.4,0,.2,1)',boxShadow:metAppts?'0 0 20px rgba(34,197,94,.4), inset 0 1px 2px rgba(255,255,255,.2)':'none',position:'relative',overflow:'hidden'}}>
+                    {metAppts&&<div style={{position:'absolute',inset:0,background:'linear-gradient(90deg,transparent,rgba(255,255,255,.2),transparent)',animation:'shimmer 2s infinite',backgroundSize:'200% 100%'}}/>}
+                  </div>
+                </div>
+                {!metAppts&&<p style={{margin:0,fontSize:10,color:'var(--text3)'}}>
+                  {aBar-sets===1?'🔥 Just 1 more appointment for full session pay!':sets===0?'Set your first appointment to get started':''+( aBar-sets)+' more to lock in full session pay'}
+                </p>}
+                {metAppts&&!metBonus&&<p style={{margin:0,fontSize:11,color:'#22C55E',fontWeight:700,textAlign:'center',textShadow:'0 0 8px rgba(34,197,94,.3)'}}>
+                  💪 Full session pay locked in! Push for BONUS!
+                </p>}
               </div>
-              <div style={{display:'flex',justifyContent:'center',gap:12,fontSize:10,color:'var(--text3)'}}>
-                <span>{'💵 ~$'+(metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate)).toFixed(0)+' est.'}</span>
+
+              {/* ═══ Bonus Bar — appears with glow when appts bar hit ═══ */}
+              {metAppts&&<div style={{padding:'12px 14px',borderRadius:14,background:metBonus?'linear-gradient(135deg,rgba(255,215,0,.12),rgba(255,215,0,.03))':'linear-gradient(135deg,rgba(255,215,0,.04),rgba(255,215,0,.01))',border:'2px solid '+(metBonus?'rgba(255,215,0,.5)':'rgba(255,215,0,.15)'),boxShadow:metBonus?'0 0 30px rgba(255,215,0,.2)':'0 0 15px rgba(255,215,0,.05)',animation:'slideDown .5s ease-out',transition:'all .5s'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <div>
+                    <span style={{fontSize:metBonus?16:13,fontWeight:800,color:metBonus?'#FFD700':'#f1f5f9',letterSpacing:metBonus?'.05em':'0',textShadow:metBonus?'0 0 20px rgba(255,215,0,.5)':'none'}}>
+                      {metBonus?'🔥 BONUS UNLOCKED!':'✨ Bonus Bar'}
+                    </span>
+                    {!metBonus&&<span style={{fontSize:14,fontWeight:900,color:'#FFD700',marginLeft:8,animation:'pulse 1.5s infinite',textShadow:'0 0 12px rgba(255,215,0,.6)'}}>×{bonusMult}</span>}
+                  </div>
+                  <span className="mono" style={{fontSize:16,fontWeight:900,color:metBonus?'#FFD700':'var(--amber)',textShadow:metBonus?'0 0 12px rgba(255,215,0,.5)':'none'}}>{sets}/{bBar}</span>
+                </div>
+                <div style={{height:metBonus?14:10,borderRadius:7,background:'rgba(255,255,255,.03)',overflow:'hidden',marginBottom:6,position:'relative',border:'1px solid rgba(255,255,255,.05)',transition:'height .3s'}}>
+                  <div style={{height:'100%',borderRadius:7,width:bonusPct+'%',background:'linear-gradient(90deg,#f59e0b,#fbbf24,#fcd34d,#fbbf24)',transition:'width .6s cubic-bezier(.4,0,.2,1)',boxShadow:metBonus?'0 0 25px rgba(255,215,0,.5), inset 0 1px 2px rgba(255,255,255,.3)':'none',position:'relative',overflow:'hidden'}}>
+                    <div style={{position:'absolute',inset:0,background:'linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent)',animation:'shimmer 1.5s infinite',backgroundSize:'200% 100%'}}/>
+                  </div>
+                </div>
+                {!metBonus&&<p style={{margin:0,fontSize:10,color:'#FFD700',fontWeight:600}}>
+                  {bBar-sets===1?'⚡ ONE MORE for ×'+bonusMult+' BONUS PAY!':''+( bBar-sets)+' more appointments → ×'+bonusMult+' pay multiplier'}
+                </p>}
+                {metBonus&&<p style={{margin:0,fontSize:13,color:'#FFD700',fontWeight:800,textAlign:'center',letterSpacing:'.05em',textShadow:'0 0 15px rgba(255,215,0,.4)',animation:'pulse 2s infinite'}}>
+                  🎉 ×{bonusMult} BONUS ACTIVATED! 🎉
+                </p>}
+              </div>}
+
+              {/* Pay estimate */}
+              <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:8,fontSize:11,color:'var(--text3)'}}>
+                <span style={{fontWeight:600}}>{'💵 ~$'+estPay.toFixed(0)+' est.'}</span>
+                {metAppts&&!metBonus&&<span style={{color:'#FFD700',fontWeight:600}}>{'→ $'+(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult).toFixed(0)+' if bonus!'}</span>}
+                {metBonus&&<span style={{color:'#22C55E',fontWeight:700}}>{'×'+bonusMult+' multiplied!'}</span>}
               </div>
             </div>}
 
-          // ═══ MAIN: Single unified gamified milestone bar ═══
+          // ═══ MAIN: ELECTRIFIED gamified milestone bar (DAILY, resets midnight SGT) ═══
+          const dailySets=getDailySets();
           const milestones=[
-            {at:0,title:'Ready to Dial',sub:'Set your first appointment!',color:'var(--text3)',emoji:'🎯'},
-            {at:1,title:'FIRST BLOOD',sub:'1 more to hit the bar!',color:'#EF4444',emoji:'🩸'},
-            {at:2,title:'Good work '+uName+'!!',sub:'One more to be a CHAMPION!',color:'#F59E0B',emoji:'🌟'},
-            {at:3,title:'CHAMPION UNLOCKED',sub:'You\'re on fire! Keep going!',color:'#22C55E',emoji:'🏆'},
-            {at:4,title:'DOMINATOR',sub:uName+' is dominating!',color:'#8B5CF6',emoji:'💎'},
-            {at:5,title:'UNSTOPPABLE',sub:'Nobody can stop '+uName+'!',color:'#EC4899',emoji:'⚡'},
-            {at:6,title:'LEGENDARY',sub:uName+' has entered legend status!',color:'#F97316',emoji:'👑'},
-            {at:7,title:'GODLIKE',sub:'Is '+uName+' even human?!',color:'#EF4444',emoji:'🔱'},
-            {at:8,title:'BEYOND GODLIKE',sub:'The office is shaking!',color:'#DC2626',emoji:'💀'},
-            {at:9,title:'RAMPAGE',sub:uName+' cannot be contained!',color:'#7C3AED',emoji:'🌋'},
-            {at:10,title:'IMMORTAL',sub:'🎉 '+uName+' has transcended! 🎉',color:'#FFD700',emoji:'☀️'}
+            {at:0,title:'READY TO DIAL',sub:'Set your first appointment!',color:'#94A3B8',emoji:'🎯',bg:'var(--bg)',glow:'none'},
+            {at:1,title:'FIRST BLOOD',sub:'The hunt begins! 1 more to hit the bar!',color:'#EF4444',emoji:'🩸',bg:'linear-gradient(135deg,rgba(239,68,68,.08),rgba(239,68,68,.02))',glow:'0 0 20px rgba(239,68,68,.15)'},
+            {at:2,title:'Good work '+uName+'!!',sub:'⚡ One more to be a CHAMPION!',color:'#F59E0B',emoji:'🌟',bg:'linear-gradient(135deg,rgba(245,158,11,.08),rgba(245,158,11,.02))',glow:'0 0 20px rgba(245,158,11,.15)'},
+            {at:3,title:'🏆 CHAMPION',sub:uName+' IS A CHAMPION! Keep the fire burning!',color:'#22C55E',emoji:'🏆',bg:'linear-gradient(135deg,rgba(34,197,94,.1),rgba(34,197,94,.02))',glow:'0 0 25px rgba(34,197,94,.2)'},
+            {at:4,title:'💎 DOMINATOR',sub:uName+' is DOMINATING the leaderboard!',color:'#8B5CF6',emoji:'💎',bg:'linear-gradient(135deg,rgba(139,92,246,.1),rgba(139,92,246,.02))',glow:'0 0 25px rgba(139,92,246,.2)'},
+            {at:5,title:'⚡ UNSTOPPABLE',sub:'NOBODY can stop '+uName+'!',color:'#EC4899',emoji:'⚡',bg:'linear-gradient(135deg,rgba(236,72,153,.12),rgba(236,72,153,.02))',glow:'0 0 30px rgba(236,72,153,.25)'},
+            {at:6,title:'👑 LEGENDARY',sub:uName+' HAS ENTERED LEGEND STATUS!',color:'#F97316',emoji:'👑',bg:'linear-gradient(135deg,rgba(249,115,22,.12),rgba(249,115,22,.02))',glow:'0 0 30px rgba(249,115,22,.25)'},
+            {at:7,title:'🔱 GODLIKE',sub:'IS '+uName.toUpperCase()+' EVEN HUMAN?!',color:'#EF4444',emoji:'🔱',bg:'linear-gradient(135deg,rgba(239,68,68,.15),rgba(139,92,246,.05))',glow:'0 0 35px rgba(239,68,68,.3)'},
+            {at:8,title:'💀 BEYOND GODLIKE',sub:'THE ENTIRE OFFICE IS SHAKING!!!',color:'#DC2626',emoji:'💀',bg:'linear-gradient(135deg,rgba(220,38,38,.15),rgba(220,38,38,.05))',glow:'0 0 40px rgba(220,38,38,.35)'},
+            {at:9,title:'🌋 RAMPAGE',sub:uName.toUpperCase()+' CANNOT BE CONTAINED!!!',color:'#7C3AED',emoji:'🌋',bg:'linear-gradient(135deg,rgba(124,58,237,.15),rgba(236,72,153,.05))',glow:'0 0 40px rgba(124,58,237,.35)'},
+            {at:10,title:'☀️ IMMORTAL',sub:'🎉 '+uName.toUpperCase()+' HAS TRANSCENDED MORTALITY! 🎉',color:'#FFD700',emoji:'☀️',bg:'linear-gradient(135deg,rgba(255,215,0,.15),rgba(255,215,0,.05))',glow:'0 0 50px rgba(255,215,0,.4)'}
           ];
-          const current=milestones.filter(m=>m.at<=sets).pop()||milestones[0];
-          const next=milestones.find(m=>m.at>sets);
-          const pct=Math.min(100,(sets/maxBar)*100);
-          const barColor=sets===0?'var(--accent)':sets<3?'linear-gradient(90deg,#EF4444,#F59E0B)':sets<6?'linear-gradient(90deg,#22C55E,#4ade80)':sets<8?'linear-gradient(90deg,#F59E0B,#EC4899)':'linear-gradient(90deg,#FFD700,#EF4444,#7C3AED)';
+          const current=milestones.filter(m=>m.at<=dailySets).pop()||milestones[0];
+          const next=milestones.find(m=>m.at>dailySets);
+          const pct=Math.min(100,(dailySets/maxBar)*100);
+          const isHype=dailySets>=3;const isGod=dailySets>=7;const isMax=dailySets>=10;
+          const barGrad=dailySets===0?'var(--accent)':dailySets<3?'linear-gradient(90deg,#EF4444,#F59E0B)':dailySets<5?'linear-gradient(90deg,#22C55E,#4ade80,#22C55E)':dailySets<7?'linear-gradient(90deg,#F59E0B,#EC4899,#8B5CF6)':dailySets<9?'linear-gradient(90deg,#EF4444,#F59E0B,#EC4899,#8B5CF6)':'linear-gradient(90deg,#FFD700,#EF4444,#EC4899,#8B5CF6,#FFD700)';
 
           return<div style={{marginBottom:8}}>
-            <div style={{padding:'12px 14px',borderRadius:14,background:sets>=3?'rgba(255,215,0,.06)':'var(--bg)',border:'1px solid '+(sets>=3?'rgba(255,215,0,.25)':'var(--border)'),transition:'all .5s'}}>
+            <div style={{padding:isHype?'14px 16px':'12px 14px',borderRadius:16,background:current.bg,border:'2px solid '+(isHype?current.color+'40':'var(--border)'),boxShadow:current.glow,transition:'all .6s ease',animation:isGod?'pulse 2s infinite':'none'}}>
               {/* Title + count */}
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div>
-                  <span style={{fontSize:sets>=3?15:13,fontWeight:800,color:current.color,letterSpacing:sets>=3?'.05em':'0'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:isHype?10:8}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:isMax?20:isGod?18:isHype?16:13,fontWeight:900,color:current.color,letterSpacing:isHype?'.08em':'0',textShadow:isGod?'0 0 20px '+current.color+'80':'none',textTransform:'uppercase'}}>
                     {current.emoji} {current.title}
-                  </span>
+                  </div>
                 </div>
-                <span className="mono" style={{fontSize:16,fontWeight:900,color:current.color}}>{sets}/{maxBar}</span>
+                <div style={{textAlign:'right'}}>
+                  <span className="mono" style={{fontSize:isHype?20:16,fontWeight:900,color:current.color,textShadow:isHype?'0 0 12px '+current.color+'60':'none'}}>{dailySets}</span>
+                  <span style={{fontSize:10,color:'var(--text3)'}}>/{maxBar}</span>
+                </div>
               </div>
-              {/* Progress bar */}
-              <div style={{height:12,borderRadius:6,background:'var(--bg3)',overflow:'hidden',marginBottom:6,position:'relative'}}>
-                <div style={{height:'100%',borderRadius:6,width:pct+'%',background:barColor,transition:'width .6s ease-out',boxShadow:sets>=3?'0 0 16px rgba(255,215,0,.3)':'none'}}/>
-                {/* Milestone markers */}
-                {[3,5,8].map(m=><div key={m} style={{position:'absolute',left:(m/maxBar*100)+'%',top:0,height:'100%',width:2,background:'rgba(255,255,255,.15)'}}/>)}
+              {/* ELECTRIFIED Progress bar */}
+              <div style={{height:isHype?16:12,borderRadius:8,background:'rgba(255,255,255,.03)',overflow:'hidden',marginBottom:8,position:'relative',border:'1px solid rgba(255,255,255,.05)'}}>
+                <div style={{height:'100%',borderRadius:8,width:pct+'%',background:barGrad,transition:'width .8s cubic-bezier(.4,0,.2,1)',boxShadow:isHype?'0 0 20px '+current.color+'50, inset 0 1px 2px rgba(255,255,255,.2)':'none',position:'relative',overflow:'hidden'}}>
+                  {/* Shimmer effect */}
+                  {isHype&&<div style={{position:'absolute',inset:0,background:'linear-gradient(90deg,transparent,rgba(255,255,255,.15),transparent)',animation:'shimmer 2s infinite',backgroundSize:'200% 100%'}}/>}
+                </div>
+                {/* Milestone markers with labels */}
+                {[{at:3,label:'🏆',c:'#22C55E'},{at:5,label:'⚡',c:'#EC4899'},{at:8,label:'💀',c:'#DC2626'}].map(m=><div key={m.at} style={{position:'absolute',left:(m.at/maxBar*100)+'%',top:-1,height:'calc(100% + 2px)',display:'flex',flexDirection:'column',alignItems:'center'}}>
+                  <div style={{width:2,height:'100%',background:dailySets>=m.at?m.c+'80':'rgba(255,255,255,.1)'}}/>
+                </div>)}
               </div>
-              {/* Subtitle */}
-              <p style={{margin:0,fontSize:10,color:next?current.color:'var(--gold)',fontWeight:sets>=3?600:400,textAlign:sets>=3?'center':'left'}}>
+              {/* Subtitle — more dramatic at higher tiers */}
+              <p style={{margin:0,fontSize:isGod?12:isHype?11:10,color:current.color,fontWeight:isHype?700:400,textAlign:isHype?'center':'left',letterSpacing:isGod?'.03em':'0',textShadow:isGod?'0 0 10px '+current.color+'40':'none'}}>
                 {current.sub}
               </p>
+              {/* Next milestone teaser */}
+              {next&&dailySets>0&&<p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>
+                Next: {next.emoji} {next.title} at {next.at} sets
+              </p>}
             </div>
-            {/* Stars + Rank */}
+            {/* Stars + Rank summary */}
             <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:10,color:'var(--text3)'}}>
-              <span>⭐ {sets} star{sets!==1?'s':''} earned</span>
+              <span>⭐ {dailySets} star{dailySets!==1?'s':''} today</span>
               <span style={{color:rank.color}}>{rank.emoji} {rank.label}</span>
               {nextRank&&<span>{nextRank.cumStars-monthlyAppts-sets} to {nextRank.emoji}</span>}
             </div>
@@ -2777,7 +2893,7 @@ function App(){
                 <button onClick={()=>handleOutcome('np')} style={{padding:'12px 0',background:'var(--amdim)',color:'var(--amber)',fontSize:13,fontWeight:700}}>NP</button>
                 <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'12px 0',background:'var(--bdim)',color:'var(--blue)',fontSize:13,fontWeight:700}}>CB</button>
                 <button onClick={()=>handleOutcome('ni')} style={{padding:'12px 0',background:'var(--rdim)',color:'var(--red)',fontSize:13,fontWeight:700}}>NI</button>
-                <button onClick={()=>handleOutcome('set')} style={{padding:'12px 0',background:'var(--gdim)',color:'var(--green)',fontSize:13,fontWeight:700}}>Set</button>
+                <button onClick={()=>handleOutcome('set')} disabled={setDone||showPostCall?.status==='set'} style={{padding:'12px 0',background:setDone?'var(--bg3)':'var(--gdim)',color:setDone?'var(--text3)':'var(--green)',fontSize:13,fontWeight:700,opacity:setDone?.5:1}}>{setDone?'✓ Set':'Set'}</button>
                 <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip → (don't mark)</button>
               </div>
               {/* Adjustable delay timer ±1s */}
