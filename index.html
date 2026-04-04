@@ -300,7 +300,7 @@ window.gConnect=function(cb){
     var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
     s.onload=function(){window.gConnect(cb)};s.onerror=function(){toast('Google failed to load','err')};
     document.head.appendChild(s);return}
-  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google error','err');return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
+  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google: '+(r.error_description||r.error),'err');console.error('[Google OAuth]',r);return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}};if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
 window.gF=async function(url,opts){var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google');var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
 window.gSheets={
   async ensureTabs(id,tabNames){
@@ -1424,6 +1424,16 @@ function App(){
       try{
         setSyncing(true);
         const cloud=await CloudSync.loadAll();
+        // Admin: load shared Google token from Main
+        if(role==='admin'&&_SB&&!localStorage.getItem('ad_gt')){
+          try{
+            const gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
+            if(gt.data&&gt.data.biz_name){
+              const parsed=JSON.parse(gt.data.biz_name);
+              if(parsed.token){_gToken=parsed.token;localStorage.setItem('ad_gt',parsed.token);console.log('[AutoDial] Using shared Google token from Main')}
+            }
+          }catch(e){}
+        }
         // Admin: load own config published by Main
         if(role==='admin'&&_SB){
           try{
@@ -1842,9 +1852,9 @@ function App(){
 
     {/* Row 2: Rank chip + Mode toggle */}
     <div className="hdr-row2">
-      {isCallMode&&_showRank?<div className="rank-chip" style={{background:rank.color+'18',color:rank.color,border:'1px solid '+rank.color+'30'}}>
-        <span style={{fontSize:15}}>{rank.emoji}</span>
-        <span>{rank.label}</span>
+      {isCallMode&&_showRank?<div className="rank-chip" style={{background:(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'18',color:(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color,border:'1px solid '+(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'30'}}>
+        <span style={{fontSize:15}}>{(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).emoji}</span>
+        <span>{(role==='admin'?getTierRank(monthlyAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).label}</span>
         <span style={{opacity:.6,fontSize:10,fontWeight:600}}>{monthlyAppts} this month</span>
       </div>
       :<div className="rank-chip" style={{background:'var(--rdim)',color:'var(--red)',border:'1px solid rgba(248,81,73,.2)'}}>
@@ -2127,7 +2137,7 @@ function App(){
           </div>
           <div style={{flex:1}}>
             <p style={{margin:0,fontSize:13,fontWeight:isActive?800:600,color:isActive?r.color:'var(--text2)'}}>{r.label}</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{r.cumStars>0?'≥'+r.cumStars+' appts/month':'Start'} · {r.starsNeeded<999?r.starsNeeded+' ⭐ to next':'∞ glory'}</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{isAdminRank?(tierMin>0?'≥'+tierMin+' appts/month · $'+(myCfg.payRates||[8,10,12,16,20,25])[Math.min(i,(myCfg.payRates||[]).length-1)]+'/hr':'Start · base tier · $'+(myCfg.payRates||[8])[0]+'/hr'):(r.cumStars>0?'≥'+r.cumStars+' appts/month':'Start')+(!isAdminRank?' · '+(r.starsNeeded<999?r.starsNeeded+' ⭐ to next':'∞ glory'):'')}</p>
           </div>
           {isActive&&<span className="pill" style={{background:r.color+'20',color:r.color}}>NOW</span>}
           {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
@@ -2431,6 +2441,7 @@ function App(){
             {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>📹 Replay</button>}
           </div>
           {role==='main'&&!s.paid&&<button onClick={()=>setSessionLog(p=>p.map((x,j)=>j===i?{...x,paid:true,paidDate:new Date().toISOString()}:x))} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
+          <button onClick={()=>{if(!confirm('Delete this session?'))return;setSessionLog(p=>p.filter((_,j)=>j!==i))}} style={{marginTop:4,width:'100%',padding:'4px',borderRadius:8,background:'var(--bg3)',color:'var(--red)',fontSize:9,fontWeight:600,border:'1px solid rgba(248,81,73,.15)'}}>🗑 Delete</button>
         </div>})}
       {!sessionLog.length&&incentives.length===0&&<div className="card" style={{textAlign:'center',padding:24}}><p style={{color:'var(--text3)'}}>Complete sessions to see timesheet</p></div>}
 
@@ -2501,8 +2512,8 @@ function App(){
     </div>}
 
     {tab==='analytics'&&isCallMode&&<div className='content-pad'>
-      {/* Session Target */}
-      <div className="card" style={{marginBottom:10}}>
+      {/* Session Target - Main only */}
+      {role!=='admin'&&<div className="card" style={{marginBottom:10}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <h3 style={{fontSize:13,fontWeight:700,color:'#f1f5f9',margin:0}}>Session Target</h3>
           {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>{Math.round(((sessionTarget.type==='dials'?session.dialed:sessionTarget.type==='connected'?(session.dialed-(session.np||0)):session.sets)/(sessionTarget.count||1))*100)}%</span>}
@@ -2517,7 +2528,7 @@ function App(){
           <button onClick={()=>setSessionTarget(p=>({...p,count:p.count+5}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
         </div>
         {session&&!session.ended&&<div style={{height:8,borderRadius:4,background:'var(--bg)',overflow:'hidden',marginTop:8}}><div style={{height:'100%',borderRadius:4,width:Math.min(100,((sessionTarget.type==='dials'?session.dialed:sessionTarget.type==='connected'?(session.dialed-(session.np||0)):session.sets)/(sessionTarget.count||1))*100)+'%',background:'linear-gradient(90deg,var(--accent),var(--green))',transition:'width .5s'}}/></div>}
-      </div>
+      </div>}
 
       {/* Hit Rates */}
       {(()=>{
@@ -2840,7 +2851,10 @@ function App(){
                   {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}))} style={{padding:'8px 10px',fontSize:11,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>📗 {f.name}</div>)}
                 </div>}
               </div>
-              {ac.timesheetId&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>}
+              {ac.timesheetId&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 0'}}>
+                <p style={{fontSize:9,color:'var(--green)',margin:0,flex:1}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>
+                <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:'',_tsName:''}}))} style={{padding:'2px 8px',borderRadius:4,background:'var(--rdim)',color:'var(--red)',fontSize:8,fontWeight:600,border:'none',cursor:'pointer'}}>Unlink</button>
+              </div>}
               <p style={{fontSize:9,color:'var(--text3)',margin:'6px 0 0',lineHeight:1.4}}>💡 Just add the leads sheet — <b style={{color:'var(--accent2)'}}>Timesheet</b>, <b style={{color:'var(--accent2)'}}>Appointments</b> & <b style={{color:'var(--accent2)'}}>Pay</b> tabs are auto-created!</p>
             </div>
             <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Invoice Name</label>
@@ -2864,24 +2878,35 @@ function App(){
             <span>🎯 {myCfg.nThresh||4} bonus bar</span>
             <span>💰 ×{myCfg.bonusMult||1.5} bonus</span>
             <span>🎁 ${myCfg.metIncentive||10} met incentive</span>
+            {<span>⛔ DNC {(cfg.dncEnd||9)>12?(cfg.dncEnd||9)-12+'PM':(cfg.dncEnd||9)+'AM'}–{(cfg.dncStart||21)>12?(cfg.dncStart||21)-12+'PM':(cfg.dncStart||21)+'AM'}</span>}
           </div>
           <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4,fontSize:9,color:'var(--text3)'}}>
             {(myCfg.payRates||[8,10,12]).slice(0,3).map((r,i)=><span key={i}>{['🥉','🥈','🥇'][i]} ${r}/hr</span>)}
           </div>
         </div>}
         </>}
-        {/* DNC Hours */}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
-          <div>
-            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>⛔ DNC Hours</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-pause outside allowed hours</p>
+        {/* DNC Hours - Main only edits */}
+        {role!=='admin'?<div style={{marginBottom:12,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+            <div>
+              <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>⛔ DNC Hours</p>
+              <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Calls allowed between these hours</p>
+            </div>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:4}}>
-            <input type="number" min="0" max="23" value={cfg.dncEnd??''} onChange={e=>setCfg(s=>({...s,dncEnd:e.target.value===''?'':+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
-            <span style={{fontSize:10,color:'var(--text3)'}}>to</span>
-            <input type="number" min="0" max="23" value={cfg.dncStart??''} onChange={e=>setCfg(s=>({...s,dncStart:e.target.value===''?'':+e.target.value}))} style={{width:44,textAlign:'center',fontSize:12,padding:'6px'}}/>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+            <select value={cfg.dncEnd??9} onChange={e=>setCfg(s=>({...s,dncEnd:+e.target.value}))} style={{padding:'8px 4px',borderRadius:8,fontSize:12,fontWeight:600,textAlign:'center',background:'var(--bg)',color:'var(--accent2)',border:'1px solid var(--border)'}}>
+              {Array.from({length:24},(_, h)=><option key={h} value={h}>{h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'}</option>)}
+            </select>
+            <span style={{fontSize:11,color:'var(--text3)',fontWeight:600}}>to</span>
+            <select value={cfg.dncStart??21} onChange={e=>setCfg(s=>({...s,dncStart:+e.target.value}))} style={{padding:'8px 4px',borderRadius:8,fontSize:12,fontWeight:600,textAlign:'center',background:'var(--bg)',color:'var(--accent2)',border:'1px solid var(--border)'}}>
+              {Array.from({length:24},(_,h)=><option key={h} value={h}>{h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'}</option>)}
+            </select>
           </div>
-        </div>
+          <p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>Calls auto-pause outside {(cfg.dncEnd||9)>12?(cfg.dncEnd||9)-12+'PM':(cfg.dncEnd||9)+'AM'} – {(cfg.dncStart||21)>12?(cfg.dncStart||21)-12+'PM':(cfg.dncStart||21)+'AM'}</p>
+        </div>:
+        <div style={{marginBottom:12,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)'}}>
+          <p style={{margin:0,fontSize:11,color:'var(--text2)'}}>⛔ DNC: Calls allowed <b>{(()=>{const h=cfg.dncEnd||9;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> to <b>{(()=>{const h=cfg.dncStart||21;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> <span style={{fontSize:9,color:'var(--text3)'}}>(set by manager)</span></p>
+        </div>}
         {/* Queue Priority */}
         <div style={{marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
           <p style={{margin:'0 0 6px',fontSize:13,fontWeight:600,color:'#f1f5f9'}}>📋 Queue Priority</p>
@@ -2945,11 +2970,20 @@ function App(){
         <span style={{fontSize:9,fontWeight:700,color:'var(--text3)',letterSpacing:1}}>🔗 INTEGRATIONS</span>
         <div style={{height:1,flex:1,background:'var(--border)'}}/>
       </div>
-      <div className="card" style={{marginBottom:12}}>
+      {role!=='admin'?<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
-        <button onClick={connectG} style={{padding:'10px 18px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{gOk?'Reconnect':'Connect'}</button>
-      </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={connectG} style={{padding:'10px 18px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{gOk?'Reconnect':'Connect'}</button>
+          {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Google disconnected')}} style={{padding:'10px 18px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:600}}>Disconnect</button>}
+        </div>
+      </div>:
+      <div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google Sheets</h3>
+        <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:4}}>{gOk?'✓ Connected via manager':'Waiting for manager to share access'}</p>
+        {myCfg.timesheetId&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0'}}>📋 Sheet: {myCfg._tsName||myCfg.timesheetId.slice(0,25)+'...'}</p>}
+        <p style={{fontSize:9,color:'var(--text3)',margin:'4px 0 0'}}>Your manager shares Google Sheets access automatically</p>
+      </div>}
 
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
