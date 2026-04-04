@@ -301,7 +301,7 @@ window.gConnect=function(cb){
     var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
     s.onload=function(){window.gConnect(cb)};s.onerror=function(){toast('Google failed to load','err')};
     document.head.appendChild(s);return}
-  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google: '+(r.error_description||r.error),'err');console.error('[Google OAuth]',r);return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');window._gOkCb&&window._gOkCb(true);if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}};if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
+  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google: '+(r.error_description||r.error),'err');console.error('[Google OAuth]',r);return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');window._gOkCb&&window._gOkCb(true);if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}};if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
 window.gF=async function(url,opts){var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google');var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
 window.gSheets={
   async ensureTabs(id,tabNames){
@@ -785,7 +785,7 @@ const load=k=>{try{return JSON.parse(localStorage.getItem(LS(k)))}catch{return n
 const save=(k,v)=>{try{localStorage.setItem(LS(k),JSON.stringify(v))}catch{}};
 // Cloud sync bucket mapping: localStorage key → cloud bucket
 const SYNC_MAP={data:'leads',cfg:'cfg',acfg:'adminConfigs',slog:'sessions',appts:'appointments',incv:'incentives',payh:'payments',
-  ts:'userState',promo:'userState',learned:'userState',invitees:'userState',starget:'userState',mainMode:'userState',apptDur:'userState'};
+  ts:'userState',promo:'userState',learned:'userState',invitees:'userState',starget:'userState',mainMode:'userState',apptDur:'userState',totalStars:'userState'};
 // Publish each admin's config to a shared key they can read
 function publishAdminConfigs(configs){
   if(!_SB)return;
@@ -802,8 +802,16 @@ const cloudSave=(k,v)=>{const bucket=SYNC_MAP[k];if(bucket&&window.CloudSync._us
     const us=load('_cloudUserState')||{};us[k]=v;save('_cloudUserState',us);CloudSync.save('userState',us)}
   else if(bucket==='leads'){// leads+cfg bundled in 'data' key
     const d=load('data')||{};if(k==='data'){CloudSync.save('leads',v)}else{d[k]=v;CloudSync.save('leads',d)}}
-  else{CloudSync.save(bucket,v)}}};
+  else{CloudSync.save(bucket,v)}}
+  // Bump sync version (debounced) so other devices know to pull
+  window._bumpSyncVer&&window._bumpSyncVer()};
 
+// ══════════════════════════════════════════════════════
+//  LIVE SYNC — Cross-device real-time state sync
+// ══════════════════════════════════════════════════════
+// Uses a single version counter in Supabase. On any save, version bumps.
+// Other devices detect the bump via broadcast or visibility check, then pull latest.
+window._syncVer=0;window._lastPull=0;window._pullDebounce=null;
 // Status config
 const ST={pending:{c:'var(--text3)',l:'Pending',bg:'rgba(72,79,88,.1)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
 const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?'CB→NP×'+np:'NP×'+np;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
@@ -1342,13 +1350,16 @@ function App(){
   const[filters,setFilters]=useState({genderFilter:'all',ageFilter:false,ageMin:'',ageMax:'',skipAllNP:false,includeCB:false});
   const[gOk,setGOk]=useState(!!localStorage.getItem('ad_gt'));
   const[sTabs,setSTabs]=useState(load('stabs')||[]);
-  useEffect(()=>{if(sTabs.length)save('stabs',sTabs)},[sTabs]);const[sLoad,setSLoad]=useState(false);
+  useEffect(()=>{if(sTabs.length){save('stabs',sTabs);
+    if(_SB&&_user){_SB.from('autodial_admin_config').upsert({admin_email:'stabs_'+_user.email.toLowerCase(),biz_name:JSON.stringify(sTabs)},{onConflict:'admin_email'}).catch(()=>{});window._bumpSyncVer&&window._bumpSyncVer()}}},[sTabs]);const[sLoad,setSLoad]=useState(false);
   const[sheetQ,setSheetQ]=useState('');const[sheetResults,setSheetResults]=useState([]);const[sheetSearching,setSheetSearching]=useState(false);
   const[session,setSession]=useState(()=>load('activeSession')||null);
   const[streak,setStreak]=useState(0);
   const[bestStreak,setBestStreak]=useState(load('bestStreak')||0);
   const[achievements,setAchievements]=useState(load('achievements')||[]);
   const[showAchievement,setShowAchievement]=useState(null);
+  useEffect(()=>{save('bestStreak',bestStreak);save('achievements',achievements);
+    if(_SB&&_user){_SB.from('autodial_admin_config').upsert({admin_email:'gamify_'+_user.email.toLowerCase(),biz_name:JSON.stringify({bestStreak,achievements,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{});window._bumpSyncVer&&window._bumpSyncVer()}},[bestStreak,achievements]);
   useEffect(()=>{save('activeSession',session)},[session]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[totalStars,setTotalStars]=useState(load('totalStars')||0);
@@ -1380,7 +1391,8 @@ function App(){
   const[payConfigOpen,setPayConfigOpen]=useState(false);
   const[showSlotPicker,setShowSlotPicker]=useState(false);
   const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||(role==='admin'&&cfg.sharedGeminiKey?cfg.sharedGeminiKey:''));
-  useEffect(()=>{if(geminiKeyVal)cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal})},[geminiKeyVal]);
+  useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
+    if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}},[geminiKeyVal]);
   // ═══ DESKTOP SCRIPT PANEL ═══
   const[scriptOpen,setScriptOpen]=useState(load('scriptOpen')??true);
   const[scriptContent,setScriptContent]=useState(cfg.callingScript||'');
@@ -1455,14 +1467,19 @@ function App(){
   useEffect(()=>{save('ts',totalSets);cloudSave('ts',totalSets);
     if(_SB&&_user){_SB.from('autodial_admin_config').upsert({admin_email:'ts_'+_user.email.toLowerCase(),biz_name:JSON.stringify({ts:totalSets})},{onConflict:'admin_email'}).catch(()=>{})}
   },[totalSets]);
-  useEffect(()=>{save('totalStars',totalStars);cloudSave('totalStars',totalStars)},[totalStars]);
-  useEffect(()=>{save('promo',promotionLog);cloudSave('promo',promotionLog)},[promotionLog]);
+  useEffect(()=>{save('totalStars',totalStars);cloudSave('totalStars',totalStars);
+    if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'stars_'+_user.email.toLowerCase(),biz_name:JSON.stringify({stars:totalStars,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})},[totalStars]);
+  useEffect(()=>{save('promo',promotionLog);cloudSave('promo',promotionLog);
+    if(_SB&&_user&&promotionLog.length)_SB.from('autodial_admin_config').upsert({admin_email:'promo_'+_user.email.toLowerCase(),biz_name:JSON.stringify(promotionLog)},{onConflict:'admin_email'}).catch(()=>{})},[promotionLog]);
   useEffect(()=>{save('slog',sessionLog);cloudSave('slog',sessionLog);
     if(_SB&&_user){_SB.from('autodial_admin_config').upsert({admin_email:'slog_'+_user.email.toLowerCase(),biz_name:JSON.stringify(sessionLog.slice(-100))},{onConflict:'admin_email'}).catch(()=>{})}
   },[sessionLog]);
-  useEffect(()=>{save('acfg',adminConfigs);cloudSave('acfg',adminConfigs);if(role!=='admin')publishAdminConfigs(adminConfigs)},[adminConfigs]);
-  useEffect(()=>{save('payh',paymentHistory);cloudSave('payh',paymentHistory)},[paymentHistory]);
-  useEffect(()=>{save('asess',adminSessions)},[adminSessions]);
+  useEffect(()=>{save('acfg',adminConfigs);cloudSave('acfg',adminConfigs);if(role!=='admin')publishAdminConfigs(adminConfigs);
+    if(_SB&&_user&&Object.keys(adminConfigs).length)_SB.from('autodial_admin_config').upsert({admin_email:'acfg_'+_user.email.toLowerCase(),biz_name:JSON.stringify(adminConfigs)},{onConflict:'admin_email'}).catch(()=>{})},[adminConfigs]);
+  useEffect(()=>{save('payh',paymentHistory);cloudSave('payh',paymentHistory);
+    if(_SB&&_user&&paymentHistory.length)_SB.from('autodial_admin_config').upsert({admin_email:'payh_'+_user.email.toLowerCase(),biz_name:JSON.stringify(paymentHistory.slice(-200))},{onConflict:'admin_email'}).catch(()=>{})},[paymentHistory]);
+  useEffect(()=>{save('asess',adminSessions);
+    if(_SB&&_user&&Object.keys(adminSessions).length){_SB.from('autodial_admin_config').upsert({admin_email:'asess_'+_user.email.toLowerCase(),biz_name:JSON.stringify(adminSessions)},{onConflict:'admin_email'}).catch(()=>{});window._bumpSyncVer&&window._bumpSyncVer()}},[adminSessions]);
   useEffect(()=>{save('appts',appointments);cloudSave('appts',appointments);
     // Hard sync appointments to Supabase
     if(_SB&&_user){
@@ -1476,16 +1493,20 @@ function App(){
         });
       }
     }},[appointments]);
-  useEffect(()=>{save('incv',incentives);cloudSave('incv',incentives)},[incentives]);
-  useEffect(()=>{save('apptDur',apptDuration);cloudSave('apptDur',apptDuration)},[apptDuration]);
-  // Hard sync WA templates
+  useEffect(()=>{save('incv',incentives);cloudSave('incv',incentives);
+    if(_SB&&_user&&incentives.length)_SB.from('autodial_admin_config').upsert({admin_email:'incv_'+_user.email.toLowerCase(),biz_name:JSON.stringify(incentives.slice(-200))},{onConflict:'admin_email'}).catch(()=>{})},[incentives]);
+  useEffect(()=>{save('apptDur',apptDuration);cloudSave('apptDur',apptDuration);
+    if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'apptdur_'+_user.email.toLowerCase(),biz_name:JSON.stringify({dur:apptDuration,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})},[apptDuration]);
+  // Hard sync WA templates (shared + own key for cross-device)
   useEffect(()=>{
-    if(_SB&&role!=='admin'&&waTemplates.length){
-      _SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(()=>{})}
+    if(_SB&&waTemplates.length){
+      if(role!=='admin')_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(()=>{});
+      if(_user){_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+_user.email.toLowerCase(),biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(()=>{});window._bumpSyncVer&&window._bumpSyncVer()}}
   },[waTemplates]);
   useEffect(()=>{save('mainMode',mainMode);cloudSave('mainMode',mainMode)},[mainMode]);
   useEffect(()=>{save('invitees',savedInvitees);cloudSave('invitees',savedInvitees)},[savedInvitees]);
-  useEffect(()=>{save('learned',learnedPatterns);window._learnedPatterns=learnedPatterns;cloudSave('learned',learnedPatterns)},[learnedPatterns]);
+  useEffect(()=>{save('learned',learnedPatterns);window._learnedPatterns=learnedPatterns;cloudSave('learned',learnedPatterns);
+    if(_SB&&_user&&Object.keys(learnedPatterns).length)_SB.from('autodial_admin_config').upsert({admin_email:'learned_'+_user.email.toLowerCase(),biz_name:JSON.stringify(learnedPatterns)},{onConflict:'admin_email'}).catch(()=>{})},[learnedPatterns]);
   useEffect(()=>{save('starget',sessionTarget);cloudSave('starget',sessionTarget)},[sessionTarget]);
 
   // Initialize new features on mount
@@ -1605,6 +1626,76 @@ function App(){
           }
         }
       }catch(e){console.warn('[CloudSync]',e.message)}
+      // ═══ DEDICATED HARD-SYNC RESTORE (fallback for cross-device) ═══
+      if(_SB){
+        try{
+          // Gemini key
+          if(!localStorage.getItem('autodial_gemini')){
+            const gk=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gemini_'+myEmail).single();
+            if(gk.data?.biz_name){const p=JSON.parse(gk.data.biz_name);if(p.key){setGeminiKeyVal(p.key);localStorage.setItem('autodial_gemini',p.key);console.log('[HardSync] Restored Gemini key')}}
+          }
+          // WA templates
+          if(!waTemplates.length){
+            const wt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','watpl_'+myEmail).single();
+            if(wt.data?.biz_name){const tpls=JSON.parse(wt.data.biz_name);if(tpls?.length){setWaTemplates(tpls);console.log('[HardSync] Restored '+tpls.length+' WA templates')}}
+          }
+          // Admin configs (pay settings)
+          if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length)){
+            const ac=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','acfg_'+myEmail).single();
+            if(ac.data?.biz_name){const acfg=JSON.parse(ac.data.biz_name);if(acfg&&Object.keys(acfg).length){setAdminConfigs(acfg);console.log('[HardSync] Restored admin configs')}}
+          }
+          // Appt duration
+          if(!load('apptDur')){
+            const ad=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptdur_'+myEmail).single();
+            if(ad.data?.biz_name){const p=JSON.parse(ad.data.biz_name);if(p.dur&&p.dur!==60){setApptDuration(p.dur);console.log('[HardSync] Restored apptDuration='+p.dur)}}
+          }
+          // Google token (try to reuse if recent, <45min)
+          if(!localStorage.getItem('ad_gt')){
+            const gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
+            if(gt.data?.biz_name){const p=JSON.parse(gt.data.biz_name);if(p.token&&p.ts&&(Date.now()-p.ts)<2700000){_gToken=p.token;localStorage.setItem('ad_gt',p.token);setGOk(true);console.log('[HardSync] Restored Google token (still fresh)')}}
+          }
+          // Total stars
+          if(!load('totalStars')){
+            const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','stars_'+myEmail).single();
+            if(sr.data?.biz_name){const p=JSON.parse(sr.data.biz_name);if(p.stars){setTotalStars(p.stars);console.log('[HardSync] Restored totalStars='+p.stars)}}
+          }
+          // Payment history
+          if(!paymentHistory.length){
+            const ph=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','payh_'+myEmail).single();
+            if(ph.data?.biz_name){const p=JSON.parse(ph.data.biz_name);if(p?.length){setPaymentHistory(p);console.log('[HardSync] Restored '+p.length+' payment records')}}
+          }
+          // Incentives
+          if(!incentives.length){
+            const iv=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','incv_'+myEmail).single();
+            if(iv.data?.biz_name){const p=JSON.parse(iv.data.biz_name);if(p?.length){setIncentives(p);console.log('[HardSync] Restored '+p.length+' incentives')}}
+          }
+          // Admin sessions (Main's view of admin sessions)
+          if(!Object.keys(adminSessions).length){
+            const as=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','asess_'+myEmail).single();
+            if(as.data?.biz_name){const p=JSON.parse(as.data.biz_name);if(p&&Object.keys(p).length){setAdminSessions(p);console.log('[HardSync] Restored admin sessions')}}
+          }
+          // Learned patterns (AI status mappings)
+          if(!Object.keys(learnedPatterns).length){
+            const lp=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','learned_'+myEmail).single();
+            if(lp.data?.biz_name){const p=JSON.parse(lp.data.biz_name);if(p&&Object.keys(p).length){setLearnedPatterns(p);window._learnedPatterns=p;console.log('[HardSync] Restored learned patterns')}}
+          }
+          // Promotion log
+          if(!promotionLog.length){
+            const pl=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','promo_'+myEmail).single();
+            if(pl.data?.biz_name){const p=JSON.parse(pl.data.biz_name);if(p?.length){setPromotionLog(p);console.log('[HardSync] Restored '+p.length+' promotions')}}
+          }
+          // Sheet tabs
+          if(!sTabs.length){
+            const st=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','stabs_'+myEmail).single();
+            if(st.data?.biz_name){const p=JSON.parse(st.data.biz_name);if(p?.length){setSTabs(p);console.log('[HardSync] Restored '+p.length+' sheet tabs')}}
+          }
+          // Gamification (bestStreak + achievements)
+          if(!load('bestStreak')&&!load('achievements')){
+            const gf=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gamify_'+myEmail).single();
+            if(gf.data?.biz_name){const p=JSON.parse(gf.data.biz_name);if(p.bestStreak)setBestStreak(p.bestStreak);if(p.achievements?.length)setAchievements(p.achievements);console.log('[HardSync] Restored gamification')}
+          }
+        }catch(e){console.warn('[HardSync]',e.message)}
+      }
       setSyncing(false);
     })();
 
@@ -1684,6 +1775,69 @@ function App(){
     }
     // Admin: load shared calendars
     if(role==='admin')DB.getSharedCalendars(myEmail).then(setCalShares);
+  },[]);
+
+  // ═══ LIVE SYNC — keep multiple devices in sync in real-time ═══
+  useEffect(()=>{
+    if(!_SB||!_user)return;
+    const me=myEmail;
+    const SYNC_KEYS=['gemini_','watpl_','acfg_','apptdur_','stars_','payh_','incv_','asess_','learned_','promo_','stabs_','gamify_','slog_','appts_','ts_'].map(k=>k+me);
+    let _pullTimer=null,_verTimer=null,_pulling=false;
+
+    // Debounced version bump: saves a version counter to Supabase + broadcasts "refresh"
+    let _ver=Date.now(),_verDebounce=null;
+    window._bumpSyncVer=()=>{
+      clearTimeout(_verDebounce);
+      _verDebounce=setTimeout(()=>{
+        _ver=Date.now();
+        _SB.from('autodial_admin_config').upsert({admin_email:'syncver_'+me,biz_name:JSON.stringify({v:_ver,dev:window._devId})},{onConflict:'admin_email'}).catch(()=>{});
+        syncSend('liveSync',{v:_ver});
+      },2000)};
+
+    // Pull latest from Supabase (batch read all keys in ONE query)
+    const pullLatest=async()=>{
+      if(_pulling||syncing)return;_pulling=true;
+      try{
+        const r=await _SB.from('autodial_admin_config').select('admin_email,biz_name').in('admin_email',SYNC_KEYS);
+        if(!r.data){_pulling=false;return}
+        const map={};r.data.forEach(row=>{map[row.admin_email]=row.biz_name});
+        // Apply each key — only update if cloud data differs from local
+        const p=(key)=>{try{return map[key+me]?JSON.parse(map[key+me]):null}catch{return null}};
+
+        const gk=p('gemini_');if(gk?.key&&gk.key!==geminiKeyVal){setGeminiKeyVal(gk.key);localStorage.setItem('autodial_gemini',gk.key)}
+        const wt=p('watpl_');if(wt?.length&&JSON.stringify(wt)!==JSON.stringify(waTemplates))setWaTemplates(wt);
+        const ac=p('acfg_');if(ac&&Object.keys(ac).length&&JSON.stringify(ac)!==JSON.stringify(adminConfigs))setAdminConfigs(ac);
+        const ad=p('apptdur_');if(ad?.dur&&ad.dur!==apptDuration)setApptDuration(ad.dur);
+        const sr=p('stars_');if(sr?.stars&&sr.stars>totalStars)setTotalStars(sr.stars);
+        const ph=p('payh_');if(ph?.length&&ph.length>paymentHistory.length)setPaymentHistory(ph);
+        const iv=p('incv_');if(iv?.length&&iv.length>incentives.length)setIncentives(iv);
+        const as=p('asess_');if(as&&Object.keys(as).length>Object.keys(adminSessions).length)setAdminSessions(as);
+        const lp=p('learned_');if(lp&&Object.keys(lp).length>Object.keys(learnedPatterns).length){setLearnedPatterns(lp);window._learnedPatterns=lp}
+        const pl=p('promo_');if(pl?.length&&pl.length>promotionLog.length)setPromotionLog(pl);
+        const st=p('stabs_');if(st?.length&&st.length>sTabs.length)setSTabs(st);
+        const gf=p('gamify_');if(gf){if(gf.bestStreak>bestStreak)setBestStreak(gf.bestStreak);if(gf.achievements?.length>achievements.length)setAchievements(gf.achievements)}
+        const sl=p('slog_');if(sl?.length&&sl.length>sessionLog.length)setSessionLog(sl);
+        const ap=p('appts_');if(ap?.length&&ap.length>appointments.length)setAppointments(ap);
+        const ts=p('ts_');if(ts?.ts&&ts.ts>totalSets)setTotalSets(ts.ts);
+
+        window._lastPull=Date.now();
+        console.log('[LiveSync] Pulled latest from cloud');
+      }catch(e){console.warn('[LiveSync]',e.message)}
+      _pulling=false};
+
+    // [1] Broadcast listener — other device saved, pull immediately
+    const unsub=onSync(msg=>{if(msg.type==='liveSync'&&msg._dev!==window._devId){
+      console.log('[LiveSync] Received refresh signal from another device');
+      setTimeout(pullLatest,500)}});// small delay to let Supabase propagate
+
+    // [2] Visibility change — tab becomes visible, check for updates
+    const onVis=()=>{if(!document.hidden&&(Date.now()-window._lastPull)>5000)pullLatest()};
+    document.addEventListener('visibilitychange',onVis);
+
+    // [3] Periodic poll — safety net every 60s
+    _pullTimer=setInterval(()=>{if(!document.hidden&&(Date.now()-window._lastPull)>55000)pullLatest()},60000);
+
+    return()=>{unsub();document.removeEventListener('visibilitychange',onVis);clearInterval(_pullTimer);clearTimeout(_verDebounce)};
   },[]);
 
   // Sync broadcast
