@@ -55,6 +55,7 @@ button:active{transform:scale(.97)}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 @keyframes confetti{0%{transform:translateY(0) rotate(0);opacity:1}100%{transform:translateY(-200px) rotate(720deg);opacity:0}}
 @keyframes celebrate{0%{transform:scale(.8);opacity:0}50%{transform:scale(1.05)}100%{transform:scale(1);opacity:1}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:200px}}
 @keyframes firePulse{0%,100%{text-shadow:0 0 10px rgba(240,180,41,.5)}50%{text-shadow:0 0 30px rgba(240,180,41,.8)}}
 @keyframes borderGlow{0%,100%{border-color:rgba(99,102,241,.3)}50%{border-color:rgba(99,102,241,.6)}}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:16px;backdrop-filter:blur(20px);transition:all .2s}
@@ -1368,6 +1369,7 @@ function App(){
   const[usersList,setUsersList]=useState([]);
   const[pendingUsers,setPendingUsers]=useState([]);
   const[showApprovalModal,setShowApprovalModal]=useState(false);
+  const[showHelp,setShowHelp]=useState(!localStorage.getItem('autodial_seen_help'));
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
   const[showPostCall,setShowPostCall]=useState(null);
@@ -1382,6 +1384,12 @@ function App(){
   useEffect(()=>{save('data',{leads,cfg});cloudSave('data',{leads,cfg})},[leads,cfg]);
   // Auto re-fetch if cached leads are stale (no notes)
   useEffect(()=>{
+    // Auto-fetch for admin with synced sheet
+    if(role==='admin'&&myCfg.timesheetId&&myCfg.sheetTab&&gOk&&leads.length===0&&!window._autoFetched){
+      window._autoFetched=true;
+      setCfg(s=>({...s,sheetId:myCfg.timesheetId,sheetTab:myCfg.sheetTab}));
+      setTimeout(()=>fetchLeads(),500);
+    }
     if(window._needsRefetch&&cfg.sheetId&&cfg.sheetTab&&gOk){
       window._needsRefetch=false;
       console.log('[AutoDial] Auto re-fetching stale leads...');
@@ -1613,6 +1621,14 @@ function App(){
   const unpaidIncentiveTotal=incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const isCreatorUser=isCreator(myEmail);
   useEffect(()=>{console.log('[AutoDial] Creator check:',{myEmail,isCreatorUser,userEmail:window._user?.email,profEmail:window._prof?.email,CREATOR:window.CREATOR||'undefined'})},[]);
+  // Achievement checker
+  const checkAchievement=useCallback((id,label,emoji)=>{
+    if(achievements.includes(id))return;
+    setAchievements(p=>{const n=[...p,id];save('achievements',n);return n});
+    setShowAchievement({id,label,emoji});
+    setTimeout(()=>setShowAchievement(null),3000);
+  },[achievements]);
+
   const fmtTime=s=>`${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
   const dncCheck=useCallback(()=>{
@@ -1704,7 +1720,11 @@ function App(){
     setCallLog(p=>[...p,{action:status,lead_name:cur?.name,lead_phone:cur?.phone,ts:new Date().toISOString()}]);
     // Add to CB queue if callback
     if(status==='cb'&&cur&&extra.cbDate)DB.addCB({adminId:_user?.id,admin:myEmail,name:cur.name,phone:cur.phone,cbDate:extra.cbDate,cbTime:extra.cbTime||''});
-    if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};
+    if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};if(s.dialed===1)checkAchievement('first_dial','Let\'s Go!','🚀');if(s.dialed===50)checkAchievement('dial50','Half Century!','🏏');if(s.dialed===100)checkAchievement('dial100','Centurion!','💯');
+      const spd=s.dialed/((Date.now()-session.startTime)/3600000);
+      if(spd>=30&&s.dialed>=10)checkAchievement('speed30','Speed Demon!','🏎️');
+      if(spd>=50&&s.dialed>=15)checkAchievement('speed50','Lightning Dialer!','⚡');
+      if(spd>=80&&s.dialed>=20)checkAchievement('speed80','Hyperdrive!','🚀');
       if(status==='np')s.np++;if(status==='ni')s.ni++;if(status==='cb')s.cb++;
       if(status==='set'){s.sets++;const nt=totalSets+1;setTotalSets(nt);
         // ═══ RANK-UP CHECK (ML-style) ═══
@@ -1727,7 +1747,20 @@ function App(){
     setCurIdx(idx);setPhase('waiting');setCountdown(cfg.delay);setShowNextPreview(false)},[cfg.delay,leads]);
 
   const handleOutcome=useCallback((status,extra={})=>{
-    if(status==='set'){const lead=curIdx>=0&&curIdx<leads.length?{...leads[curIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
+    if(status==='set'){
+      setStreak(p=>{const ns=p+1;if(ns>bestStreak){setBestStreak(ns);save('bestStreak',ns)}
+        if(ns>=3)checkAchievement('streak3','Hat Trick!','🎩');
+        if(ns>=5)checkAchievement('streak5','On Fire!','🔥');
+        if(ns>=10)checkAchievement('streak10','Unstoppable!','⚡');
+        if(ns>=20)checkAchievement('streak20','Legendary Run!','👑');
+        if(ns>=40)checkAchievement('streak40','GOD MODE!','🔱');
+        return ns});
+      
+      if(session){const s=session.sets+1;
+        if(s===1)checkAchievement('first_set','First Blood!','🩸');
+        if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
+        if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,4)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
+      }const lead=curIdx>=0&&curIdx<leads.length?{...leads[curIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
     else{applyOutcome(status,extra)}
     // Show post-call remarks input
     setShowPostCall({leadIdx:curIdx,status});setPostCallNote('');
@@ -1830,7 +1863,7 @@ function App(){
   const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
-  const _showRank=role!=='admin'||(myCfg.rankEnabled===true);
+  const _showRank=true;
   const _baseTabs=[['dial','📞 Dial'],['analytics','📊 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const callTabs=_showRank?[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:_baseTabs;
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
@@ -1860,6 +1893,7 @@ function App(){
       </button>}
       {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
       {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:8,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
+      <button onClick={()=>setShowHelp(true)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:12,fontWeight:700}}>?</button>
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       </button>
@@ -1907,24 +1941,74 @@ function App(){
             <div key={l} style={{flex:1,textAlign:'center',padding:'6px 0',borderRadius:8,background:'var(--bg)'}}>
               <p style={{margin:0,fontSize:16,fontWeight:800,color:c}}>{v}</p><p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{l}</p></div>)}
         </div>
-        {/* Challenge progress */}
-        {session.selectedSlot&&<div style={{marginBottom:8}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-            <span style={{fontSize:10,fontWeight:700,color:'var(--text3)'}}>CHALLENGE: {n(session.selectedSlot.hours,5)}h</span>
-            <span style={{fontSize:10,fontWeight:700,color:session.sets>=n(session.selectedSlot.bonusBar,4)?'var(--gold)':session.sets>=n(session.selectedSlot.apptsBar,2)?'var(--green)':'var(--text3)'}}>
-              {session.sets>=n(session.selectedSlot.bonusBar,4)?'🔥 BONUS!':session.sets>=n(session.selectedSlot.apptsBar,2)?'✅ BAR MET':'🎯 '+session.sets+'/'+n(session.selectedSlot.apptsBar,2)}
-            </span>
-          </div>
-          <div style={{display:'flex',gap:3,height:6}}>
-            {Array.from({length:n(session.selectedSlot.bonusBar,4)}).map((_,i)=>
-              <div key={i} style={{flex:1,borderRadius:3,background:i<session.sets?(i<n(session.selectedSlot.apptsBar,2)?'var(--green)':'var(--gold)'):'var(--bg)',transition:'background .3s'}}/>
-            )}
-          </div>
-          <div style={{display:'flex',justifyContent:'space-between',marginTop:2}}>
-            <span style={{fontSize:8,color:'var(--text3)'}}>Appts Bar: {n(session.selectedSlot.apptsBar,2)}</span>
-            <span style={{fontSize:8,color:'var(--gold)'}}>Bonus: {n(session.selectedSlot.bonusBar,4)}</span>
-          </div>
-        </div>}
+        {/* Streak + Speed */}
+        <div style={{display:'flex',gap:6,marginBottom:8}}>
+          {streak>=2&&<div style={{flex:1,padding:'6px 8px',borderRadius:8,background:'linear-gradient(135deg,rgba(239,68,68,.1),rgba(249,115,22,.1))',border:'1px solid rgba(239,68,68,.2)',textAlign:'center',animation:streak>=20?'pulse .5s infinite':streak>=5?'pulse 1s infinite':'none'}}>
+            <span style={{fontSize:14}}>{streak>=40?'🔱':streak>=20?'👑':streak>=10?'⚡':streak>=5?'🔥':streak>=3?'🎯':'✨'}</span>
+            <span style={{fontSize:11,fontWeight:700,color:streak>=40?'var(--gold)':streak>=20?'#a855f7':streak>=5?'#ef4444':'var(--amber)',marginLeft:4}}>{streak}× Streak!</span>
+          </div>}
+          {session.dialed>=5&&<div style={{flex:1,padding:'6px 8px',borderRadius:8,background:'var(--bg)',textAlign:'center'}}>
+            <span style={{fontSize:10,color:'var(--text3)'}}>⚡ Speed: </span>
+            <span className="mono" style={{fontSize:12,fontWeight:700,color:'var(--accent2)'}}>{(session.dialed/(elapsed/3600)).toFixed(1)}/hr</span>
+          </div>}
+        </div>
+        {/* ═══ GAMIFIED PROGRESS BARS ═══ */}
+        {(()=>{
+          const aBar=n(session.selectedSlot?.apptsBar||myCfg.mThresh,2);
+          const bBar=n(session.selectedSlot?.bonusBar||myCfg.nThresh,4);
+          const sets=session.sets||0;
+          const metAppts=sets>=aBar;
+          const metBonus=sets>=bBar;
+          const apptPct=Math.min(100,(sets/Math.max(1,aBar))*100);
+          const bonusPct=metAppts?Math.min(100,((sets-aBar)/Math.max(1,bBar-aBar))*100):0;
+          const rate=(myCfg.payRates||[8,10,12])[0]||8;
+          const bonusMult=n(myCfg.bonusMult,1.5);
+          return<div style={{marginBottom:8}}>
+            {/* Appts Bar */}
+            <div style={{padding:'10px 12px',borderRadius:12,background:metAppts?'rgba(63,185,80,.08)':'var(--bg)',border:'1px solid '+(metAppts?'rgba(63,185,80,.3)':'var(--border)'),marginBottom:6,transition:'all .5s'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <span style={{fontSize:12,fontWeight:700,color:metAppts?'var(--green)':'#f1f5f9'}}>
+                  {metAppts?'✅ APPTS BAR HIT!':'🎯 Appts Bar'}
+                </span>
+                <span className="mono" style={{fontSize:14,fontWeight:800,color:metAppts?'var(--green)':'var(--accent2)'}}>{sets}/{aBar}</span>
+              </div>
+              <div style={{height:10,borderRadius:5,background:'var(--bg3)',overflow:'hidden',marginBottom:4}}>
+                <div style={{height:'100%',borderRadius:5,width:apptPct+'%',background:metAppts?'linear-gradient(90deg,#22c55e,#4ade80)':'linear-gradient(90deg,var(--accent),#818cf8)',transition:'width .5s',boxShadow:metAppts?'0 0 12px rgba(34,197,94,.4)':'none'}}/>
+              </div>
+              {!metAppts&&<p style={{margin:0,fontSize:9,color:'var(--text3)'}}>
+                {aBar-sets===1?'🔥 Just 1 more appointment!':sets===0?'Set your first appointment to get started':''+( aBar-sets)+' more to hit the bar → full session pay'}
+              </p>}
+              {metAppts&&!metBonus&&<p style={{margin:0,fontSize:10,color:'var(--green)',fontWeight:600}}>
+                Full session pay locked in! 💪
+              </p>}
+            </div>
+
+            {/* Bonus Bar - appears with animation when appts bar is met */}
+            {metAppts&&<div style={{padding:'10px 12px',borderRadius:12,background:metBonus?'rgba(255,215,0,.1)':'rgba(255,215,0,.03)',border:'1px solid '+(metBonus?'rgba(255,215,0,.4)':'rgba(255,215,0,.15)'),animation:'slideDown .5s ease-out',transition:'all .5s'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <span style={{fontSize:12,fontWeight:700,color:metBonus?'var(--gold)':'#f1f5f9'}}>
+                  {metBonus?'🔥 BONUS UNLOCKED!':'✨ Bonus Bar'}
+                  {!metBonus&&<span style={{fontSize:10,color:'var(--gold)',marginLeft:6,animation:'pulse 1.5s infinite'}}>×{bonusMult}</span>}
+                </span>
+                <span className="mono" style={{fontSize:14,fontWeight:800,color:metBonus?'var(--gold)':'var(--amber)'}}>{sets}/{bBar}</span>
+              </div>
+              <div style={{height:10,borderRadius:5,background:'var(--bg3)',overflow:'hidden',marginBottom:4}}>
+                <div style={{height:'100%',borderRadius:5,width:bonusPct+'%',background:'linear-gradient(90deg,#f59e0b,#fbbf24,#fcd34d)',transition:'width .5s',boxShadow:metBonus?'0 0 16px rgba(255,215,0,.5)':'none'}}/>
+              </div>
+              {!metBonus&&<p style={{margin:0,fontSize:9,color:'var(--gold)'}}>
+                {bBar-sets===1?'⚡ ONE MORE for ×'+bonusMult+' bonus!':''+( bBar-sets)+' more appointments → ×'+bonusMult+' pay multiplier'}
+              </p>}
+              {metBonus&&<p style={{margin:0,fontSize:11,color:'var(--gold)',fontWeight:700,textAlign:'center'}}>
+                🎉 ×{bonusMult} multiplier on full session! 🎉
+              </p>}
+            </div>}
+
+            {/* Earnings preview */}
+            <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:10,color:'var(--text3)'}}>
+              <span>💵 ~${(metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate)).toFixed(0)} est.</span>
+              {metAppts&&!metBonus&&<span style={{color:'var(--gold)'}}>+${((n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*(bonusMult-1))).toFixed(0)} if bonus</span>}
+            </div>
+          </div>})()}
         {/* Rank progress */}
         {nextRank&&<div>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text3)',marginBottom:3}}>
@@ -2481,6 +2565,20 @@ function App(){
     </div>}
 
     {tab==='leads'&&<div className='content-pad'>
+      {role==='admin'?<div className="card" style={{marginBottom:10}}>
+        {myCfg.timesheetId?<>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+            <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--green)'}}>📋 {myCfg._tsName||'Shared Sheet'}</p>
+            <span className="pill" style={{background:gOk?'var(--gdim)':'var(--rdim)',color:gOk?'var(--green)':'var(--red)'}}>{gOk?'Ready':'No access'}</span>
+          </div>
+          {myCfg.sheetTab&&<p style={{fontSize:11,color:'var(--accent2)',margin:'0 0 8px'}}>Tab: <b>{myCfg.sheetTab}</b></p>}
+          <button onClick={()=>{if(!gOk){toast('Waiting for Google access from manager','err');return}fetchLeads()}} disabled={sLoad} style={{width:'100%',padding:'12px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:13,fontWeight:700}}>{sLoad?'Loading...':'📥 Fetch Leads from Shared Sheet'}</button>
+          {leads.length>0&&<p style={{fontSize:10,color:'var(--text3)',margin:'6px 0 0',textAlign:'center'}}>{leads.length} leads loaded</p>}
+        </>:<div style={{textAlign:'center',padding:'16px 0'}}>
+          <p style={{margin:0,fontSize:12,color:'var(--text3)'}}>⏳ Waiting for manager to assign a leads sheet</p>
+          <p style={{margin:'4px 0 0',fontSize:10,color:'var(--text3)'}}>Your manager will link a Google Sheet for you</p>
+        </div>}
+      </div>:
       <div className="card" style={{marginBottom:10}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--accent2)'}}>📊 Google Sheets</p>
@@ -2490,7 +2588,6 @@ function App(){
         {gOk&&<>
           <div style={{position:'relative',marginBottom:8}}>
             <input value={sheetQ} onChange={e=>{setSheetQ(e.target.value);
-              // Auto-suggest: debounced search as user types
               clearTimeout(window._sheetSearchTimer);
               if(e.target.value.length>=2){window._sheetSearchTimer=setTimeout(()=>{setSheetSearching(true);gDrive.search(e.target.value).then(r=>{setSheetResults(r);setSheetSearching(false)}).catch(()=>setSheetSearching(false))},400)}
               else{setSheetResults([])}
@@ -2509,7 +2606,7 @@ function App(){
             <button onClick={fetchLeads} disabled={!cfg.sheetTab||sLoad} style={{width:'100%',padding:'10px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700}}>Fetch Leads</button>
           </>}
         </>}
-      </div>
+      </div>}
       <input ref={fileRef} type="file" accept=".csv,.tsv,.xlsx,.xls" onChange={handleFile} style={{display:'none'}}/>
       <button onClick={()=>fileRef.current?.click()} style={{width:'100%',padding:'14px',borderRadius:12,border:'2px dashed var(--border2)',background:'transparent',color:'var(--text2)',fontSize:12,fontWeight:600,marginBottom:8}}>📁 Upload CSV/Excel</button>
       {leads.length>0&&<>
@@ -2810,7 +2907,7 @@ function App(){
             </datalist>
           </div>
           <button onClick={()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
-            setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:false,bizName:'',payNow:'',timesheetId:''}}));
+            setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:true,bizName:'',payNow:'',timesheetId:''}}));
             setNewAdminEmail('');toast('Added '+em)}} style={{padding:'0 16px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Add</button>
         </div>
         {Object.entries(adminConfigs).map(([em,ac])=><div key={em} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:14,padding:12,marginBottom:8}}>
@@ -2854,10 +2951,7 @@ function App(){
               <div><label style={{fontSize:9,color:'var(--amber)',fontWeight:700,display:'block',marginBottom:2}}>Met Incentive ($)</label>
                 <input type="number" value={ac.metIncentive??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],metIncentive:e.target.value===''?'':parseFloat(e.target.value)}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
             </div>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'4px 0 8px',padding:'8px 12px',borderRadius:10,background:'var(--bg3)',border:'1px solid var(--border)'}}>
-              <div><span style={{fontSize:11,fontWeight:600,color:'#f1f5f9'}}>🏆 Rank System</span><br/><span style={{fontSize:9,color:'var(--text3)'}}>Gamified rank progression</span></div>
-              <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],rankEnabled:!ac.rankEnabled}}))} style={{padding:'4px 12px',borderRadius:6,background:ac.rankEnabled===true?'var(--gdim)':'var(--bg)',color:ac.rankEnabled===true?'var(--green)':'var(--text3)',fontSize:10,fontWeight:700,border:'1px solid '+(ac.rankEnabled===true?'rgba(63,185,80,.2)':'var(--border)')}}>{ac.rankEnabled===true?'ON':'OFF'}</button>
-            </div>
+
             <div style={{marginBottom:8}}>
               <label style={{fontSize:9,color:'var(--green)',fontWeight:700,display:'block',marginBottom:2}}>📋 Leads Sheet</label>
               <div style={{position:'relative'}}>
@@ -2879,9 +2973,73 @@ function App(){
                       {ac._sheetTabs.map(t=><option key={t} value={t}>{t}</option>)}
                     </select>
                   :<input value={ac.sheetTab||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sheetTab:e.target.value}}))} placeholder="Tab name" style={{flex:1,fontSize:11,padding:'6px'}}/>}
-                  <button onClick={async()=>{if(!gOk)return toast('Connect Google','err');try{const meta=await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+ac.timesheetId+'?fields=sheets.properties')).json();const tabs=(meta.sheets||[]).map(s=>s.properties.title);setAdminConfigs(p=>({...p,[em]:{...p[em],_sheetTabs:tabs}}));toast(tabs.length+' tabs found')}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,fontWeight:600,whiteSpace:'nowrap'}}>Load Tabs</button>
+                  <button onClick={async()=>{if(!gOk)return toast('Connect Google','err');try{const meta=await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+ac.timesheetId+'?fields=sheets.properties')).json();const tabs=(meta.sheets||[]).map(s=>s.properties.title);
+                    // Auto-detect timesheet & appointments tabs
+                    const tsTab=tabs.find(t=>/time.?sheet|pay.?sheet|hours|payroll/i.test(t));
+                    const apptTab=tabs.find(t=>/appoint|appt|meeting|set|booking/i.test(t));
+                    setAdminConfigs(p=>({...p,[em]:{...p[em],_sheetTabs:tabs,_detectedTs:tsTab||null,_detectedAppt:apptTab||null}}));
+                    let msg=tabs.length+' tabs found';
+                    if(tsTab)msg+=' · 📊 Timesheet: '+tsTab;
+                    if(apptTab)msg+=' · 📅 Appts: '+apptTab;
+                    toast(msg)}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,fontWeight:600,whiteSpace:'nowrap'}}>Load Tabs</button>
                 </div>
                 {ac.sheetTab&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>📋 {ac._tsName||'Sheet'} → <b>{ac.sheetTab}</b></p>}
+                {(ac._detectedTs||ac._detectedAppt)&&<div style={{margin:'6px 0',padding:'8px',borderRadius:8,background:'rgba(99,102,241,.05)',border:'1px solid rgba(99,102,241,.15)'}}>
+                  <p style={{margin:'0 0 4px',fontSize:9,fontWeight:700,color:'var(--accent2)'}}>🔍 AI Detected Tabs</p>
+                  {ac._detectedAppt&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+                    <span style={{fontSize:10,color:'var(--text2)'}}>📅 Appointments: <b>{ac._detectedAppt}</b></span>
+                    <button onClick={async()=>{try{toast('Importing appointments...','info');
+                      const vals=await gSheets.vals(ac.timesheetId,ac._detectedAppt);
+                      if(!vals||vals.length<2){toast('Empty tab','err');return}
+                      const headers=vals[0].map(h=>(h||'').toString().toLowerCase());
+                      const nameIdx=headers.findIndex(h=>/name|client|prospect/i.test(h));
+                      const dateIdx=headers.findIndex(h=>/date|time|when/i.test(h));
+                      const phoneIdx=headers.findIndex(h=>/phone|mobile|contact|number/i.test(h));
+                      const statusIdx=headers.findIndex(h=>/status|outcome|result/i.test(h));
+                      let imported=0;
+                      const existing=appointments.map(a=>(a.name||'').toLowerCase()+'_'+(a.phone||''));
+                      for(let r=1;r<vals.length;r++){
+                        const row=vals[r];const name=row[nameIdx>=0?nameIdx:0]||'';
+                        const phone=row[phoneIdx>=0?phoneIdx:1]||'';
+                        const key=name.toLowerCase()+'_'+phone;
+                        if(!name||existing.includes(key))continue;
+                        const appt={id:'imp_'+Date.now()+'_'+r,name,phone,
+                          date:row[dateIdx>=0?dateIdx:2]||new Date().toISOString().slice(0,10),
+                          admin:em,createdAt:new Date().toISOString(),followUp:'pending',
+                          source:'imported',notes:'Imported from '+ac._detectedAppt};
+                        setAppointments(p=>[...p,appt]);imported++}
+                      toast(imported+' appointments imported ✓');
+                    }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--gdim)',color:'var(--green)',fontSize:8,fontWeight:600}}>Import</button>
+                  </div>}
+                  {ac._detectedTs&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                    <span style={{fontSize:10,color:'var(--text2)'}}>📊 Timesheet: <b>{ac._detectedTs}</b></span>
+                    <button onClick={async()=>{try{toast('Importing timesheet...','info');
+                      const vals=await gSheets.vals(ac.timesheetId,ac._detectedTs);
+                      if(!vals||vals.length<2){toast('Empty tab','err');return}
+                      const headers=vals[0].map(h=>(h||'').toString().toLowerCase());
+                      const dateIdx=headers.findIndex(h=>/date/i.test(h));
+                      const hoursIdx=headers.findIndex(h=>/hour|duration|time/i.test(h));
+                      const payIdx=headers.findIndex(h=>/pay|amount|total|earn/i.test(h));
+                      const dialIdx=headers.findIndex(h=>/dial|call/i.test(h));
+                      const setIdx=headers.findIndex(h=>/set|appt|appointment/i.test(h));
+                      let pastSessions=[];
+                      for(let r=1;r<vals.length;r++){
+                        const row=vals[r];
+                        const date=row[dateIdx>=0?dateIdx:0]||'';
+                        if(!date)continue;
+                        pastSessions.push({
+                          startTime:new Date(date).toISOString()||new Date().toISOString(),
+                          dialed:parseInt(row[dialIdx>=0?dialIdx:1])||0,
+                          sets:parseInt(row[setIdx>=0?setIdx:2])||0,np:0,
+                          pay:parseFloat(row[payIdx>=0?payIdx:3])||0,
+                          creditHours:parseFloat(row[hoursIdx>=0?hoursIdx:4])||0,
+                          tier:'Bronze',paid:true,paidDate:new Date().toISOString(),
+                          source:'imported',ended:true})}
+                      if(pastSessions.length){setSessionLog(p=>[...pastSessions,...p])}
+                      toast(pastSessions.length+' past sessions imported (marked as paid) ✓');
+                    }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--adim)',color:'var(--accent2)',fontSize:8,fontWeight:600}}>Import as Past Pay</button>
+                  </div>}
+                </div>}
               </>}
               <p style={{fontSize:9,color:'var(--text3)',margin:'6px 0 0',lineHeight:1.4}}>💡 Just add the leads sheet — <b style={{color:'var(--accent2)'}}>Timesheet</b>, <b style={{color:'var(--accent2)'}}>Appointments</b> & <b style={{color:'var(--accent2)'}}>Pay</b> tabs are auto-created!</p>
             </div>
@@ -3014,6 +3172,7 @@ function App(){
           {myCfg.sheetTab&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--accent2)'}}>Tab: <b>{myCfg.sheetTab}</b></p>}
         </div>}
         {!myCfg.timesheetId&&<p style={{fontSize:9,color:'var(--text3)',margin:'4px 0 0'}}>Waiting for manager to assign a sheet</p>}
+        {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Reset to manager connection');setTimeout(()=>location.reload(),500)}} style={{marginTop:8,padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,border:'1px solid var(--border)'}}>Reset Google connection</button>}
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
@@ -3103,6 +3262,94 @@ function App(){
       </div>}
 
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>
+    </div>}
+
+    {/* ═══ ACHIEVEMENT POPUP ═══ */}
+    {showAchievement&&<div style={{position:'fixed',top:80,left:'50%',transform:'translateX(-50%)',zIndex:120,animation:'slideDown .5s ease-out',pointerEvents:'none'}}>
+      <div style={{padding:'16px 28px',borderRadius:16,background:'linear-gradient(135deg,rgba(255,215,0,.15),rgba(249,115,22,.1))',border:'2px solid rgba(255,215,0,.4)',backdropFilter:'blur(12px)',boxShadow:'0 8px 32px rgba(255,215,0,.2)',textAlign:'center'}}>
+        <p style={{margin:0,fontSize:32}}>{showAchievement.emoji}</p>
+        <p style={{margin:'4px 0 0',fontSize:14,fontWeight:800,color:'var(--gold)'}}>{showAchievement.label}</p>
+      </div>
+    </div>}
+
+    {/* ═══ HELP / INSTRUCTIONS MODAL ═══ */}
+    {showHelp&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:110,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:520,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+        <div style={{textAlign:'center',marginBottom:16}}>
+          <p style={{fontSize:40,margin:'0 0 4px'}}>📞</p>
+          <h2 style={{fontSize:20,fontWeight:900,color:'#f1f5f9',margin:'0 0 4px'}}>Welcome to AutoDial</h2>
+          <p style={{fontSize:12,color:'var(--text3)',margin:0}}>{role==='admin'?'Caller Guide':'Manager Guide'}</p>
+        </div>
+
+        {role==='admin'?<>
+          {/* ADMIN INSTRUCTIONS */}
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 6px'}}>📞 Making Calls</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}>1. Go to <b>Dial</b> tab and tap <b style={{color:'var(--green)'}}>Start Session</b></p>
+              <p style={{margin:'0 0 4px'}}>2. Pick a challenge slot if available, or start with default</p>
+              <p style={{margin:'0 0 4px'}}>3. Leads auto-load from your assigned sheet</p>
+              <p style={{margin:'0 0 4px'}}>4. Tap the <b style={{color:'var(--accent2)'}}>phone number</b> to dial — status buttons appear after each call</p>
+              <p style={{margin:'0 0 4px'}}>5. Mark each call: <b style={{color:'var(--green)'}}>Set</b> (appointment made), <b style={{color:'var(--amber)'}}>CB</b> (callback), <b style={{color:'var(--red)'}}>NP</b> (no pick), or <b>NI</b> (not interested)</p>
+              <p style={{margin:0}}>6. Tap <b style={{color:'var(--red)'}}>End Session</b> when done — your pay is auto-calculated</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--green)',margin:'0 0 6px'}}>💰 Pay & Rank</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}>Your pay tier (Bronze→Platinum Elite) is set by your manager</p>
+              <p style={{margin:'0 0 4px'}}>Hit the <b>Appts Bar</b> to earn full session pay, hit <b>Bonus Bar</b> for bonus multiplier</p>
+              <p style={{margin:'0 0 4px'}}>Check <b>Stats</b> for hit rates, <b>Rank</b> for tier progression, <b>Pay</b> for session history</p>
+              <p style={{margin:0}}>Sessions under the appts bar are rounded to nearest 30 minutes</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--amber)',margin:'0 0 6px'}}>📋 Tips</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}>Use the <b>Calling Script</b> panel (desktop) for your pitch notes</p>
+              <p style={{margin:'0 0 4px'}}>Send WhatsApp follow-ups with one tap after setting appointments</p>
+              <p style={{margin:0}}>Your leads, appointments & settings are all synced by your manager</p>
+            </div>
+          </div>
+        </>:<>
+          {/* MAIN INSTRUCTIONS */}
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 6px'}}>🔄 CALL ↔ MGMT Toggle</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}><b>CALL mode</b> — You become a caller: dial leads, track stats, earn pay</p>
+              <p style={{margin:0}}><b>MGMT mode</b> — Manage your team: live dashboard, tracking, pay, settings</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--green)',margin:'0 0 6px'}}>👥 Setting Up Admins</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}>1. <b>Settings → Users</b>: Approve new signups with the 👥 badge in header</p>
+              <p style={{margin:'0 0 4px'}}>2. <b>Settings → Admin Pay</b>: Add each admin's email, set their tier rates, session hours, appts/bonus bars</p>
+              <p style={{margin:'0 0 4px'}}>3. <b>Link their Leads Sheet</b>: Search your Google Sheet → select their tab → <b>☁️ Sync</b></p>
+              <p style={{margin:0}}>4. <b>☁️ Sync All</b> in Team Rules to push DNC hours & global settings</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--amber)',margin:'0 0 6px'}}>📊 Management Mode</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}><b>Live</b> — Real-time view of who's calling and their stats</p>
+              <p style={{margin:'0 0 4px'}}><b>Pay</b> — Review sessions, mark paid, generate invoices</p>
+              <p style={{margin:'0 0 4px'}}><b>Track</b> — Performance analytics and appointment tracking</p>
+              <p style={{margin:0}}><b>Leads</b> — Connect Google Sheets, fetch & manage lead lists</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'#4285f4',margin:'0 0 6px'}}>🔗 Integrations</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}><b>Google</b> — Connect once, your token is shared with all admins</p>
+              <p style={{margin:'0 0 4px'}}><b>Gemini AI</b> — Add your API key, tap "Share" to give it to admins</p>
+              <p style={{margin:0}}><b>WhatsApp Templates</b> — Create templates, auto-shared with admins</p>
+            </div>
+          </div>
+        </>}
+
+        <button onClick={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}} style={{width:'100%',padding:'14px',borderRadius:14,background:'var(--adim)',color:'var(--accent2)',fontSize:14,fontWeight:700,marginTop:8}}>Got it!</button>
+      </div>
     </div>}
 
     {/* ═══ USER MANAGEMENT MODAL ═══ */}
