@@ -1275,6 +1275,18 @@ function parseSheetMultiBatch(headers,rows){
 }
 window.parseSheetMultiBatch=parseSheetMultiBatch;
 window.detectBatchColumns=detectBatchColumns;
+// Helper: check if an appointment matches any deleted ID
+function _getDelIds(){return new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'))}
+function isApptDeleted(a,delSet){
+  if(!delSet)delSet=_getDelIds();if(!delSet.size)return false;
+  // Check all possible key patterns
+  if(a.id&&delSet.has(String(a.id)))return true;
+  if(a.phone){
+    if(delSet.has(a.phone+'_'+(a.createdAt||'')))return true;
+    if(delSet.has(a.phone+'_'+(a.apptDate||'')))return true;
+    if(delSet.has(a.phone))return true}
+  return false}
+window.isApptDeleted=isApptDeleted;
 window.detectBatches=detectBatches;
 
 const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction\s*id|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,nric:/^(nric|ic|ic.?no|nric.?no|identification|id.?number)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
@@ -1499,6 +1511,8 @@ function App(){
   const[showReplay,setShowReplay]=useState(null); // Session replay modal
   const[rawSheet,setRawSheet]=useState(null); // {headers,rows} for re-analysis
   const[showColPicker,setShowColPicker]=useState(null); // {headers, onPick} for status column selection
+  const[showColMap,setShowColMap]=useState(false); // Column mapping override modal
+  const[detectedColMap,setDetectedColMap]=useState(null); // {phone:2, first:0, dob:4, ...}
   const[aiAnalyzing,setAiAnalyzing]=useState(false);
   const[payConfigOpen,setPayConfigOpen]=useState(false);
   const[showSlotPicker,setShowSlotPicker]=useState(false);
@@ -1692,10 +1706,10 @@ function App(){
         if(role==='admin'&&_SB){
           try{const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_appts_'+myEmail).single();
             if(ar.data&&ar.data.biz_name){const shared=JSON.parse(ar.data.biz_name);
-              if(shared.length){const delIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+              if(shared.length){const delIds=_getDelIds();
                 setAppointments(prev=>{
                 const existIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
-                const newAppts=shared.filter(a=>{const aid=a.id||a.phone+'_'+(a.createdAt||'');return!existIds.has(aid)&&!delIds.has(aid)});
+                const newAppts=shared.filter(a=>{return!existIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds)});
                 if(newAppts.length)console.log('[AutoDial] Loaded '+newAppts.length+' shared appointments');
                 return newAppts.length?[...prev,...newAppts]:prev})}}}catch(e){}
           // Load session log from Supabase
@@ -1722,8 +1736,8 @@ function App(){
         if(role!=='admin'&&_SB){
           try{const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+myEmail).single();
             if(ar.data&&ar.data.biz_name){const myA=JSON.parse(ar.data.biz_name);
-              if(myA.length){const delIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
-                const filtered=myA.filter(a=>!delIds.has(a.id||a.phone+'_'+(a.createdAt||'')));
+              if(myA.length){const delIds=_getDelIds();
+                const filtered=myA.filter(a=>!isApptDeleted(a,delIds));
                 if(filtered.length>appointments.length){setAppointments(filtered);console.log('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
@@ -1748,8 +1762,8 @@ function App(){
           }
           if(cloud.adminConfigs&&!Object.keys(adminConfigs).length)setAdminConfigs(cloud.adminConfigs);
           if(cloud.sessions?.length&&!sessionLog.length)setSessionLog(cloud.sessions);
-          if(cloud.appointments?.length&&!appointments.length){const _dIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
-            const _filt=cloud.appointments.filter(a=>!_dIds.has(a.id||a.phone+'_'+(a.createdAt||'')));if(_filt.length)setAppointments(_filt)}
+          if(cloud.appointments?.length&&!appointments.length){const _dIds=_getDelIds();
+            const _filt=cloud.appointments.filter(a=>!isApptDeleted(a,_dIds));if(_filt.length)setAppointments(_filt)}
           if(cloud.incentives?.length&&!incentives.length)setIncentives(cloud.incentives);
           if(cloud.payments?.length&&!paymentHistory.length)setPaymentHistory(cloud.payments);
           if(cloud.userState){
@@ -1781,6 +1795,12 @@ function App(){
         if(!load('apptDur'))
           await _hs('apptdur_'+myEmail,d=>{if(d.dur&&d.dur!==60)setApptDuration(d.dur)});
 
+        // Restore deleted appointment IDs from Supabase (cross-device)
+        try{const dar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dappt_'+myEmail).single();
+          if(dar.data&&dar.data.biz_name){const cloudDel=JSON.parse(dar.data.biz_name);
+            const localDel=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+            const merged=[...new Set([...localDel,...cloudDel])].slice(-500);
+            localStorage.setItem('_deletedApptIds',JSON.stringify(merged))}}catch(e){}
         // Google token — restore from cloud
         if(!localStorage.getItem('ad_gt')){
           await _hs('shared_gtoken',d=>{
@@ -1948,11 +1968,10 @@ function App(){
         const gf=p('gamify_');if(gf){if(gf.bestStreak)setBestStreak(prev=>gf.bestStreak>prev?gf.bestStreak:prev);if(gf.achievements?.length)setAchievements(prev=>gf.achievements.length>prev.length?gf.achievements:prev)}
         const sl=p('slog_');if(sl?.length)setSessionLog(prev=>sl.length>prev.length?sl:prev);
         const ap=p('appts_');if(ap?.length)setAppointments(prev=>{
-          const delIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
-          const filtered=ap.filter(a=>!delIds.has(a.id||a.phone+'_'+(a.createdAt||'')));
-          // Merge: add cloud items not in local, but never re-add deleted ones
+          const delIds=_getDelIds();
+          const filtered=ap.filter(a=>!isApptDeleted(a,delIds));
           const localIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
-          const newFromCloud=filtered.filter(a=>!localIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!delIds.has(a.id||a.phone+'_'+(a.createdAt||'')));
+          const newFromCloud=filtered.filter(a=>!localIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds));
           return newFromCloud.length?[...prev,...newFromCloud]:prev});
         const ts=p('ts_');if(ts?.ts)setTotalSets(prev=>ts.ts>prev?ts.ts:prev);
 
@@ -2657,10 +2676,12 @@ function App(){
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
-          <span style={{fontSize:10,color:'var(--text3)'}}>{isCallMode?appointments.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:appointments.length} total</span>
+          <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
           {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
               // Track all IDs as deleted so sync never brings them back
-              const allIds=appointments.map(a=>a.id||a.phone+'_'+(a.createdAt||''));localStorage.setItem('_deletedApptIds',JSON.stringify(allIds.slice(-500)));
+              const allIds=[];appointments.forEach(a=>{allIds.push(String(a.id||''));allIds.push(a.phone+'_'+(a.createdAt||''));allIds.push(a.phone+'_'+(a.apptDate||''))});
+              const uniq=[...new Set(allIds.filter(Boolean))].slice(-500);localStorage.setItem('_deletedApptIds',JSON.stringify(uniq));
+              if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(uniq)},{onConflict:'admin_email'}).catch(function(){});
               setAppointments([]);save('appts',[]);cloudSave('appts',[]);
               // Clear shared appointment keys for all admins
               if(_SB&&role!=='admin'){Object.keys(adminConfigs).forEach(email=>{
@@ -2680,7 +2701,10 @@ function App(){
 
       {(()=>{
         // Filter appointments
+        const _delSet=_getDelIds();
         const filtered=appointments.filter(a=>{
+          // Never show deleted appointments
+          if(isApptDeleted(a,_delSet))return false;
           // Admin role: only see their own
           if(role==='admin'&&a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase())return false;
           // Main in Call Mode: only own appointments (admin appts show in Manage Mode)
@@ -2720,9 +2744,14 @@ function App(){
             <div style={{display:'flex',alignItems:'center',gap:4}}>
               <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
               <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?')){
-                // Track deleted ID so cloud sync never brings it back
+                // Track deleted by PHONE (most reliable) + id
                 const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
-                delIds.push(a.id||a.phone+'_'+(a.createdAt||''));localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
+                const delKey=a.phone+'_'+(a.apptDate||a.createdAt||'');
+                if(!delIds.includes(delKey))delIds.push(delKey);
+                if(a.id&&!delIds.includes(String(a.id)))delIds.push(String(a.id));
+                localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
+                // Sync deleted IDs to Supabase so other devices respect deletions
+                if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(delIds.slice(-500))},{onConflict:'admin_email'}).catch(function(){});
                 setAppointments(p=>p.filter(x=>x.id!==a.id))}}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
             </div>
           </div>
