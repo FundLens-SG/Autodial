@@ -298,109 +298,80 @@ window.onSync=function(cb){_syncCbs.push(cb);return function(){_syncCbs=_syncCbs
 // ══════ GOOGLE API ══════
 var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com',_gToken=null;
 var GSCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
-var _gsiReady=false,_gsiLoading=false;
+// ↓↓↓ SET THIS to your Cloudflare Worker URL for permanent Google auth ↓↓↓
+var WORKER_URL='https://autodial-google-auth.chungakwanc.workers.dev'; // e.g. 'https://autodial-google-auth.yourname.workers.dev'
 
-// ═══ PRE-LOAD Google GSI on page load (don't wait for first connect) ═══
-function _ensureGSI(cb){
-  if(_gsiReady&&typeof google!=='undefined'&&google.accounts){if(cb)cb();return}
-  if(_gsiLoading){var _w=setInterval(function(){if(_gsiReady){clearInterval(_w);if(cb)cb()}},200);return}
-  _gsiLoading=true;
-  var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
-  s.onload=function(){_gsiReady=true;_gsiLoading=false;if(cb)cb()};
-  s.onerror=function(){_gsiLoading=false};
-  document.head.appendChild(s)}
-// Start loading GSI immediately
-setTimeout(_ensureGSI,1000);
+// ═══ SAVE TOKEN — shared helper ═══
+function _saveGToken(token){
+  _gToken=token;localStorage.setItem('ad_gt',token);localStorage.setItem('ad_gt_ts',Date.now().toString());
+  localStorage.setItem('ad_g_ever','1');window._gOkCb&&window._gOkCb(true);
+  if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:token,ts:Date.now()})},{onConflict:'admin_email'})}catch(e){}}}
 
-// ═══ TOKEN HANDLER — called on every token grant ═══
-function _handleGToken(r){
-  if(r.error){console.warn('[Google]',r.error);return false}
-  _gToken=r.access_token;
-  localStorage.setItem('ad_gt',_gToken);
-  localStorage.setItem('ad_gt_ts',Date.now().toString());
-  localStorage.setItem('ad_g_ever','1'); // Remember Google was ever connected
-  window._gOkCb&&window._gOkCb(true);
-  // Share with admins via Supabase
-  if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'})}catch(e){}}
-  return true}
+// ═══ WORKER REFRESH — silent, no popup, lasts forever ═══
+window._workerRefresh=async function(){
+  if(!WORKER_URL)return false;
+  var email=window._user?.email||window._prof?.email;if(!email)return false;
+  try{
+    var r=await fetch(WORKER_URL+'/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})});
+    if(!r.ok)return false;
+    var d=await r.json();if(d.access_token){_saveGToken(d.access_token);console.log('[Google] Token refreshed via Worker');return true}
+  }catch(e){console.warn('[Google Worker]',e.message)}return false};
 
-// ═══ SILENT REFRESH — zero user interaction ═══
-window.gSilentRefresh=function(cb){
-  _ensureGSI(function(){
-    try{
-      google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,prompt:'',
-        callback:function(r){var ok=_handleGToken(r);
-          if(ok)console.log('[Google] Token refreshed silently');
-          if(cb)cb(ok)}
-      }).requestAccessToken({prompt:''})
-    }catch(e){console.warn('[Google] Refresh error:',e.message);if(cb)cb(false)}})};
-
-// ═══ RETRY REFRESH — tries up to 3 times with increasing delays ═══
-window.gRetryRefresh=function(attempt,cb){
-  attempt=attempt||1;
-  if(attempt>3){if(cb)cb(false);return}
-  console.log('[Google] Refresh attempt '+attempt+'/3');
-  gSilentRefresh(function(ok){
-    if(ok){if(cb)cb(true)}
-    else{setTimeout(function(){gRetryRefresh(attempt+1,cb)},attempt*2000)}})};
-
-// ═══ PROACTIVE REFRESH — refresh BEFORE a call if token is getting old ═══
-window._gEnsureFresh=function(){
-  var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-  if(Date.now()-ts>2400000&&localStorage.getItem('ad_gt')){// >40min old
-    return new Promise(function(res){gSilentRefresh(function(ok){res(ok)})}).catch(function(){return false})}
-  return Promise.resolve(true)};
-
-// ═══ AUTO-REFRESH TIMER — keeps token alive in background ═══
-window._gRefreshTimer=null;
-function _startAutoRefresh(){
-  clearInterval(window._gRefreshTimer);
-  // Refresh every 30 min proactively (tokens expire at 60min)
-  window._gRefreshTimer=setInterval(function(){
-    if(!localStorage.getItem('ad_gt')&&!localStorage.getItem('ad_g_ever'))return;
-    var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-    if(Date.now()-ts>1800000){// >30min since last token
-      console.log('[Google] Proactive refresh…');
-      gSilentRefresh(function(ok){if(!ok)console.warn('[Google] Proactive refresh failed, will retry on next API call')})}
-  },180000); // Check every 3 min
-  // Also refresh when tab becomes visible
-  if(!window._gVisHandler){
-    window._gVisHandler=function(){
-      if(!document.hidden&&localStorage.getItem('ad_g_ever')){
-        var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-        if(Date.now()-ts>1800000)gSilentRefresh()}};
-    document.addEventListener('visibilitychange',window._gVisHandler)}}
-
-// ═══ CONNECT — first-time auth with popup ═══
+// ═══ CONNECT — popup only on explicit tap ═══
 window.gConnect=function(cb){
-  _ensureGSI(function(){
+  if(typeof google==='undefined'||!google.accounts){
+    var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
+    s.onload=function(){window.gConnect(cb)};s.onerror=function(){toast('Google failed to load','err')};
+    document.head.appendChild(s);return}
+  // Worker mode: use CODE flow → exchange via worker → permanent refresh token
+  if(WORKER_URL){
+    try{google.accounts.oauth2.initCodeClient({client_id:GC_ID,scope:GSCOPES,ux_mode:'popup',
+      callback:async function(r){
+        if(r.error){toast('Google: '+r.error,'err');return}
+        try{toast('Connecting…','info');
+          var email=window._user?.email||window._prof?.email||'unknown';
+          var res=await fetch(WORKER_URL+'/api/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:r.code,email:email})});
+          var d=await res.json();
+          if(d.access_token){_saveGToken(d.access_token);toast('Google connected permanently! ✓');if(cb)cb()}
+          else{toast('Google: '+(d.error||'Failed'),'err')}
+        }catch(e){toast('Worker error: '+e.message,'err')}}
+    }).requestCode()}catch(e){toast(e.message,'err')}
+  }else{
+    // Fallback: direct token flow (expires in 1hr)
     try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,
-      callback:function(r){if(_handleGToken(r)){toast('Google connected!');_startAutoRefresh();if(cb)cb()}
-        else{toast('Google: '+(r.error_description||r.error||'Failed'),'err')}}
-    }).requestAccessToken()}catch(e){toast(e.message,'err')}})};
+      callback:function(r){
+        if(r.error){toast('Google: '+(r.error_description||r.error),'err');return}
+        _saveGToken(r.access_token);toast('Google connected (1hr session)');if(cb)cb()}
+    }).requestAccessToken()}catch(e){toast(e.message,'err')}}};
 
-// ═══ API FETCH — proactive refresh + multi-retry on 401 ═══
+// ═══ AUTO-REFRESH on mount — only with Worker, fully silent ═══
+window._autoRefreshGoogle=async function(){
+  if(!WORKER_URL)return;
+  var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+  if(Date.now()-ts>2400000){// Token >40min old, refresh it
+    var ok=await window._workerRefresh();
+    if(ok)console.log('[Google] Auto-refreshed on mount');
+    return ok}
+  return !!localStorage.getItem('ad_gt')};
+
+// ═══ API FETCH — auto-retry with Worker refresh on 401 ═══
 window.gF=async function(url,opts){
-  // Proactively refresh if token is stale (before making the call)
-  await window._gEnsureFresh();
+  // If Worker available and token is stale, refresh before calling
+  if(WORKER_URL){
+    var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+    if(Date.now()-ts>2400000)await window._workerRefresh()}
   var t=_gToken||localStorage.getItem('ad_gt');
-  if(!t){
-    // No token but was previously connected — try silent refresh
-    if(localStorage.getItem('ad_g_ever')){
-      var got=await new Promise(function(res){gRetryRefresh(1,res)}).catch(function(){return false});
-      if(got){t=_gToken||localStorage.getItem('ad_gt')}
-      if(!t)throw new Error('Google session expired')}
-    else throw new Error('Connect Google')}
+  if(!t)throw new Error('Connect Google first');
   var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});
   if(r.status===401){
-    // Token expired mid-call — retry with fresh token (up to 3 attempts)
-    var refreshed=await new Promise(function(res){gRetryRefresh(1,res)}).catch(function(){return false});
-    if(refreshed){
-      var t2=_gToken||localStorage.getItem('ad_gt');
-      var r2=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t2,'Content-Type':'application/json'}});
-      if(r2.ok||r2.status!==401)return r2}
-    // All retries failed — DON'T clear the token (it might work later)
-    throw new Error('Google temporarily unavailable — will auto-retry')}
+    // Try Worker refresh before giving up
+    if(WORKER_URL){
+      var ok=await window._workerRefresh();
+      if(ok){var t2=_gToken||localStorage.getItem('ad_gt');
+        var r2=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t2,'Content-Type':'application/json'}});
+        if(r2.ok||r2.status!==401)return r2}}
+    _gToken=null;localStorage.removeItem('ad_gt');window._gOkCb&&window._gOkCb(false);
+    toast('Google session expired — tap Reconnect','err');throw new Error('Google expired')}
   return r};
 window.gSheets={
   async ensureTabs(id,tabNames){
@@ -1663,7 +1634,7 @@ function App(){
               const parsed=JSON.parse(gt.data.biz_name);
               if(parsed.token){_gToken=parsed.token;localStorage.setItem('ad_gt',parsed.token);
                 if(parsed.ts)localStorage.setItem('ad_gt_ts',parsed.ts.toString());
-                _startAutoRefresh();console.log('[AutoDial] Using shared Google token from Main')}
+                console.log('[AutoDial] Using shared Google token from Main')}
             }
           }catch(e){}
         }
@@ -1785,12 +1756,11 @@ function App(){
         if(!load('apptDur'))
           await _hs('apptdur_'+myEmail,d=>{if(d.dur&&d.dur!==60)setApptDuration(d.dur)});
 
-        // Google token — restore + auto-refresh
+        // Google token — restore from cloud
         if(!localStorage.getItem('ad_gt')){
           await _hs('shared_gtoken',d=>{
-            if(d.token&&d.ts&&(Date.now()-d.ts)<2700000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());setGOk(true);_startAutoRefresh()}
-            else if(d.token){try{gSilentRefresh(ok=>{if(ok){setGOk(true);_startAutoRefresh()}})}catch(e){}}})
-        }else{_startAutoRefresh()}
+            if(d.token&&d.ts&&(Date.now()-d.ts)<2700000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());setGOk(true)}})
+        }
 
         if(!load('totalStars'))
           await _hs('stars_'+myEmail,d=>{if(d.stars)setTotalStars(d.stars)});
@@ -1816,13 +1786,13 @@ function App(){
         if(!load('bestStreak')&&!load('achievements'))
           await _hs('gamify_'+myEmail,d=>{if(d.bestStreak)setBestStreak(d.bestStreak);if(d.achievements?.length)setAchievements(d.achievements)});
       }
+      // Auto-refresh Google via Worker (silent, no popup)
+      if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
+        try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
       setSyncing(false);
       cloudReady.current=true;window._cloudReady=true; // Safe to write to Supabase now
       // If Google was previously connected but token is missing/stale, auto-recover
-      if(!localStorage.getItem('ad_gt')&&localStorage.getItem('ad_g_ever')){
-        console.log('[Google] Was previously connected — auto-recovering…');
-        gRetryRefresh(1,function(ok){if(ok){setGOk(true);_startAutoRefresh();toast('Google auto-reconnected ✓','info')}})
-      }
+
     })();
 
     // ═══ AUTO-FETCH PENDING APPROVALS (creator only) ═══
@@ -3700,7 +3670,7 @@ function App(){
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
         <div style={{display:'flex',gap:8}}>
           <button onClick={connectG} style={{padding:'10px 18px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{gOk?'Reconnect':'Connect'}</button>
-          {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');localStorage.removeItem('ad_gt_ts');localStorage.removeItem('ad_g_ever');clearInterval(window._gRefreshTimer);setGOk(false);toast('Google disconnected')}} style={{padding:'10px 18px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:600}}>Disconnect</button>}
+          {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');localStorage.removeItem('ad_gt_ts');localStorage.removeItem('ad_g_ever');setGOk(false);toast('Google disconnected')}} style={{padding:'10px 18px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:600}}>Disconnect</button>}
         </div>
       </div>:
       <div className="card" style={{marginBottom:12}}>
