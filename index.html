@@ -139,7 +139,7 @@ button:active{transform:scale(.97)}
     <div style="width:60px;height:60px;border-radius:16px;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;box-shadow:0 8px 30px rgba(99,102,241,.3)">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
     </div>
-    <h2 style="font-size:26px;font-weight:900;color:#f1f5f9;letter-spacing:-.03em">📞 AutoDial</h2>
+    <h2 style="font-size:26px;font-weight:900;color:#f1f5f9;letter-spacing:-.03em">AutoDial</h2>
     <p style="font-size:13px;color:var(--text3);margin-top:2px">Sign in to continue</p>
   </div>
   <div id="auth-message" style="display:none;font-size:12px;padding:12px;border-radius:12px;margin-bottom:14px"></div>
@@ -149,7 +149,7 @@ button:active{transform:scale(.97)}
     <div style="margin-bottom:20px">
       <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Role</label>
       <div style="display:flex;gap:10px" id="role-pick">
-        <button id="btn-admin" data-role="admin" style="flex:1;padding:14px;border-radius:14px;background:var(--adim);color:#f1f5f9;font-size:14px;font-weight:700;border:2px solid var(--accent);cursor:pointer">📞 Admin</button>
+        <button id="btn-admin" data-role="admin" style="flex:1;padding:14px;border-radius:14px;background:var(--adim);color:#f1f5f9;font-size:14px;font-weight:700;border:2px solid var(--accent);cursor:pointer">Admin</button>
         <button id="btn-main" data-role="main" style="flex:1;padding:14px;border-radius:14px;background:transparent;color:var(--text3);font-size:14px;font-weight:700;border:2px solid transparent;cursor:pointer">👔 Main</button>
       </div>
       <p style="font-size:10px;color:var(--text3);margin-top:8px;text-align:center">New accounts require Creator approval</p>
@@ -2562,8 +2562,8 @@ function App(){
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
   const _showRank=true;
-  const _baseTabs=[['dial','📞 Dial'],['analytics','📊 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
-  const callTabs=_showRank?[['dial','📞 Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:_baseTabs;
+  const _baseTabs=[['dial','Dial'],['analytics','📊 Stats'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']];
+  const callTabs=_showRank?[['dial','Dial'],['analytics','📊 Stats'],['rank','🏆 Rank'],['appts','📅 Appts'],['cb','🔔 CB'],['leads','📋 Leads'],['settings','⚙️ Set']]:_baseTabs;
   const manageTabs=[['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
@@ -2583,7 +2583,7 @@ function App(){
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
       </div>
       <div style={{flex:1}}>
-        <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>📞 AutoDial</h1>
+        <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>AutoDial</h1>
       </div>
       <span style={{fontSize:11,color:'var(--text3)',marginRight:4}}>{userName}</span>
       {(isCreatorUser||isCreator(window._user?.email||''))&&<button onClick={()=>{setShowApprovalModal(true);if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data)}}).catch(e=>console.warn('[Users]',e))}} style={{padding:'4px 10px',borderRadius:8,background:pendingUsers.length?'var(--rdim)':'var(--adim)',border:'1px solid '+(pendingUsers.length?'rgba(248,81,73,.3)':'rgba(99,102,241,.2)'),color:pendingUsers.length?'var(--red)':'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0,marginRight:2}}>
@@ -2819,7 +2819,7 @@ function App(){
           <p style={{margin:0,fontSize:10,color:'var(--text3)',lineHeight:1.3}}><b>Remarks:</b> {nextPreviewLead.notes}</p>
         </div>}
         <div style={{display:'flex',gap:8}}>
-          <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>📞 Dial</button>
+          <button onClick={()=>proceedToLead(nextPreviewIdx)} style={{flex:2,padding:'12px 0',background:'linear-gradient(135deg,var(--accent),#8b5cf6)',color:'#fff',fontSize:14,fontWeight:700,boxShadow:'0 4px 16px rgba(99,102,241,.3)'}}>Dial</button>
           <button onClick={()=>{
             // Skip this lead, find the one after
             const skipIdx=getNextDialable(leads,nextPreviewIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
@@ -3025,7 +3025,7 @@ function App(){
           displayList=[];
           if(sortedKeys.length>1){sortedKeys.forEach(k=>{
             const isSelf=k===myEmail.toLowerCase();
-            displayList.push({_isHeader:true,_key:k,_label:isSelf?'📞 My Appointments':'👤 '+(groups[k][0]?.admin||k),_count:groups[k].length,_isSelf:isSelf});
+            displayList.push({_isHeader:true,_key:k,_label:isSelf?'My Appointments':'👤 '+(groups[k][0]?.admin||k),_count:groups[k].length,_isSelf:isSelf});
             groups[k].forEach(a=>displayList.push(a))})}
           else{displayList=filtered}
         }
@@ -3579,7 +3579,7 @@ function App(){
       </div>}
       {liveFeed.map((f,i)=>{
         const ago=Math.floor((Date.now()-f.ts)/1000);const agoStr=ago<60?ago+'s':Math.floor(ago/60)+'m';
-        const icons={call:'📞',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭',appt:'📅',session:'⏱'};
+        const icons={call:'📲',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭',appt:'📅',session:'⏱'};
         return<div key={i} className="card fi" style={{marginBottom:6,padding:'10px 12px',borderLeft:`3px solid ${f.type==='appt'?'var(--green)':f.type==='session'?'var(--accent)':'var(--text3)'}`}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
             <span style={{fontSize:18}}>{icons[f.data?.action||f.type]||'📌'}</span>
@@ -3628,7 +3628,7 @@ function App(){
                   <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{c.lead_phone} · Was due {c.scheduled_date} {c.scheduled_time}</p>
                   {role==='main'&&<p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Admin: {c.admin_email}</p>}</div>
                 <div style={{display:'flex',gap:4}}>
-                  <button onClick={()=>{window.location.href='tel:'+c.lead_phone.replace(/[^+\d]/g,'');DB.updateCBStatus(c.id,'called');setCbQueue(p=>p.map(x=>x.id===c.id?{...x,status:'called'}:x))}} style={{padding:'6px 10px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>📞 Call</button>
+                  <button onClick={()=>{window.location.href='tel:'+c.lead_phone.replace(/[^+\d]/g,'');DB.updateCBStatus(c.id,'called');setCbQueue(p=>p.map(x=>x.id===c.id?{...x,status:'called'}:x))}} style={{padding:'6px 10px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>Call</button>
                   <button onClick={()=>{setShowWA({name:c.lead_name,phone:c.lead_phone})}} style={{padding:'6px 10px',borderRadius:8,background:'var(--gdim)',color:'#25d366',fontSize:10,fontWeight:600}}>💬</button>
                 </div>
               </div>
@@ -3901,7 +3901,7 @@ function App(){
 
       <div className="card" style={{marginBottom:12}}>
         {role!=='admin'?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>☁️ Sync All</button></div>:<>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>📞 Call Rules</h3>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>Call Rules</h3>
         {adminConfigs[myEmail]&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
           <p style={{fontSize:9,fontWeight:700,color:'var(--green)',margin:'0 0 4px'}}>☁️ SYNCED FROM MANAGER</p>
           <div style={{display:'flex',flexWrap:'wrap',gap:6,fontSize:10,color:'var(--text2)'}}>
@@ -4168,7 +4168,7 @@ function App(){
     {showHelp&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:110,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}}>
       <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:520,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <div style={{textAlign:'center',marginBottom:16}}>
-          <p style={{fontSize:40,margin:'0 0 4px'}}>📞</p>
+          <p style={{fontSize:40,margin:'0 0 4px'}}>👋</p>
           <h2 style={{fontSize:20,fontWeight:900,color:'#f1f5f9',margin:'0 0 4px'}}>Welcome to AutoDial</h2>
           <p style={{fontSize:12,color:'var(--text3)',margin:0}}>{role==='admin'?'Caller Guide':'Manager Guide'}</p>
         </div>
@@ -4303,7 +4303,7 @@ function App(){
           {/* Role toggle */}
           <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0,alignItems:'flex-end'}}>
             <div style={{display:'flex',gap:3}}>
-              {['admin','main','both'].map(r=><button key={r} onClick={async()=>{try{await _SB.from('profiles').update({autodial_role:r,role:r}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,autodial_role:r,role:r}:x));toast(u.full_name+' → '+r)}catch(e){toast('Error','err')}}} style={{padding:'4px 8px',borderRadius:6,background:(u.autodial_role||u.role)=== r?'var(--adim)':'var(--bg)',color:(u.autodial_role||u.role)===r?'var(--accent2)':'var(--text3)',fontSize:9,fontWeight:700,border:'1px solid '+((u.autodial_role||u.role)===r?'var(--accent)':'var(--border)')}}>{r==='admin'?'📞':r==='main'?'👔':'🌟'} {r}</button>)}
+              {['admin','main','both'].map(r=><button key={r} onClick={async()=>{try{await _SB.from('profiles').update({autodial_role:r,role:r}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,autodial_role:r,role:r}:x));toast(u.full_name+' → '+r)}catch(e){toast('Error','err')}}} style={{padding:'4px 8px',borderRadius:6,background:(u.autodial_role||u.role)=== r?'var(--adim)':'var(--bg)',color:(u.autodial_role||u.role)===r?'var(--accent2)':'var(--text3)',fontSize:9,fontWeight:700,border:'1px solid '+((u.autodial_role||u.role)===r?'var(--accent)':'var(--border)')}}>{r==='admin'?'📋':r==='main'?'👔':'🌟'} {r}</button>)}
             </div>
             <button onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}} style={{padding:'3px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:9,fontWeight:600}}>Revoke</button>
           </div>
@@ -4516,7 +4516,7 @@ function App(){
           // Build current map from headers
           const h=rawSheet.headers;const r=rawSheet.rows;
           const currentMap=detectedColMap||detectBatchColumns(r,0,Math.min(15,r.length),h)||{};
-          const ROLES=[['phone','📞 Phone'],['first','👤 First Name'],['last','👤 Last Name'],['name','👤 Full Name'],['email','📧 Email'],['age','🎂 Age'],['dob','📅 DOB/Birthday'],['gender','⚧ Gender'],['race','🌍 Race'],['remarks','📝 Remarks']];
+          const ROLES=[['phone','Phone'],['first','👤 First Name'],['last','👤 Last Name'],['name','👤 Full Name'],['email','📧 Email'],['age','🎂 Age'],['dob','📅 DOB/Birthday'],['gender','⚧ Gender'],['race','🌍 Race'],['remarks','📝 Remarks']];
           const roleMap={};ROLES.forEach(([k])=>{if(currentMap[k]!=null&&currentMap[k]!==-1)roleMap[currentMap[k]]=k});
           return<div style={{display:'flex',flexDirection:'column',gap:6}}>
             {h.map((header,ci)=>{
@@ -4591,7 +4591,7 @@ function App(){
       <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 14px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>📹 Session Replay</h3>
         {showReplay.log?.length?showReplay.log.map((l,i)=>{
-          const t=new Date(l.ts);const icons={call:'📞',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭'};
+          const t=new Date(l.ts);const icons={call:'📲',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭'};
           return<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
             <span className="mono" style={{fontSize:10,color:'var(--text3)',width:50,flexShrink:0}}>{t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
             <span style={{fontSize:14}}>{icons[l.action]||'📌'}</span>
