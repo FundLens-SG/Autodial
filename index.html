@@ -301,7 +301,7 @@ window.gConnect=function(cb){
     var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
     s.onload=function(){window.gConnect(cb)};s.onerror=function(){toast('Google failed to load','err')};
     document.head.appendChild(s);return}
-  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google: '+(r.error_description||r.error),'err');console.error('[Google OAuth]',r);return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}};if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
+  try{google.accounts.oauth2.initTokenClient({client_id:GC_ID,scope:GSCOPES,callback:function(r){if(r.error){toast('Google: '+(r.error_description||r.error),'err');console.error('[Google OAuth]',r);return}_gToken=r.access_token;localStorage.setItem('ad_gt',_gToken);toast('Google connected!');window._gOkCb&&window._gOkCb(true);if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:r.access_token,ts:Date.now()})},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}};if(cb)cb()}}).requestAccessToken()}catch(e){toast(e.message,'err')}};
 window.gF=async function(url,opts){var t=_gToken||localStorage.getItem('ad_gt');if(!t)throw new Error('Connect Google');var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});if(r.status===401){_gToken=null;localStorage.removeItem('ad_gt');throw new Error('Session expired')}return r};
 window.gSheets={
   async ensureTabs(id,tabNames){
@@ -838,8 +838,13 @@ const ML_RANKS=[
   {key:'legend',label:'Legend',starsNeeded:15,cumStars:35,emoji:'👑',color:'#FFD700',bg:'linear-gradient(135deg,#FFC107,#FFD700)',glow:'rgba(255,215,0,.4)'},
   {key:'mythic',label:'Mythic',starsNeeded:999,cumStars:50,emoji:'🔱',color:'#FF4444',bg:'linear-gradient(135deg,#D50000,#FF4444)',glow:'rgba(255,68,68,.4)'}
 ];
-function getRank(monthlyAppts){for(let i=ML_RANKS.length-1;i>=0;i--)if(monthlyAppts>=ML_RANKS[i].cumStars){const stars=monthlyAppts-ML_RANKS[i].cumStars;return{...ML_RANKS[i],idx:i,stars:Math.min(stars,ML_RANKS[i].starsNeeded),total:monthlyAppts}}return{...ML_RANKS[0],idx:0,stars:monthlyAppts,total:monthlyAppts}}
-function getNextRank(monthlyAppts){for(let i=0;i<ML_RANKS.length;i++)if(monthlyAppts<ML_RANKS[i].cumStars)return{...ML_RANKS[i],idx:i};return null}
+function getRank(monthlyAppts,thresholds){
+  var t=thresholds||[0,5,10,15,25,35,50];
+  for(let i=ML_RANKS.length-1;i>=0;i--){var cs=t[i]||ML_RANKS[i].cumStars;if(monthlyAppts>=cs){var sn=i<ML_RANKS.length-1?(t[i+1]||ML_RANKS[i].cumStars+ML_RANKS[i].starsNeeded)-cs:999;return{...ML_RANKS[i],idx:i,stars:Math.min(monthlyAppts-cs,sn),starsNeeded:sn,cumStars:cs,total:monthlyAppts}}}
+  return{...ML_RANKS[0],idx:0,stars:monthlyAppts,starsNeeded:t[1]||5,cumStars:0,total:monthlyAppts}}
+function getNextRank(monthlyAppts,thresholds){
+  var t=thresholds||[0,5,10,15,25,35,50];
+  for(let i=0;i<ML_RANKS.length;i++){var cs=t[i]||ML_RANKS[i].cumStars;if(monthlyAppts<cs)return{...ML_RANKS[i],idx:i,cumStars:cs}}return null}
 function getMonthlyAppts(appointments,email){const now=new Date(),y=now.getFullYear(),m=now.getMonth();return appointments.filter(a=>{const d=new Date(a.createdAt);return d.getFullYear()===y&&d.getMonth()===m&&(!email||(a.admin||'').toLowerCase()===email.toLowerCase())}).length}
 const StarRow=({filled,total,color})=><div style={{display:'flex',gap:3,justifyContent:'center'}}>{Array.from({length:Math.min(total,10)}).map((_,i)=><span key={i} style={{fontSize:16,filter:i<filled?'none':'grayscale(1) opacity(.3)',transition:'all .3s'}}>{i<filled?'⭐':'☆'}</span>)}</div>;
 // Keep old tier functions for manage mode pay config compatibility
@@ -903,15 +908,36 @@ window.fuzzyStatusMatch=fuzzyStatusMatch;
 function isPhoneLike(v){if(!v)return false;var s=String(v).replace(/[\s\-().+]/g,'');return/^\d{7,15}$/.test(s)}
 function isEmailLike(v){return v&&/@/.test(String(v))}
 function isAgeLike(v){if(!v)return false;var n=parseInt(String(v));return!isNaN(n)&&n>=16&&n<=100&&String(v).trim().length<=3}
-function isNameLike(v){if(!v)return false;var s=String(v).trim();return s.length>=2&&s.length<=40&&/^[a-zA-Z\s\-'.]+$/.test(s)&&!/\d/.test(s)&&!/@/.test(s)}
+function isNameLike(v){if(!v)return false;var s=String(v).trim();
+  if(s.length<2||s.length>50)return false;
+  if(/\d{4,}/.test(s))return false;  // Phone numbers
+  if(/@/.test(s))return false;  // Emails
+  if(/^\d+$/.test(s))return false;  // Pure numbers
+  if(/^(m|f|male|female|mr|mrs|ms)$/i.test(s))return false;  // Gender
+  if(/singapore|citizen|pr|chinese|malay|indian/i.test(s))return false;  // Race/nationality
+  // Allow Asian names with spaces, hyphens, apostrophes
+  return/^[a-zA-Z\s\-'.,]+$/.test(s)&&s.split(/\s+/).length<=5}
 function isHeaderLike(v){if(!v)return false;var s=String(v).trim().toLowerCase();
-  return/^(first.?name|last.?name|full.?name|name|phone|tel|mobile|email|age|gender|sex|race|residential|transaction|remarks|notes|status|company|income|savings|birthday|dob)$/i.test(s)||
-  /^(first|last|surname|contact|client|customer|cell|number|whatsapp|salutation|comments?|result|outcome)$/i.test(s)}
+  return/^(first.?name|last.?name|full.?name|name|phone|tel|mobile|email|age|gender|sex|race|residential|transaction|remarks|notes|status|company|income|savings|birthday|dob|date.?of.?birth|occupation|industry|sector|job|site|source|lead.?source|salutation|hp|hp.?number|contact)$/i.test(s)||
+  /^(first|last|surname|client|customer|cell|number|whatsapp|comments?|result|outcome|address|postal|zip|street)$/i.test(s)}
 function isRemarksLike(v){if(!v)return false;var s=String(v).toLowerCase().trim();
-  return/^ni$|^np|not interested|callback|call back|call again|appt|appointment|no pick|no ans|fly kite|flykite|postponed/i.test(s)||
-  /\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(s)||
-  /\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(s)||
-  /singapore (citizen|pr)/i.test(s)===false&&s.length>2&&s.length<200&&!/^\d+$/.test(s)&&!isEmailLike(v)&&!isPhoneLike(v)}
+  if(!s||s.length<2||s.length>500)return false;
+  // Direct status markers
+  if(/^ni$|^np$|^cb$|^set$|^dnc$|^wrong.?number$|^busy$|^voicemail$|^hung.?up$/i.test(s))return true;
+  // Call outcome patterns
+  if(/not interested|callback|call back|call again|no pick|no ans|fly kite|flykite|postponed|reschedul|follow.?up|spoke to|talked to|answered|picked up|disconnected|engaged|overseas|hospital|pregnant|retired|student/i.test(s))return true;
+  // Appointment related
+  if(/appt|appointment|meeting|confirm|set.*appt|booked|scheduled/i.test(s))return true;
+  // Scolding / negative reactions  
+  if(/rude|angry|scolded|vulgar|shouted|hung up|dont call|do not call|stop calling|harass|complain|blocked|threatened|police|mda|spam|scam|cheat|waste|useless|terrible|horrible|annoying/i.test(s))return true;
+  // Commentary / notes
+  if(/sound.?interest|might.?be|could.?be|seem|maybe|potential|worth|try again|good lead|hot lead|cold|warm|interested in|asked about|inquir|mention|said|told|inform|explain|pitch|present|offer|reject|accept|consider|think|will get back|check.*schedule|manage|team|owner|boss|business|company/i.test(s))return true;
+  // Time references (callback times)
+  if(/\d{1,2}[.:]\d{0,2}\s*(am|pm)/i.test(s))return true;
+  if(/\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(s))return true;
+  // Long free-text (likely a note, not a data field)
+  if(s.length>15&&/[a-z]/i.test(s)&&!/^\d+$/.test(s)&&!isEmailLike(v)&&!isPhoneLike(v)&&!/singapore/i.test(s))return true;
+  return false}
 
 // Find which column has phone numbers in a set of rows
 function detectPhoneCol(rows,startRow,scanCount){
@@ -952,7 +978,11 @@ function detectBatchColumns(rows,startRow,endRow){
     // Race/residential: "Singapore Citizen", "Singapore PR", "Chinese", "Malay", "Indian"
     var raceHits=vals.filter(function(v){return/singapore (citizen|pr)|chinese|malay|indian|eurasian|others/i.test(v)}).length;
     
-    colScores.push({col:col,phone:phoneHits,email:emailHits,age:ageHits,name:nameHits,gender:genderHits,race:raceHits,remarks:remarkHits,total:vals.length});
+        // Source/site: "Jobsite", "Fast food voucher", "iPad Pro", "Shopping gift card"
+    var sourceHits=vals.filter(function(v){return/jobsite|voucher|gift.?card|ipad|groceries|ez.?link|food.?panda|shopping|referral|website|facebook|instagram|linkedin|tiktok|event/i.test(v)}).length;
+    // DOB: date-like values in the past
+    var dobHits=vals.filter(function(v){if(!v)return false;try{var d=new Date(v);return!isNaN(d)&&d.getFullYear()<2010&&d.getFullYear()>1920}catch(e){return false}}).length;
+    colScores.push({col:col,phone:phoneHits,email:emailHits,age:ageHits,name:nameHits,gender:genderHits,race:raceHits,remarks:remarkHits,source:sourceHits,dob:dobHits,total:vals.length});
   }
   
   // Assign columns greedily by highest confidence
@@ -983,8 +1013,14 @@ function detectBatchColumns(rows,startRow,endRow){
     else if(nameCandidates.length===1){map.name=nameCandidates[0].col;assigned.add(nameCandidates[0].col)}
   }
   // Remarks — unassigned columns with remark-like content, or the LAST column with any text
+  // Remarks — could be multiple columns, pick primary + collect extras
   var remarkCandidates=colScores.filter(function(c){return c.remarks>=1&&!assigned.has(c.col)}).sort(function(a,b){return b.remarks-a.remarks});
-  if(remarkCandidates.length)map.remarks=remarkCandidates[0].col;
+  if(remarkCandidates.length){map.remarks=remarkCandidates[0].col;assigned.add(remarkCandidates[0].col)}
+  // Store ALL remark columns for merging
+  map.allRemarks=remarkCandidates.map(function(c){return c.col});
+  // Source column
+  var sourceBest=colScores.filter(function(c){return c.source>=2&&!assigned.has(c.col)}).sort(function(a,b){return b.source-a.source})[0];
+  if(sourceBest){map.source=sourceBest.col;assigned.add(sourceBest.col)}
   
   return map;
 }
@@ -1285,7 +1321,7 @@ function App(){
     if(emptyNotes>fixed.length*0.7&&stored.cfg?.sheetId)window._needsRefetch=true;
     return fixed;
   });
-  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
+  const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
   const[running,setRunning]=useState(()=>{const s=load('activeSession');return s&&!s.ended?true:false});
   const[curIdx,setCurIdx]=useState(()=>load('curIdx')||-1);
@@ -1315,6 +1351,7 @@ function App(){
   const[showAchievement,setShowAchievement]=useState(null);
   useEffect(()=>{save('activeSession',session)},[session]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
+  const[totalStars,setTotalStars]=useState(load('totalStars')||0);
   const[promotionLog,setPromotionLog]=useState(load('promo')||[]);  // [{date,fromTier,toTier,atSets,newRate}]
   const[milestone,setMilestone]=useState(null);const[confetti,setConfetti]=useState(false);
   const[sessionLog,setSessionLog]=useState(load('slog')||[]);
@@ -1414,6 +1451,7 @@ function App(){
     if(changed>0){setLeads(revalidated);toast(changed+' lead statuses corrected from sheet data')}
   },[rawSheet]);
   useEffect(()=>{save('ts',totalSets);cloudSave('ts',totalSets)},[totalSets]);
+  useEffect(()=>{save('totalStars',totalStars);cloudSave('totalStars',totalStars)},[totalStars]);
   useEffect(()=>{save('promo',promotionLog);cloudSave('promo',promotionLog)},[promotionLog]);
   useEffect(()=>{save('slog',sessionLog);cloudSave('slog',sessionLog)},[sessionLog]);
   useEffect(()=>{save('acfg',adminConfigs);cloudSave('acfg',adminConfigs);if(role!=='admin')publishAdminConfigs(adminConfigs)},[adminConfigs]);
@@ -1613,8 +1651,8 @@ function App(){
   const userName=window._prof?.full_name||myEmail||'User';
   // ═══ ML RANK (monthly) ═══
   const monthlyAppts=getMonthlyAppts(appointments,role==='admin'?myEmail:null);
-  const rank=getRank(monthlyAppts);
-  const nextRank=getNextRank(monthlyAppts);
+  const rank=getRank(monthlyAppts,cfg.starThresholds);
+  const nextRank=getNextRank(monthlyAppts,cfg.starThresholds);
   const monthName=new Date().toLocaleDateString('en-SG',{month:'long',year:'numeric'});
   // Next lead preview
   const[showNextPreview,setShowNextPreview]=useState(false);
@@ -1724,7 +1762,7 @@ function App(){
     setCallLog(p=>[...p,{action:status,lead_name:cur?.name,lead_phone:cur?.phone,ts:new Date().toISOString()}]);
     // Add to CB queue if callback
     if(status==='cb'&&cur&&extra.cbDate)DB.addCB({adminId:_user?.id,admin:myEmail,name:cur.name,phone:cur.phone,cbDate:extra.cbDate,cbTime:extra.cbTime||''});
-    if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};if(s.dialed===1)checkAchievement('first_dial','Let\'s Go!','🚀');if(s.dialed===50)checkAchievement('dial50','Half Century!','🏏');if(s.dialed===100)checkAchievement('dial100','Centurion!','💯');
+    if(session&&!session.ended)setSession(p=>{const s={...p,dialed:p.dialed+1};if(role!=='admin')setTotalStars(prev=>prev+(cfg.starsPerDial||0.1));if(s.dialed===1)checkAchievement('first_dial','Let\'s Go!','🚀');if(s.dialed===50)checkAchievement('dial50','Half Century!','🏏');if(s.dialed===100)checkAchievement('dial100','Centurion!','💯');
       const spd=s.dialed/((Date.now()-session.startTime)/3600000);
       if(spd>=30&&s.dialed>=10)checkAchievement('speed30','Speed Demon!','🏎️');
       if(spd>=50&&s.dialed>=15)checkAchievement('speed50','Lightning Dialer!','⚡');
@@ -1733,7 +1771,7 @@ function App(){
       if(status==='set'){s.sets++;const nt=totalSets+1;setTotalSets(nt);
         // ═══ RANK-UP CHECK (ML-style) ═══
         const newMonthly=monthlyAppts+1; // +1 for this new set
-        const oldRank=getRank(monthlyAppts);const newRank=getRank(newMonthly);
+        const oldRank=getRank(monthlyAppts,cfg.starThresholds);const newRank=getRank(newMonthly);
         if(newRank.idx>oldRank.idx){
           // RANK UP! 🎉
           setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),4000);
@@ -1761,6 +1799,8 @@ function App(){
         return ns});
       
       if(session){const s=session.sets+1;
+        // Main earns stars per set
+        if(role!=='admin'){setTotalStars(p=>p+(cfg.starsPerSet||3))}
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
         if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,4)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
@@ -1797,7 +1837,7 @@ function App(){
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
   const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
-  const connectG=()=>gConnect(()=>setGOk(true));
+  const connectG=()=>{window._gOkCb=setGOk;gConnect(()=>setGOk(true))};
   const fetchTabs=async id=>{const sid=id||cfg.sheetId;const m=sid?.match(/\/d\/([a-zA-Z0-9_-]+)/)||sid?.match(/^([a-zA-Z0-9_-]{20,})$/);if(!m)return toast('Bad URL','err');setCfg(s=>({...s,sheetId:m[1]}));setSLoad(true);try{setSTabs(await gSheets.meta(m[1]))}catch(e){toast(e.message,'err')}setSLoad(false)};
   const searchSheets=async()=>{if(!gOk)return toast('Connect Google','err');setSheetSearching(true);try{setSheetResults(await gDrive.search(sheetQ))}catch(e){toast(e.message,'err')}setSheetSearching(false)};
   // Reanalyze existing leads with AI (called when Gemini key is added after leads loaded)
@@ -2007,10 +2047,16 @@ function App(){
               </p>}
             </div>}
 
-            {/* Earnings preview */}
+            {/* Earnings / Stars preview */}
             <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:10,color:'var(--text3)'}}>
-              <span>💵 ~${(metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate)).toFixed(0)} est.</span>
-              {metAppts&&!metBonus&&<span style={{color:'var(--gold)'}}>+${((n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*(bonusMult-1))).toFixed(0)} if bonus</span>}
+              {role==='admin'?<>
+                <span>💵 ~${(metBonus?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*bonusMult):metAppts?(n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate):(Math.max(0.5,Math.round(elapsed/1800)/2)*rate)).toFixed(0)} est.</span>
+                {metAppts&&!metBonus&&<span style={{color:'var(--gold)'}}>+${((n(session.selectedSlot?.hours||myCfg.sessionDur,5)*rate*(bonusMult-1))).toFixed(0)} if bonus</span>}
+              </>:<>
+                <span>⭐ {sets} star{sets!==1?'s':''} earned</span>
+                <span style={{color:rank.color}}>{rank.emoji} {rank.label}</span>
+                {nextRank&&<span style={{color:'var(--text3)'}}>{nextRank.cumStars-monthlyAppts-sets} to {nextRank.emoji}</span>}
+              </>}
             </div>
           </div>})()}
         {/* Rank progress */}
@@ -2961,7 +3007,16 @@ function App(){
               <div style={{position:'relative'}}>
                 <input value={ac._tsName||ac.timesheetId||''} onChange={e=>{const v=e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],_tsName:v}}));if(v.length>=2&&gOk){clearTimeout(window['_ts'+em]);window['_ts'+em]=setTimeout(()=>{gDrive.search(v).then(r=>{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:r}}))}).catch(()=>{})},400)}else{setAdminConfigs(p=>({...p,[em]:{...p[em],_tsResults:[]}}))}}} placeholder="Type to search your Google Sheets..." style={{fontSize:12,padding:'10px'}}/>
                 {(ac._tsResults||[]).length>0&&<div style={{position:'absolute',left:0,right:0,zIndex:10,maxHeight:120,overflowY:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,marginTop:2,boxShadow:'0 8px 24px rgba(0,0,0,.4)'}}>
-                  {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}))} style={{padding:'8px 10px',fontSize:11,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>📗 {f.name}</div>)}
+                  {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>{setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}));
+                    // Auto-load tabs immediately
+                    toast('Loading tabs...','info');
+                    gF('https://sheets.googleapis.com/v4/spreadsheets/'+f.id+'?fields=sheets.properties').then(r=>r.json()).then(meta=>{
+                      const tabs=(meta.sheets||[]).map(s=>s.properties.title);
+                      const tsTab=tabs.find(t=>/time.?sheet|pay.?sheet|hours|payroll|salary|wage|pay.?slip|earning|cha.?ching|hourly|compensation/i.test(t));
+                      const apptTab=tabs.find(t=>/appoint|appt|meeting|booking|schedule|confirm|client.?list|prospect|set|calendar/i.test(t));
+                      setAdminConfigs(p=>({...p,[em]:{...p[em],_sheetTabs:tabs,_detectedTs:tsTab||null,_detectedAppt:apptTab||null}}));
+                      toast(tabs.length+' tabs loaded'+(tsTab?' · 📊 '+tsTab:'')+(apptTab?' · 📅 '+apptTab:''))
+                    }).catch(e=>toast('Tab load failed: '+e.message,'err'))}} style={{padding:'8px 10px',fontSize:11,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>📗 {f.name}</div>)}
                 </div>}
               </div>
               {ac.timesheetId&&<>
@@ -2979,8 +3034,8 @@ function App(){
                   :<input value={ac.sheetTab||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sheetTab:e.target.value}}))} placeholder="Tab name" style={{flex:1,fontSize:11,padding:'6px'}}/>}
                   <button onClick={async()=>{if(!gOk)return toast('Connect Google','err');try{const meta=await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+ac.timesheetId+'?fields=sheets.properties')).json();const tabs=(meta.sheets||[]).map(s=>s.properties.title);
                     // Auto-detect timesheet & appointments tabs
-                    const tsTab=tabs.find(t=>/time.?sheet|pay.?sheet|hours|payroll/i.test(t));
-                    const apptTab=tabs.find(t=>/appoint|appt|meeting|set|booking/i.test(t));
+                    const tsTab=tabs.find(t=>/time.?sheet|pay.?sheet|hours|payroll|salary|wage|pay.?slip|earning|compensation|cha.?ching|hourly/i.test(t));
+                    const apptTab=tabs.find(t=>/appoint|appt|meeting|booking|schedule|confirm|client.*list|prospect|appt.*set|set.*appt|confirmed|calendar/i.test(t));
                     setAdminConfigs(p=>({...p,[em]:{...p[em],_sheetTabs:tabs,_detectedTs:tsTab||null,_detectedAppt:apptTab||null}}));
                     let msg=tabs.length+' tabs found';
                     if(tsTab)msg+=' · 📊 Timesheet: '+tsTab;
@@ -2995,23 +3050,49 @@ function App(){
                     <button onClick={async()=>{try{toast('Importing appointments...','info');
                       const vals=await gSheets.vals(ac.timesheetId,ac._detectedAppt);
                       if(!vals||vals.length<2){toast('Empty tab','err');return}
-                      const headers=vals[0].map(h=>(h||'').toString().toLowerCase());
-                      const nameIdx=headers.findIndex(h=>/name|client|prospect/i.test(h));
-                      const dateIdx=headers.findIndex(h=>/date|time|when/i.test(h));
-                      const phoneIdx=headers.findIndex(h=>/phone|mobile|contact|number/i.test(h));
-                      const statusIdx=headers.findIndex(h=>/status|outcome|result/i.test(h));
+                      // Find header row (might not be row 0 - scan first 5 rows)
+                      let hdrRow=-1;
+                      for(let r=0;r<Math.min(5,vals.length);r++){
+                        const row=(vals[r]||[]).map(h=>(h||'').toString().toLowerCase());
+                        if(row.some(h=>/name|client|prospect/i.test(h))&&row.some(h=>/phone|hp|mobile|number|date|time/i.test(h))){hdrRow=r;break}}
+                      if(hdrRow<0){toast('No header row found','err');return}
+                      const headers=vals[hdrRow].map(h=>(h||'').toString().toLowerCase());
+                      const nameIdx=headers.findIndex(h=>/^name$|client|prospect|full.?name/i.test(h));
+                      const dateIdx=headers.findIndex(h=>/^date$/i.test(h));
+                      const timeIdx=headers.findIndex(h=>/^time$/i.test(h));
+                      const phoneIdx=headers.findIndex(h=>/phone|hp|mobile|contact|number/i.test(h));
+                      const locIdx=headers.findIndex(h=>/location|venue|place|where/i.test(h));
+                      const industryIdx=headers.findIndex(h=>/industry|sector|job|occupation/i.test(h));
+                      const remarksIdx=headers.findIndex(h=>/remark|note|comment|other/i.test(h));
+                      const metIdx=headers.findIndex(h=>/^met$/i.test(h));
+                      const paidIdx=headers.findIndex(h=>/^paid$/i.test(h));
+                      const tipIdx=headers.findIndex(h=>/^tip$/i.test(h));
+                      const flyIdx=headers.findIndex(h=>/fly.?kite|no.?show|absent/i.test(h));
                       let imported=0;
                       const existing=appointments.map(a=>(a.name||'').toLowerCase()+'_'+(a.phone||''));
-                      for(let r=1;r<vals.length;r++){
-                        const row=vals[r];const name=row[nameIdx>=0?nameIdx:0]||'';
-                        const phone=row[phoneIdx>=0?phoneIdx:1]||'';
+                      for(let r=hdrRow+1;r<vals.length;r++){
+                        const row=vals[r]||[];
+                        const name=(row[nameIdx>=0?nameIdx:1]||'').toString().trim();
+                        if(!name||name.length<2)continue;
+                        const phone=(row[phoneIdx>=0?phoneIdx:2]||'').toString().replace(/\.0$/,'').trim();
                         const key=name.toLowerCase()+'_'+phone;
-                        if(!name||existing.includes(key))continue;
+                        if(existing.includes(key))continue;
+                        // Parse date safely
+                        let dateStr='';try{const dv=row[dateIdx>=0?dateIdx:6];if(dv){const d=new Date(dv);dateStr=isNaN(d)?dv.toString():d.toISOString().slice(0,10)}}catch(e){dateStr=(row[dateIdx>=0?dateIdx:6]||'').toString()}
+                        const met=metIdx>=0&&row[metIdx]?(row[metIdx].toString().toLowerCase()==='true'||row[metIdx]==='TRUE'):false;
+                        const fly=flyIdx>=0&&row[flyIdx]?(row[flyIdx].toString().toLowerCase()==='true'||row[flyIdx]==='TRUE'):false;
+                        const paid=paidIdx>=0&&row[paidIdx]?(row[paidIdx].toString().toLowerCase()==='true'||row[paidIdx]==='TRUE'):false;
+                        const tip=tipIdx>=0?parseFloat(row[tipIdx])||0:0;
+                        const followUp=met?'met':fly?'fly_kite':'pending';
                         const appt={id:'imp_'+Date.now()+'_'+r,name,phone,
-                          date:row[dateIdx>=0?dateIdx:2]||new Date().toISOString().slice(0,10),
-                          admin:em,createdAt:new Date().toISOString(),followUp:'pending',
-                          source:'imported',notes:'Imported from '+ac._detectedAppt};
-                        setAppointments(p=>[...p,appt]);imported++}
+                          date:dateStr||new Date().toISOString().slice(0,10),
+                          time:timeIdx>=0?(row[timeIdx]||'').toString():'',
+                          location:locIdx>=0?(row[locIdx]||'').toString():'',
+                          industry:industryIdx>=0?(row[industryIdx]||'').toString():'',
+                          notes:remarksIdx>=0?(row[remarksIdx]||'').toString():'',
+                          admin:em,createdAt:new Date().toISOString(),followUp,met,paid,tip,
+                          source:'imported'};
+                        setAppointments(p=>[...p,appt]);imported++;existing.push(key)}
                       toast(imported+' appointments imported ✓');
                     }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--gdim)',color:'var(--green)',fontSize:8,fontWeight:600}}>Import</button>
                   </div>}
@@ -3020,27 +3101,47 @@ function App(){
                     <button onClick={async()=>{try{toast('Importing timesheet...','info');
                       const vals=await gSheets.vals(ac.timesheetId,ac._detectedTs);
                       if(!vals||vals.length<2){toast('Empty tab','err');return}
-                      const headers=vals[0].map(h=>(h||'').toString().toLowerCase());
-                      const dateIdx=headers.findIndex(h=>/date/i.test(h));
-                      const hoursIdx=headers.findIndex(h=>/hour|duration|time/i.test(h));
-                      const payIdx=headers.findIndex(h=>/pay|amount|total|earn/i.test(h));
-                      const dialIdx=headers.findIndex(h=>/dial|call/i.test(h));
-                      const setIdx=headers.findIndex(h=>/set|appt|appointment/i.test(h));
-                      let pastSessions=[];
-                      for(let r=1;r<vals.length;r++){
-                        const row=vals[r];
-                        const date=row[dateIdx>=0?dateIdx:0]||'';
-                        if(!date)continue;
+                      // Find header row
+                      let hdrRow=-1;
+                      for(let r=0;r<Math.min(5,vals.length);r++){
+                        const row=(vals[r]||[]).map(h=>(h||'').toString().toLowerCase());
+                        if(row.some(h=>/date/i.test(h))&&row.some(h=>/time|hour|start/i.test(h))){hdrRow=r;break}}
+                      if(hdrRow<0){toast('No timesheet headers found','err');return}
+                      const headers=vals[hdrRow].map(h=>(h||'').toString().toLowerCase());
+                      const dayIdx=headers.findIndex(h=>/^day$/i.test(h));
+                      const dateIdx=headers.findIndex(h=>/^date$/i.test(h));
+                      const startIdx=headers.findIndex(h=>/start|time.?start|clock.?in/i.test(h));
+                      const endIdx=headers.findIndex(h=>/end|time.?end|clock.?out/i.test(h));
+                      const hoursIdx=headers.findIndex(h=>/total.?hour|hour|duration/i.test(h));
+                      const setIdx=headers.findIndex(h=>/appt|set|appointment/i.test(h));
+                      const paidIdx=headers.findIndex(h=>/^paid$/i.test(h));
+                      const totalIdx=headers.findIndex(h=>/total.?hourly|hourly|wage|rate/i.test(h));
+                      const metIdx=headers.findIndex(h=>/met.?incentive|incentive/i.test(h));
+                      const chaIdx=headers.findIndex(h=>/cha.?ching|total.?pay|grand|net/i.test(h));
+                      let pastSessions=[];let skipped=0;
+                      for(let r=hdrRow+1;r<vals.length;r++){
+                        const row=vals[r]||[];
+                        const dateVal=row[dateIdx>=0?dateIdx:1];
+                        const dayVal=(row[dayIdx>=0?dayIdx:0]||'').toString().trim();
+                        // Skip week headers, sample rows, empty rows
+                        if(!dateVal||/^week|^sample|^$/i.test(dayVal)||/^week/i.test((dateVal||'').toString()))continue;
+                        // Skip formula-only rows
+                        if(dateVal.toString().startsWith('='))continue;
+                        // Parse date safely
+                        let startTime;try{const d=new Date(dateVal);if(isNaN(d)){skipped++;continue}startTime=d.toISOString()}catch(e){skipped++;continue}
+                        // Parse hours
+                        let hours=0;const hv=row[hoursIdx>=0?hoursIdx:4];
+                        if(hv){const hvs=hv.toString();if(hvs.startsWith('=')){hours=5}else{hours=parseFloat(hvs)||0}}
+                        const sets=parseInt(row[setIdx>=0?setIdx:5])||0;
+                        const isPaid=paidIdx>=0&&row[paidIdx]?(row[paidIdx].toString().toLowerCase()==='true'||row[paidIdx]==='TRUE'):false;
+                        const metInc=parseFloat(row[metIdx>=0?metIdx:8])||0;
                         pastSessions.push({
-                          startTime:new Date(date).toISOString()||new Date().toISOString(),
-                          dialed:parseInt(row[dialIdx>=0?dialIdx:1])||0,
-                          sets:parseInt(row[setIdx>=0?setIdx:2])||0,np:0,
-                          pay:parseFloat(row[payIdx>=0?payIdx:3])||0,
-                          creditHours:parseFloat(row[hoursIdx>=0?hoursIdx:4])||0,
-                          tier:'Bronze',paid:true,paidDate:new Date().toISOString(),
-                          source:'imported',ended:true})}
-                      if(pastSessions.length){setSessionLog(p=>[...pastSessions,...p])}
-                      toast(pastSessions.length+' past sessions imported (marked as paid) ✓');
+                          startTime,dialed:0,sets,np:0,
+                          pay:0,creditHours:hours,
+                          tier:'Imported',paid:true,paidDate:new Date().toISOString(),
+                          source:'imported',ended:true,metIncentive:metInc})}
+                      if(pastSessions.length){setSessionLog(p=>[...pastSessions,...p]);setTotalSets(p=>p+pastSessions.reduce((a,s)=>a+s.sets,0))}
+                      toast(pastSessions.length+' sessions imported'+(skipped?' ('+skipped+' skipped)':'')+' ✓');
                     }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--adim)',color:'var(--accent2)',fontSize:8,fontWeight:600}}>Import as Past Pay</button>
                   </div>}
                 </div>}
@@ -3112,6 +3213,33 @@ function App(){
               </div>})}
           </div>
         </div>
+        {role!=='admin'&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
+          <p style={{margin:'0 0 6px',fontSize:11,fontWeight:700,color:'var(--gold)'}}>⭐ Star Ranks (for Main Callers)</p>
+          <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+            {ML_RANKS.map((r,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:3,fontSize:9}}>
+              <span>{r.emoji}</span>
+              <span style={{color:'var(--text3)'}}>{r.label}:</span>
+              <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??''} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:36,fontSize:9,textAlign:'center',padding:'2px'}} disabled={i===0}/>
+            </div>)}
+          </div>
+        </div>}
+        {role!=='admin'&&<div style={{marginBottom:12,padding:'10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
+          <p style={{margin:'0 0 6px',fontSize:12,fontWeight:700,color:'var(--accent2)'}}>⭐ Star System (Calling Mode)</p>
+          <div style={{display:'flex',gap:6,marginBottom:6}}>
+            <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Set</label>
+            <input type="number" min="1" value={cfg.starsPerSet||3} onChange={e=>setCfg(s=>({...s,starsPerSet:+e.target.value||3}))} style={{textAlign:'center',fontSize:12,padding:'6px'}}/></div>
+            <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Dial</label>
+            <input type="number" min="0" step="0.1" value={cfg.starsPerDial||0.1} onChange={e=>setCfg(s=>({...s,starsPerDial:parseFloat(e.target.value)||0.1}))} style={{textAlign:'center',fontSize:12,padding:'6px'}}/></div>
+          </div>
+          <p style={{margin:'0 0 4px',fontSize:9,fontWeight:600,color:'var(--text3)'}}>ML Rank Thresholds (total stars needed):</p>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:4}}>
+            {ML_RANKS.slice(0,8).map((r,i)=><div key={i} style={{textAlign:'center'}}>
+              <span style={{fontSize:10}}>{r.emoji}</span>
+              <p style={{margin:0,fontSize:7,color:r.color,fontWeight:600}}>{r.label}</p>
+              <input type="number" min="0" value={(cfg.mlThresholds||[])[i]??r.cumStars} onChange={e=>{const t=[...(cfg.mlThresholds||ML_RANKS.map(x=>x.cumStars))];t[i]=+e.target.value;setCfg(s=>({...s,mlThresholds:t}))}} style={{textAlign:'center',fontSize:9,padding:'3px',width:'100%'}}/>
+            </div>)}
+          </div>
+        </div>}
         {role!=='admin'&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div>
             <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
