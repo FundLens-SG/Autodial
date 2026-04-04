@@ -6,15 +6,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="AutoDial">
-<meta name="theme-color" content="#0F172A">
-<title>AutoDial Pro</title>
+<meta name="theme-color" content="#07080d">
+<title>AutoDial</title>
 <script>window.onerror=function(m){if(!m||m==='Script error.'||m==='Script error')return true;console.error('[AutoDial Error]',m);return true};window.onunhandledrejection=function(e){console.warn('[AutoDial] Unhandled promise:',e.reason);e.preventDefault()};</script>
-<link rel="icon" type="image/png" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-180.png">
-<link rel="apple-touch-icon" sizes="152x152" href="icon-152.png">
-<link rel="apple-touch-icon" sizes="167x167" href="icon-167.png">
-<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
-<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='108' fill='url(%23g)'/%3E%3Cpath d='M352 311v48a16 16 0 01-17 16 158 158 0 01-69-25 156 156 0 01-48-48 158 158 0 01-25-69A16 16 0 01209 216h24a16 16 0 0116 14c1 8 3 15 6 22a16 16 0 01-4 17l-10 10a128 128 0 0048 48l10-10a16 16 0 0117-4c7 3 15 5 22 6A16 16 0 01352 336z' fill='none' stroke='white' stroke-width='18' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%22%2C%22short_name%22%3A%22AutoDial%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22orientation%22%3A%22portrait%22%2C%22background_color%22%3A%22%2307080d%22%2C%22theme_color%22%3A%22%236366f1%22%7D">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -143,7 +139,7 @@ button:active{transform:scale(.97)}
     <div style="width:60px;height:60px;border-radius:16px;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;box-shadow:0 8px 30px rgba(99,102,241,.3)">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
     </div>
-    <img src="icon-192.png" style="width:64px;height:64px;border-radius:14px;margin:0 auto 12px;display:block" alt="AutoDial"/><h2 style="font-size:26px;font-weight:900;color:#D4B896;letter-spacing:-.03em">AutoDial Pro</h2>
+    <h2 style="font-size:26px;font-weight:900;color:#f1f5f9;letter-spacing:-.03em">📞 AutoDial</h2>
     <p style="font-size:13px;color:var(--text3);margin-top:2px">Sign in to continue</p>
   </div>
   <div id="auth-message" style="display:none;font-size:12px;padding:12px;border-radius:12px;margin-bottom:14px"></div>
@@ -304,7 +300,7 @@ var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.
 var GSCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 // ↓↓↓ SET THIS to your Cloudflare Worker URL for permanent Google auth ↓↓↓
 var WORKER_URL='https://autodial-google-auth.chungakwanc.workers.dev';
-window.claudeKey=function(){return localStorage.getItem('autodial_claude_key')||''}; // e.g. 'https://autodial-google-auth.yourname.workers.dev'
+window.claudeKey=function(){return localStorage.getItem('autodial_claude_key')||window._sharedClaudeKey||''}; // e.g. 'https://autodial-google-auth.yourname.workers.dev'
 
 // ═══ SAVE TOKEN — shared helper ═══
 function _saveGToken(token){
@@ -1697,6 +1693,8 @@ function App(){
   const[payConfigOpen,setPayConfigOpen]=useState(false);
   const[showSlotPicker,setShowSlotPicker]=useState(false);
   const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||(role==='admin'&&cfg.sharedGeminiKey?cfg.sharedGeminiKey:''));
+  // Share Claude key with admins via config
+  useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
   useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})}},[geminiKeyVal]);
 
@@ -2585,7 +2583,7 @@ function App(){
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
       </div>
       <div style={{flex:1}}>
-        <div style={{display:'flex',alignItems:'center',gap:6}}><img src="icon-192.png" style={{width:28,height:28,borderRadius:6}} alt=""/><h1 style={{fontSize:17,fontWeight:900,color:'#D4B896',margin:0,letterSpacing:'-.03em'}}>AutoDial</h1></div>
+        <h1 style={{fontSize:17,fontWeight:900,color:'#f1f5f9',margin:0,letterSpacing:'-.03em'}}>📞 AutoDial</h1>
       </div>
       <span style={{fontSize:11,color:'var(--text3)',marginRight:4}}>{userName}</span>
       {(isCreatorUser||isCreator(window._user?.email||''))&&<button onClick={()=>{setShowApprovalModal(true);if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data)}}).catch(e=>console.warn('[Users]',e))}} style={{padding:'4px 10px',borderRadius:8,background:pendingUsers.length?'var(--rdim)':'var(--adim)',border:'1px solid '+(pendingUsers.length?'rgba(248,81,73,.3)':'rgba(99,102,241,.2)'),color:pendingUsers.length?'var(--red)':'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0,marginRight:2}}>
@@ -4079,6 +4077,8 @@ function App(){
         <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
         <input value={localStorage.getItem('autodial_claude_key')||''} onChange={e=>{localStorage.setItem('autodial_claude_key',e.target.value.trim());e.target.parentElement.querySelector('.ck-status').textContent=e.target.value.trim()?'✓ Key saved':'No key'}} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
         <p className="ck-status" style={{margin:0,fontSize:10,color:localStorage.getItem('autodial_claude_key')?'var(--green)':'var(--text3)'}}>{localStorage.getItem('autodial_claude_key')?'✓ Key saved — Claude will analyze your leads':'No key — using Gemini only'}</p>
+          {role!=='admin'&&<button onClick={()=>{const k=localStorage.getItem('autodial_claude_key');if(!k)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:k}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600,marginTop:6}}>Share key with admins</button>}
+          {role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
       </div>}
 
       {/* Calendar Sharing (Main only) */}
@@ -4169,72 +4169,90 @@ function App(){
       <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:520,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <div style={{textAlign:'center',marginBottom:16}}>
           <p style={{fontSize:40,margin:'0 0 4px'}}>📞</p>
-          <h2 style={{fontSize:20,fontWeight:900,color:'#D4B896',margin:'0 0 4px'}}>Welcome to AutoDial Pro</h2>
+          <h2 style={{fontSize:20,fontWeight:900,color:'#f1f5f9',margin:'0 0 4px'}}>Welcome to AutoDial</h2>
           <p style={{fontSize:12,color:'var(--text3)',margin:0}}>{role==='admin'?'Caller Guide':'Manager Guide'}</p>
         </div>
 
         {role==='admin'?<>
-          {/* ADMIN INSTRUCTIONS */}
+          {/* ═══ CALLER GUIDE (Admin role = caller) ═══ */}
           <div style={{marginBottom:12}}>
-            <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 6px'}}>📞 Making Calls</h3>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 6px'}}>⚡ Smart Calling</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
-              <p style={{margin:'0 0 4px'}}>1. Go to <b>Dial</b> tab and tap <b style={{color:'var(--green)'}}>Start Session</b></p>
-              <p style={{margin:'0 0 4px'}}>2. Pick a challenge slot if available, or start with default</p>
-              <p style={{margin:'0 0 4px'}}>3. Leads auto-load from your assigned sheet</p>
-              <p style={{margin:'0 0 4px'}}>4. Tap the <b style={{color:'var(--accent2)'}}>phone number</b> to dial — status buttons appear after each call</p>
-              <p style={{margin:'0 0 4px'}}>5. Mark each call: <b style={{color:'var(--green)'}}>Set</b> (appointment made), <b style={{color:'var(--amber)'}}>CB</b> (callback), <b style={{color:'var(--red)'}}>NP</b> (no pick), or <b>NI</b> (not interested)</p>
-              <p style={{margin:0}}>6. Tap <b style={{color:'var(--red)'}}>End Session</b> when done — your pay is auto-calculated</p>
+              <p style={{margin:'0 0 4px'}}>1. <b>Dial tab</b> → tap <b style={{color:'var(--green)'}}>Start Session</b> → pick your slot</p>
+              <p style={{margin:'0 0 4px'}}>2. Leads auto-load from your assigned sheet</p>
+              <p style={{margin:'0 0 4px'}}>3. Mark each call: <b style={{color:'var(--green)'}}>Set</b>, <b style={{color:'var(--amber)'}}>CB</b>, <b style={{color:'var(--red)'}}>NP</b>, or <b>NI</b></p>
+              <p style={{margin:'0 0 4px'}}>4. <b style={{color:'var(--gold)'}}>NI / NP auto-advance</b> — instantly dials next lead, zero extra taps!</p>
+              <p style={{margin:0}}>5. <b>CB / Set</b> show a remarks screen for notes</p>
             </div>
           </div>
           <div style={{marginBottom:12}}>
-            <h3 style={{fontSize:13,fontWeight:700,color:'var(--green)',margin:'0 0 6px'}}>💰 Pay & Rank</h3>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--gold)',margin:'0 0 6px'}}>⭐ Stars & Ranking</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
-              <p style={{margin:'0 0 4px'}}>Your pay tier (Bronze→Platinum Elite) is set by your manager</p>
-              <p style={{margin:'0 0 4px'}}>Hit the <b>Appts Bar</b> to earn full session pay, hit <b>Bonus Bar</b> for bonus multiplier</p>
-              <p style={{margin:'0 0 4px'}}>Check <b>Stats</b> for hit rates, <b>Rank</b> for tier progression, <b>Pay</b> for session history</p>
-              <p style={{margin:0}}>Sessions under the appts bar are rounded to nearest 30 minutes</p>
+              <p style={{margin:'0 0 4px'}}>You earn <b style={{color:'var(--gold)'}}>stars</b>, not pay. Stars are your achievement currency!</p>
+              <p style={{margin:'0 0 4px'}}><b>0.1⭐ per dial</b> — every call earns stars, even NP</p>
+              <p style={{margin:'0 0 4px'}}><b>Milestone ⭐ on rank-up</b> — Elite +10⭐, Master +25⭐ … Mythic +500⭐</p>
+              <p style={{margin:'0 0 4px'}}>Rank resets monthly → stars get <b>banked forever</b> 🏦</p>
+              <p style={{margin:0}}>Check <b>Rank</b> tab for progress + <b>🏆 Live Leaderboard</b></p>
             </div>
           </div>
           <div style={{marginBottom:12}}>
-            <h3 style={{fontSize:13,fontWeight:700,color:'var(--amber)',margin:'0 0 6px'}}>📋 Tips</h3>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--green)',margin:'0 0 6px'}}>🛡️ Smart Features</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
-              <p style={{margin:'0 0 4px'}}>Use the <b>Calling Script</b> panel (desktop) for your pitch notes</p>
-              <p style={{margin:'0 0 4px'}}>Send WhatsApp follow-ups with one tap after setting appointments</p>
-              <p style={{margin:0}}>Your leads, appointments & settings are all synced by your manager</p>
+              <p style={{margin:'0 0 4px'}}><b style={{color:'var(--gold)'}}>↩️ 10s Undo</b> — mis-tapped NI? Undo within 10 seconds</p>
+              <p style={{margin:'0 0 4px'}}><b style={{color:'var(--green)'}}>🛡️ Conflict Check</b> — won't dial a lead someone else is already calling</p>
+              <p style={{margin:'0 0 4px'}}><b>📴 Offline Mode</b> — keep calling even without WiFi, syncs when back</p>
+              <p style={{margin:0}}><b>🔄 Session Recovery</b> — app crash? Reloads to exact same position</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 6px'}}>🧠 AI Setup (Optional)</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}><b>Claude AI</b> — add your own key in Settings → 🧠 Claude AI (~$4/mo)</p>
+              <p style={{margin:'0 0 4px'}}>Or use your manager's shared Claude key (auto-synced)</p>
+              <p style={{margin:0}}><b>Gemini AI</b> — free alternative, add key in Settings → 🤖 Gemini</p>
             </div>
           </div>
         </>:<>
-          {/* MAIN INSTRUCTIONS */}
+          {/* ═══ MANAGER GUIDE (Main role = manager) ═══ */}
           <div style={{marginBottom:12}}>
             <h3 style={{fontSize:13,fontWeight:700,color:'var(--accent2)',margin:'0 0 6px'}}>🔄 CALL ↔ MGMT Toggle</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
-              <p style={{margin:'0 0 4px'}}><b>CALL mode</b> — You become a caller: dial leads, track stats, earn pay</p>
-              <p style={{margin:0}}><b>MGMT mode</b> — Manage your team: live dashboard, tracking, pay, settings</p>
+              <p style={{margin:'0 0 4px'}}><b>CALL mode</b> — You become a caller: dial leads, track stats, earn ⭐ stars</p>
+              <p style={{margin:0}}><b>MGMT mode</b> — Manage your team: live dashboard, tracking, settings</p>
             </div>
           </div>
           <div style={{marginBottom:12}}>
             <h3 style={{fontSize:13,fontWeight:700,color:'var(--green)',margin:'0 0 6px'}}>👥 Setting Up Admins</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
               <p style={{margin:'0 0 4px'}}>1. <b>Settings → Users</b>: Approve new signups with the 👥 badge in header</p>
-              <p style={{margin:'0 0 4px'}}>2. <b>Settings → Admin Pay</b>: Add each admin's email, set their tier rates, session hours, appts/bonus bars</p>
-              <p style={{margin:'0 0 4px'}}>3. <b>Link their Leads Sheet</b>: Search your Google Sheet → select their tab → <b>☁️ Sync</b></p>
+              <p style={{margin:'0 0 4px'}}>2. <b>Settings → Admin Pay</b>: Add email, set session hours, appts/bonus bars</p>
+              <p style={{margin:'0 0 4px'}}>3. <b>Link their Leads Sheet</b>: Google Sheet → select their tab → <b>☁️ Sync</b></p>
               <p style={{margin:0}}>4. <b>☁️ Sync All</b> in Team Rules to push DNC hours & global settings</p>
             </div>
           </div>
           <div style={{marginBottom:12}}>
-            <h3 style={{fontSize:13,fontWeight:700,color:'var(--amber)',margin:'0 0 6px'}}>📊 Management Mode</h3>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--gold)',margin:'0 0 6px'}}>⭐ Stars & Ranking System</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
-              <p style={{margin:'0 0 4px'}}><b>Live</b> — Real-time view of who's calling and their stats</p>
-              <p style={{margin:'0 0 4px'}}><b>Pay</b> — Review sessions, mark paid, generate invoices</p>
-              <p style={{margin:'0 0 4px'}}><b>Track</b> — Performance analytics and appointment tracking</p>
-              <p style={{margin:0}}><b>Leads</b> — Connect Google Sheets, fetch & manage lead lists</p>
+              <p style={{margin:'0 0 4px'}}>Mains earn <b style={{color:'var(--gold)'}}>stars</b> (not pay) — gamified achievement currency</p>
+              <p style={{margin:'0 0 4px'}}>Ranks: Warrior → Elite → Master → Grandmaster → Epic → Legend → <b style={{color:'var(--red)'}}>Mythic</b></p>
+              <p style={{margin:'0 0 4px'}}>Monthly reset: stars banked forever 🏦 — rank starts fresh</p>
+              <p style={{margin:0}}>Owner can customize thresholds & milestone stars in Settings</p>
             </div>
           </div>
           <div style={{marginBottom:12}}>
-            <h3 style={{fontSize:13,fontWeight:700,color:'#4285f4',margin:'0 0 6px'}}>🔗 Integrations</h3>
+            <h3 style={{fontSize:13,fontWeight:700,color:'var(--amber)',margin:'0 0 6px'}}>🏆 Leaderboard & Team</h3>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
-              <p style={{margin:'0 0 4px'}}><b>Google</b> — Connect once, your token is shared with all admins</p>
-              <p style={{margin:'0 0 4px'}}><b>Gemini AI</b> — Add your API key, tap "Share" to give it to admins</p>
+              <p style={{margin:'0 0 4px'}}><b>Live Leaderboard</b> — Rank tab shows all Mains ranked by today's sets</p>
+              <p style={{margin:'0 0 4px'}}><b>🛡️ Conflict Resolution</b> — prevents two callers dialing the same lead</p>
+              <p style={{margin:0}}><b>📴 Offline Mode</b> — team can call even without WiFi, syncs later</p>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:'#8B5CF6',margin:'0 0 6px'}}>🧠 AI & Integrations</h3>
+            <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+              <p style={{margin:'0 0 4px'}}><b>Google</b> — Connect once, token shared with all admins permanently</p>
+              <p style={{margin:'0 0 4px'}}><b>Claude AI</b> — Add key in Settings → 🧠 → tap "Share" to sync to admins</p>
+              <p style={{margin:'0 0 4px'}}><b>Gemini AI</b> — Free option, add key → tap "Share" to sync to admins</p>
               <p style={{margin:0}}><b>WhatsApp Templates</b> — Create templates, auto-shared with admins</p>
             </div>
           </div>

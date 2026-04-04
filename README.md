@@ -12,13 +12,7 @@
 2. Log in with your email via Supabase
 3. You're automatically assigned the **Main** role as the Owner
 4. Go to **Settings** → connect Google → link your lead sheet
-
-### For Admins (Managers)
-
-1. Log in → select **Admin** role
-2. Wait for Owner approval (one-time)
-3. Once approved, your leads sheet will be linked by the Owner
-4. Go to **Leads** tab → **Fetch Leads** to load your contacts
+5. Configure rank thresholds and milestone stars for your team
 
 ### For Mains (Callers)
 
@@ -26,6 +20,27 @@
 2. Wait for Owner approval (one-time)
 3. Your admin will assign you a leads sheet
 4. Go to **Leads** tab → **Fetch Leads** → start dialing!
+5. Earn ⭐ stars with every dial and rank up monthly
+
+### For Admins (Managers)
+
+1. Log in → select **Admin** role
+2. Wait for Owner approval (one-time)
+3. Your leads sheet will be linked by the Main/Owner
+4. Go to **Leads** tab → **Fetch Leads** to load contacts
+5. Track your Main's appointments and session stats
+
+---
+
+## 📲 Install as App (PWA)
+
+AutoDial works as an installable app on your phone — no app store needed!
+
+**iPhone:** Open in Safari → tap Share (↑) → "Add to Home Screen" → AutoDial appears as an app icon
+
+**Android:** Open in Chrome → banner appears "Install AutoDial Pro" → tap Install → appears in your app drawer
+
+Once installed, it runs full-screen like a native app with offline support.
 
 ---
 
@@ -34,8 +49,8 @@
 ### Starting a Session
 
 1. Tap **▶️ Start Session** (bottom of Dial tab)
-2. If your admin set up multiple time slots, pick one (e.g., "5h challenge")
-3. The first eligible lead loads automatically
+2. If multiple time slots are configured, pick one (e.g., "5h challenge")
+3. The first eligible lead loads automatically and dials
 
 ### During a Call
 
@@ -53,19 +68,19 @@ You'll see the lead's name, phone, age, gender, email, and any remarks from the 
 
 ### ⚡ Smart Auto-Dial
 
-When you tap **NI** or **NP**, the app **instantly skips** to the next lead and starts dialing — no extra taps needed. You'll see a gold **↩️ Undo** bar for 10 seconds in case you made a mistake.
+**NI and NP auto-advance instantly** — no extra screens, no extra taps. You tap NI → the next lead is already dialing. This saves ~200 taps per day across 100 calls.
 
-For **CB** and **Set**, a remarks screen appears so you can add notes before moving on.
+**CB and Set** show a remarks screen so you can add notes before advancing.
 
-### Post-Call Remarks
+### ↩️ 10-Second Undo
 
-After CB/Set, you'll see:
-- **"➡️ Next Lead"** — skip to next (no note)
-- **"💾 Save & Next Lead →"** — saves your typed note and advances
+After NI or NP auto-advance, a gold **↩️ Undo** bar appears for 10 seconds. Tap it to reverse the status and jump back to that lead. Disappears automatically after 10 seconds.
 
 ---
 
-## ⭐ Ranking System (Mains Only)
+## ⭐ Ranking & Stars System (Mains Only)
+
+> **Important:** Mains earn **stars**, not pay. Stars are your gamified achievement currency. Admins handle pay separately through the session/timesheet system.
 
 ### How Ranks Work
 
@@ -81,47 +96,141 @@ Your rank is based on **appointments set this month**. Ranks reset on the 1st of
 | Legend | 👑 | 40 |
 | Mythic | 🏆 | 55 |
 
-*(Owner can customize thresholds in Settings)*
+*(Owner can customize all thresholds in Settings → ⭐ Rank System)*
 
-### ⭐ Stars Economy
+### How Stars Work
 
-Stars are your **lifetime achievement currency**:
+Stars are earned two ways:
 
-- **Milestone Stars** — earned when you rank up. Each rank awards bonus stars (e.g., Elite = +10⭐, Master = +25⭐). Each rank can only award once per month.
-- **Stars per Dial** — earn a small amount for every call made (default 0.1⭐/dial)
-- **Stars Bank** — on the 1st of each month, your current stars get **banked** into your lifetime total. Your monthly stars reset, but your bank keeps growing forever.
+1. **Milestone Stars** — awarded when you rank up. Each rank gives bonus stars (e.g., Elite = +10⭐, Mythic = +500⭐). Each rank can only award once per month.
+2. **Stars per Dial** — earn a small amount for every call made (default: 0.1⭐ per dial). Even NP calls count!
 
-Your total Star Bank is displayed in Settings: "🏦 Star Bank: X ⭐"
+### 🏦 Star Bank (Lifetime)
 
-### Monthly Reset
+Your Star Bank is your lifetime accumulated total:
+- On the **1st of each month**, your current monthly stars get **banked**
+- Monthly rank resets to Warrior
+- Milestone tracking resets (earn them again!)
+- Your bank keeps growing forever
+- Toast on reset: "🏦 X stars banked! New month, new grind."
 
-On the 1st of each month:
-1. Current stars → added to Star Bank
-2. Monthly rank → resets to Warrior
-3. Milestone tracking → resets (earn them again!)
-4. Toast: "🏦 X stars banked! New month, new grind."
+Your total is shown in Settings: **🏦 Star Bank: X ⭐**
+
+### Who Can Edit Ranks
+
+- **Owner** — sees editable inputs for all rank thresholds, milestone stars, and stars per dial
+- **Mains (non-owner)** — see a gamified read-only display showing which ranks they've achieved
+- **Admins** — don't see the rank system at all
+
+### What Doesn't Count
+
+- Admin appointments do NOT count toward your rank
+- Only appointments YOU set contribute to your monthly rank
 
 ---
 
 ## 🏆 Live Leaderboard
 
-See how you stack up against other Mains in real-time!
+Real-time ranking across all Mains — visible in the **Rank tab**.
 
-- Go to the **Rank** tab → scroll down to **🏆 Today's Leaderboard**
-- Shows all active callers ranked by appointments set today
-- 🥇🥈🥉 Gold/Silver/Bronze for top 3
-- Green dot = currently calling live
+- Ranked by appointments set today
+- 🥇🥈🥉 Gold / Silver / Bronze for top 3
+- Green dot = currently in a live calling session
+- "YOU" badge highlights your position
 - Updates every 30 seconds automatically
+
+---
+
+## 🛡️ Conflict Resolution
+
+When multiple Mains share the same lead sheet:
+
+- Each lead is **claimed** when you start dialing them
+- If another Main tries to dial the same lead within 10 minutes:
+  **"⚠️ John is already calling Stella Koh"**
+- The app auto-skips to the next unclaimed lead
+- Prevents wasted calls and awkward double-dials
+
+---
+
+## 🧠 AI-Powered Lead Analysis
+
+### Claude AI (Recommended — Each User's Own Key)
+
+Claude analyzes your Google Sheet with 6 layers of intelligence:
+
+1. **Two-Pass Validation** — verifies column mapping against sample data, corrects mistakes
+2. **Batch Remark Classification** — understands context: "refund case pending" = NI, "husband will call back" = CB
+3. **Name Extraction** — fixes leads where phone number shows as name
+4. **Confidence Scoring** — flags uncertain columns → triggers 🔧 Columns override
+5. **Smart Dedup** — finds duplicate leads across batches, auto-marks them
+6. **Learning Loop** — when you correct a status, Claude learns related patterns (e.g., "refund" → also learns "refund case", "refund pending")
+
+**Setup (each user does this individually):**
+1. Go to [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+2. Add $5 credit and create an API key
+3. Open AutoDial → **Settings** → **🧠 Claude AI** section
+4. Paste your `sk-ant-...` key
+5. It's saved in your browser only — never shared
+
+**Cost:** ~$0.04 per fetch. With 1-2 fetches/day = **~$2-4/month per user**.
+
+No Claude key? Falls back to Gemini (free) or manual parsing.
+
+### Gemini AI (Free Fallback)
+
+If no Claude key is set, AutoDial uses Google Gemini. Add your Gemini key in **Settings → 🤖 Gemini AI**.
+
+### 🔧 Manual Column Override
+
+If AI gets columns wrong:
+1. Fetch leads → go to **Leads** tab
+2. Tap **🔧 Columns** button (next to search bar)
+3. Reassign columns: Phone, First Name, DOB/Birthday, Remarks, etc.
+4. Tap **✅ Apply & Re-import**
+
+---
+
+## 📴 Offline Mode
+
+AutoDial works without internet:
+
+- Leads are cached in your browser — keep calling even if WiFi drops
+- Status changes (NI/NP/CB/Set) queue locally
+- Sheet write-backs batch in a queue and flush when online
+- When connection returns: **"📶 Back online — syncing…"**
+- **OFFLINE** badge appears in the header when disconnected
+
+---
+
+## 📊 Sheet Write-Back Queue
+
+Status updates are **batched** instead of firing one API call per change:
+- Mark 5 leads NI quickly → one batched write instead of 5
+- 3-second debounce — waits for you to finish rapid-fire marking
+- If offline, changes queue locally and sync when back online
+- Prevents Google API rate limiting during fast calling sessions
+
+---
+
+## 🔄 Session Recovery
+
+If the app crashes or your browser closes mid-session:
+
+- **Phase, lead position, and session stats** persist to localStorage
+- On reload, you're restored to the **exact same lead and session**
+- Sessions older than 24 hours auto-clear to prevent zombie sessions
+- Cross-device: ending a session on desktop auto-detects on phone
 
 ---
 
 ## 📅 Appointments
 
-### Call Mode
-Shows only YOUR appointments (ones you set).
+### Call Mode (CALL toggle)
+Shows only **your** appointments (ones you set).
 
-### Manage Mode (toggle CALL/MGMT)
-Shows ALL appointments grouped by admin:
+### Manage Mode (MGMT toggle)
+Shows **all** appointments grouped by admin:
 - **📞 My Appointments** — yours (shown first)
 - **👤 Admin Name** — each admin's appointments with count
 
@@ -134,131 +243,28 @@ Shows ALL appointments grouped by admin:
 | **Fly Kite 🪁** | No-show |
 | **Closed 💰** | Deal closed! Enter EFYC (Main) or Tip (Admin) amount |
 
-### Important Notes
-- Admin appointments do NOT count toward your Mythic rank
-- Appointment status changes write back to the Google Sheet "Appointments Set" tab
-- Deleting an appointment is permanent and syncs across all devices
+Status changes write back to the Google Sheet "Appointments Set" tab automatically.
 
 ---
 
-## 🧠 AI-Powered Lead Analysis
+## 🔗 Google Connection (Permanent)
 
-### Claude AI (Recommended)
+AutoDial uses a Cloudflare Worker for permanent Google auth:
 
-Claude analyzes your Google Sheet with 6 layers of intelligence:
-
-1. **Column Detection** — identifies phone, name, DOB, remarks columns from headers + data
-2. **Remark Classification** — understands "refund case pending" = NI, "husband will call back" = CB
-3. **Name Extraction** — fixes leads where phone number shows as name
-4. **Confidence Scoring** — flags uncertain column mappings so you can correct them
-5. **Smart Dedup** — finds duplicate leads across batches
-6. **Learning Loop** — when you correct a status, Claude learns related patterns
-
-**Setup:**
-1. Get an API key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) ($5 minimum credit)
-2. Open AutoDial → **Settings** → **🧠 Claude AI** section
-3. Paste your `sk-ant-...` key
-4. Each user uses their own key — costs ~$0.04 per fetch (~$4/month)
-
-### Gemini AI (Free Fallback)
-
-If no Claude key is set, AutoDial uses Google Gemini for analysis. Add your Gemini key in Settings → 🤖 Gemini AI.
-
-### 🔧 Manual Column Override
-
-If AI gets columns wrong:
-1. Go to **Leads** tab
-2. Tap **🔧 Columns** button (next to search bar)
-3. Reassign each column: Phone, First Name, DOB, Remarks, etc.
-4. Tap **✅ Apply & Re-import**
-
----
-
-## 🔌 Offline Mode
-
-AutoDial works without internet!
-
-- Leads are cached in your browser — you can keep calling even if WiFi drops
-- Status changes (NI/NP/CB/Set) queue locally
-- When connection returns: "📶 Back online — syncing…" and all changes push to Google Sheets
-- Look for the **OFFLINE** badge in the header
-
----
-
-## ↩️ Undo
-
-Accidentally marked someone NI? No problem.
-
-- After NI or NP, a gold **↩️ Undo** bar appears for **10 seconds**
-- Tap it to reverse the status and jump back to that lead
-- After 10 seconds, the undo option disappears
-
----
-
-## 🛡️ Conflict Resolution
-
-When two callers share the same lead sheet:
-
-- Each lead is "claimed" when you start dialing them
-- If another caller tries to dial the same lead within 10 minutes, they see:
-  **"⚠️ John is already calling Stella Koh"**
-- The app auto-skips to the next unclaimed lead
-- Prevents wasted calls and awkward double-dials
+- **First time:** Tap "Connect Google" → popup → grant access → done forever
+- **Every login after:** Token refreshes silently via the Worker. No popup, no tap.
+- Works across devices and sessions — lasts until you manually disconnect
 
 ---
 
 ## 🔄 Cross-Device Sync
 
-AutoDial syncs across all your devices via Supabase:
+Everything syncs across devices via Supabase:
 
-- **Leads, settings, appointments, sessions** — all synced
-- Start a session on desktop, continue on phone
+- Leads, settings, appointments, sessions, stars, achievements
+- Start a session on desktop → continue on phone
 - End a session on one device → other device detects it automatically
-- If the app crashes, it **recovers your exact position** on reload (same lead, same session)
-
----
-
-## 🔗 Google Integration
-
-### Permanent Connection (via Cloudflare Worker)
-
-Connect Google once → never again. Your refresh token is stored securely on Cloudflare.
-
-- First time: tap "Connect Google" → popup → grant access → done forever
-- Token auto-refreshes silently in the background
-- Works across devices and sessions
-
-### What's Connected
-
-| Service | What AutoDial does |
-|---------|-------------------|
-| **Google Sheets** | Reads leads, writes back statuses, logs timesheets |
-| **Google Calendar** | Creates appointment events with invites |
-| **Google Drive** | Searches for your spreadsheets |
-
----
-
-## ⚙️ Settings Reference
-
-### Owner-Only Settings
-
-| Setting | Description |
-|---------|------------|
-| Star Rank Thresholds | Min appointments per rank (Warrior=0, Elite=5…) |
-| Milestone Stars | Stars awarded per rank-up (Elite=10⭐, Master=25⭐…) |
-| Stars per Dial | Small star reward per call made |
-| NP → NI Threshold | Auto-convert to NI after X no-picks (default: 5) |
-| Queue Priority | Order of lead selection (Blank → CB Due → NP Retry) |
-
-### All Users
-
-| Setting | Description |
-|---------|------------|
-| Google Sheets | Link your lead spreadsheet |
-| Gemini AI Key | For AI-powered lead analysis (free) |
-| Claude AI Key | For smarter analysis ($0.04/fetch) |
-| Call Delay | Seconds between auto-dial (adjustable during calls) |
-| DNC Hours | Do Not Call window (e.g., 9pm–9am) |
+- Deleted appointments sync across devices (can't come back)
 
 ---
 
@@ -272,23 +278,48 @@ AutoDial auto-detects these from your sheet remarks:
 | NP, NPx2, no pick, no answer | NP | No Pick |
 | CB, callback, call back, call tmr | CB | Callback |
 | appt set, appointment, date+time+location | Set | Appointment Set |
-| WN, wrong number | NI | Wrong Number → treated as NI |
-| DNC, do not call, DND | NI | Do Not Call → treated as NI |
-| deceased, passed away | NI | Treated as NI |
-| refund, cancelled | NI | Treated as NI |
+| WN, wrong number | NI | Wrong Number = NI |
+| DNC, do not call, DND | NI | Do Not Call = NI |
+| deceased, passed away | NI | = NI |
+| refund, cancelled | NI | = NI |
 
-**Custom patterns:** When you see "⚠ UNRECOGNIZED" and pick a status, AutoDial remembers that pattern forever. Claude AI also learns related variations automatically.
+**Custom patterns:** When you see "⚠ UNRECOGNIZED" and pick a status, AutoDial remembers that pattern forever. With Claude AI enabled, it also learns related variations automatically.
+
+---
+
+## ⚙️ Settings Reference
+
+### Owner-Only Settings (⭐ Rank System)
+
+| Setting | Description |
+|---------|------------|
+| Min Appts per Rank | Threshold for each rank (Warrior=0, Elite=5, Mythic=55…) |
+| Milestone Stars | Stars awarded on rank-up (Elite=+10⭐, Mythic=+500⭐…) |
+| Stars per Dial | Stars earned per call (default: 0.1) |
+
+### All Users
+
+| Setting | Description |
+|---------|------------|
+| Google Sheets | Link your lead spreadsheet |
+| 🤖 Gemini AI Key | Free AI analysis |
+| 🧠 Claude AI Key | Smarter analysis — each user enters their own key (~$4/mo) |
+| Call Delay | Seconds between auto-dial (adjustable during calls) |
+| NP → NI Threshold | Auto-convert to NI after X no-picks (default: 5) |
+| Queue Priority | Lead selection order (Blank → CB Due → NP Retry) |
+| DNC Hours | Do Not Call window (e.g., 9pm–9am) |
 
 ---
 
 ## 💡 Tips & Tricks
 
-- **Speed dial**: Reduce delay to 1-3 seconds in Settings for maximum throughput
-- **Quick NI**: One tap and you're already calling the next person
-- **Undo safety net**: Don't worry about mis-taps — you have 10 seconds to fix it
-- **Star grinding**: Even NP calls earn stars per dial. Every call counts!
-- **Column override**: If AI gets your sheet wrong, the 🔧 button fixes it instantly
-- **Leaderboard motivation**: Check the Rank tab to see who's crushing it today
+- **Speed dial:** NI/NP auto-advance means one tap = next call. No wasted time.
+- **Undo safety net:** Mis-tapped NI? You have 10 seconds to undo.
+- **Star grinding:** Even NP calls earn 0.1⭐. Every dial counts toward your bank!
+- **Column override:** If AI misreads your sheet, 🔧 Columns fixes it instantly.
+- **Leaderboard motivation:** Check the Rank tab to see who's on top today.
+- **Offline calling:** WiFi dropped? Keep dialing — everything syncs later.
+- **No double-calls:** The conflict system ensures two Mains never dial the same person.
 
 ---
 
@@ -296,14 +327,15 @@ AutoDial auto-detects these from your sheet remarks:
 
 | Issue | Fix |
 |-------|-----|
-| App crashes on load | Clear browser cache, reload. Your data is safe in Supabase |
-| Google popup keeps appearing | This shouldn't happen with the Worker. Check Settings → Google |
-| Leads not loading | Check Google connection, verify sheet URL in Settings |
-| NI leads still showing | Hard refresh (Ctrl+Shift+R). If persists, re-fetch leads |
-| Session won't start | Check if a stale session exists — it auto-clears after 24h |
-| Dial loops back to same lead | Update to latest version — this was fixed with pre-computed navigation |
-| "OFFLINE" showing | Check your internet connection. Changes will sync when back online |
+| App won't load | Clear browser cache, reload. Data is safe in Supabase |
+| Google popup keeps appearing | Check if Cloudflare Worker is set up. Settings → Google |
+| Leads not loading | Check Google connection + sheet URL in Settings |
+| NI leads still showing in dial | Hard refresh (Ctrl+Shift+R), re-fetch leads |
+| Session won't start | Stale session may exist — auto-clears after 24h, or end manually |
+| "OFFLINE" showing | Check internet. Changes will sync when back |
+| Dial loops to same lead | Update to latest version (pre-computed navigation) |
+| Claude AI not working | Check your API key in Settings → 🧠 Claude AI |
 
 ---
 
-*AutoDial Pro — Built for speed. Designed for results.* 🚀
+*AutoDial Pro — Dial Smarter. Rank Higher. Close Faster.* 🚀
