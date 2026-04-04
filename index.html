@@ -1980,7 +1980,7 @@ function App(){
   const tier=getTier(totalSets,myCfg.tierMins);const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
   const userName=window._prof?.full_name||myEmail||'User';
   // ═══ ML RANK (monthly) ═══
-  const monthlyAppts=getMonthlyAppts(appointments,role==='admin'?myEmail:null);
+  const monthlyAppts=getMonthlyAppts(appointments,myEmail);
   const rank=getRank(monthlyAppts,cfg.starThresholds);
   const nextRank=getNextRank(monthlyAppts,cfg.starThresholds);
   const monthName=new Date().toLocaleDateString('en-SG',{month:'long',year:'numeric'});
@@ -2629,7 +2629,7 @@ function App(){
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
-          <span style={{fontSize:10,color:'var(--text3)'}}>{appointments.length} total</span>
+          <span style={{fontSize:10,color:'var(--text3)'}}>{isCallMode?appointments.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:appointments.length} total</span>
           {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
               // Track all IDs as deleted so sync never brings them back
               const allIds=appointments.map(a=>a.id||a.phone+'_'+(a.createdAt||''));localStorage.setItem('_deletedApptIds',JSON.stringify(allIds.slice(-500)));
@@ -2650,14 +2650,34 @@ function App(){
         )}
       </div>
 
-      {appointments.filter(a=>{
-        // Separate self vs admin appointments by mode
-        if(isCallMode&&a.admin&&a.admin!==myEmail)return false;
-        if(isManageMode&&a.admin===myEmail)return false;
-        if(!apptSearch)return true;
-        if(['pending','met','postponed','flykite','closed'].includes(apptSearch))return a.followUp===apptSearch;
-        return(a.name||'').toLowerCase().includes(apptSearch.toLowerCase())||(a.phone||'').includes(apptSearch)
-      }).map((a,i)=>{
+      {(()=>{
+        // Filter appointments
+        const filtered=appointments.filter(a=>{
+          // Admin role: only see their own
+          if(role==='admin'&&a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase())return false;
+          // Main in Call Mode: only own appointments (admin appts show in Manage Mode)
+          if(role!=='admin'&&isCallMode&&a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase())return false;
+          if(!apptSearch)return true;
+          if(['pending','met','postponed','flykite','closed'].includes(apptSearch))return a.followUp===apptSearch;
+          return(a.name||'').toLowerCase().includes(apptSearch.toLowerCase())||(a.phone||'').includes(apptSearch)||(a.admin||'').toLowerCase().includes(apptSearch.toLowerCase())
+        });
+        // Manage Mode for Main: group by admin with headers
+        let displayList=filtered;
+        if(role!=='admin'&&isManageMode&&filtered.length){
+          const groups={};
+          filtered.forEach(a=>{const k=(a.admin||myEmail).toLowerCase();if(!groups[k])groups[k]=[];groups[k].push(a)});
+          const sortedKeys=Object.keys(groups).sort((x,y)=>x===myEmail.toLowerCase()?-1:y===myEmail.toLowerCase()?1:x.localeCompare(y));
+          displayList=[];
+          if(sortedKeys.length>1){sortedKeys.forEach(k=>{
+            const isSelf=k===myEmail.toLowerCase();
+            displayList.push({_isHeader:true,_key:k,_label:isSelf?'📞 My Appointments':'👤 '+(groups[k][0]?.admin||k),_count:groups[k].length,_isSelf:isSelf});
+            groups[k].forEach(a=>displayList.push(a))})}
+          else{displayList=filtered}
+        }
+        return displayList})().map((a,i)=>{
+        if(a._isHeader)return<div key={'hdr-'+a._key} style={{display:'flex',alignItems:'center',gap:8,margin:'12px 0 8px',padding:'8px 12px',borderRadius:10,background:a._isSelf?'var(--adim)':'var(--bg3)',border:'1px solid '+(a._isSelf?'rgba(99,102,241,.2)':'var(--border)')}}>
+          <span style={{fontSize:13,fontWeight:700,color:a._isSelf?'var(--accent2)':'var(--text2)'}}>{a._label}</span>
+          <span style={{fontSize:10,color:'var(--text3)'}}>{a._count} appts</span></div>;
         const isMain=role==='main';const statusColors={pending:'var(--accent)',met:'var(--green)',postponed:'var(--amber)',flykite:'var(--red)',closed:'var(--gold)'};
         const statusLabels={pending:'Pending',met:'Met ✅',postponed:'Postponed',flykite:'Fly Kite 🪁',closed:'Closed 💰'};
         return<div key={a.id} className="card" style={{marginBottom:8,borderColor:(statusColors[a.followUp]||'var(--border)')+'30'}}>
