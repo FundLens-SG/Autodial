@@ -51,6 +51,9 @@ button:active{transform:scale(.97)}
 .mono{font-family:'JetBrains Mono',monospace}
 @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.06);opacity:.7}}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes freeSlotShimmer{0%,100%{box-shadow:0 0 0 1px rgba(34,197,94,.25),0 0 12px rgba(34,197,94,.15),inset 0 1px 0 rgba(255,255,255,.05)}50%{box-shadow:0 0 0 1px rgba(34,197,94,.45),0 0 24px rgba(34,197,94,.3),inset 0 1px 0 rgba(255,255,255,.08)}}
+.free-slot{background:linear-gradient(135deg,rgba(34,197,94,.12),rgba(16,185,129,.06),rgba(34,197,94,.1));border:1px solid rgba(34,197,94,.3);animation:freeSlotShimmer 3s ease-in-out infinite;position:relative;overflow:hidden}
+.free-slot::before{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent);animation:shimmer 4s infinite}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes glow{0%,100%{box-shadow:var(--glow)}50%{box-shadow:0 0 60px rgba(99,102,241,.25)}}
@@ -1186,6 +1189,37 @@ function getNextRank(monthlyAppts,thresholds){
   var t=thresholds||[0,5,10,15,25,35,50];
   for(let i=0;i<ML_RANKS.length;i++){var cs=t[i]||ML_RANKS[i].cumStars;if(monthlyAppts<cs)return{...ML_RANKS[i],idx:i,cumStars:cs}}return null}
 function getMonthlyAppts(appointments,email){const now=new Date(),y=now.getFullYear(),m=now.getMonth();return appointments.filter(a=>{const d=new Date(a.createdAt);return d.getFullYear()===y&&d.getMonth()===m&&(!email||(a.admin||'').toLowerCase()===email.toLowerCase())}).length}
+// ═══ TIMEZONE-SAFE DATE KEY: returns YYYY-MM-DD in LOCAL time (not UTC) ═══
+// Fixes the "event on wrong day" bug caused by .toISOString().slice(0,10) which is UTC-based.
+function localDateKey(d){if(!d)return'';const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dd=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dd}
+// Returns Sunday of the week containing the given date, at local midnight.
+function startOfWeek(d){const s=new Date(d.getFullYear(),d.getMonth(),d.getDate());s.setDate(s.getDate()-s.getDay());return s}
+// Given a list of events on a specific day and business hours (defaults 9 AM - 9 PM local), return free slot gaps.
+// events: [{start:Date, end:Date}] already for THIS day, sorted by start
+// dayDate: Date at local midnight for the target day
+// Returns: [{start:Date, end:Date, hours:Number}]
+function findFreeSlots(dayDate,events,bizStartHour,bizEndHour){
+  const bs=bizStartHour??9;const be=bizEndHour??21;
+  const dayStart=new Date(dayDate);dayStart.setHours(bs,0,0,0);
+  const dayEnd=new Date(dayDate);dayEnd.setHours(be,0,0,0);
+  // Clamp start to "now" if today
+  const now=new Date();const isToday=dayDate.toDateString()===now.toDateString();
+  let cursor=isToday&&now>dayStart?new Date(Math.ceil(now.getTime()/(15*60000))*(15*60000)):new Date(dayStart);
+  // Sort events by start, merge overlaps, clip to business window
+  const clipped=(events||[]).map(e=>({start:new Date(Math.max(e.start.getTime(),dayStart.getTime())),end:new Date(Math.min(e.end.getTime(),dayEnd.getTime()))}))
+    .filter(e=>e.end>e.start).sort((a,b)=>a.start-b.start);
+  // Merge overlaps
+  const merged=[];
+  clipped.forEach(e=>{if(merged.length&&e.start<=merged[merged.length-1].end){merged[merged.length-1].end=new Date(Math.max(merged[merged.length-1].end.getTime(),e.end.getTime()))}else{merged.push({start:new Date(e.start),end:new Date(e.end)})}});
+  // Walk the business window, gaps between merged events = free slots
+  const slots=[];
+  merged.forEach(e=>{
+    if(cursor<e.start){const hours=(e.start-cursor)/3600000;if(hours>0.05)slots.push({start:new Date(cursor),end:new Date(e.start),hours})}
+    if(e.end>cursor)cursor=new Date(e.end);
+  });
+  if(cursor<dayEnd){const hours=(dayEnd-cursor)/3600000;if(hours>0.05)slots.push({start:new Date(cursor),end:new Date(dayEnd),hours})}
+  return slots;
+}
 const StarRow=({filled,total,color})=><div style={{display:'flex',gap:3,justifyContent:'center'}}>{Array.from({length:Math.min(total,10)}).map((_,i)=><span key={i} style={{fontSize:16,filter:i<filled?'none':'grayscale(1) opacity(.3)',transition:'all .3s'}}>{i<filled?'⭐':'☆'}</span>)}</div>;
 // Keep old tier functions for manage mode pay config compatibility
 const TIER_META=[
@@ -2483,7 +2517,8 @@ function App(){
     // Compute date range based on offset (0=this week, -1=last, +1=next)
     const loadWeekEvents=async()=>{
       const now=new Date();
-      const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+(calWeekOffset*7));
+      // Start of current week = Sunday at local midnight. Offset by calWeekOffset weeks.
+      const start=startOfWeek(now);start.setDate(start.getDate()+(calWeekOffset*7));
       const end=new Date(start.getTime()+7*86400000);
       setCalRefreshing(true);
       try{
@@ -3622,14 +3657,14 @@ function App(){
           <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:'0 0 4px'}}>No shared calendars yet</h3>
           <p style={{fontSize:12,color:'var(--text3)',margin:0}}>Ask your manager to share a calendar with you via Admin Pay → Edit.</p>
         </div>;
-        // Build day buckets for this week
+        // Build day buckets for this week (Sunday-start, LOCAL time — fixes UTC drift bug)
         const now=new Date();
-        const weekStart=new Date(now.getFullYear(),now.getMonth(),now.getDate()+(calWeekOffset*7));
+        const weekStart=startOfWeek(now);weekStart.setDate(weekStart.getDate()+(calWeekOffset*7));
         const weekLabel=calWeekOffset===0?'This Week':calWeekOffset===-1?'Last Week':calWeekOffset===1?'Next Week':(calWeekOffset<0?Math.abs(calWeekOffset)+' weeks ago':'In '+calWeekOffset+' weeks');
         const byDay={};
         weekEvents.forEach(ev=>{
           const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
-          const key=dt.toISOString().slice(0,10);
+          const key=localDateKey(dt); // LOCAL date, not UTC — fixes the "event on wrong day" bug
           if(!byDay[key])byDay[key]=[];
           byDay[key].push(ev);
         });
@@ -3637,10 +3672,14 @@ function App(){
         const days=[];
         for(let i=0;i<7;i++){
           const d=new Date(weekStart.getTime()+i*86400000);
-          const key=d.toISOString().slice(0,10);
-          days.push({key,date:d,events:byDay[key]||[]});
+          // Normalize to local midnight in case DST created a half-hour drift
+          const dLocal=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+          const key=localDateKey(dLocal);
+          days.push({key,date:dLocal,events:(byDay[key]||[]).slice().sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0))});
         }
-        const todayKey=new Date().toISOString().slice(0,10);
+        const todayKey=localDateKey(new Date());
+        // Business hours for free slot detection (local)
+        const BIZ_START=9,BIZ_END=21;
         return<>
           {/* Week navigation header */}
           <div className="card" style={{marginBottom:12,padding:'12px 14px'}}>
@@ -3655,10 +3694,8 @@ function App(){
             <div style={{display:'flex',gap:6,marginTop:10,alignItems:'center'}}>
               {calWeekOffset!==0&&<button onClick={()=>setCalWeekOffset(0)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:700,flex:1}}>⊙ Jump to Today</button>}
               <button onClick={()=>{
-                // Trigger a manual refresh by bumping a ref / causing the effect to re-run
                 setCalRefreshing(true);
-                // Re-fetch immediately using the same code path
-                const now=new Date();const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+(calWeekOffset*7));const end=new Date(start.getTime()+7*86400000);
+                const _now2=new Date();const _start2=startOfWeek(_now2);_start2.setDate(_start2.getDate()+(calWeekOffset*7));const _end2=new Date(_start2.getTime()+7*86400000);
                 let calIds=['primary'];
                 if(role==='admin'){
                   const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
@@ -3668,7 +3705,7 @@ function App(){
                 (async()=>{try{
                   let all=[];
                   for(const cid of calIds){
-                    const evs=cid==='primary'?await gCal.events(start.toISOString(),end.toISOString()):await gCal.eventsFromCal(cid,start.toISOString(),end.toISOString());
+                    const evs=cid==='primary'?await gCal.events(_start2.toISOString(),_end2.toISOString()):await gCal.eventsFromCal(cid,_start2.toISOString(),_end2.toISOString());
                     evs.forEach(e=>{e._calId=cid});all=all.concat(evs);
                   }
                   all.sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
@@ -3680,33 +3717,73 @@ function App(){
                 }catch(e){toast('Refresh failed','err')}finally{setCalRefreshing(false)}})();
               }} style={{padding:'6px 12px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flex:calWeekOffset!==0?0:1,flexShrink:0}}>{calRefreshing?'⟳ Refreshing…':'⟳ Refresh'}</button>
             </div>
-            <p style={{margin:'8px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>{weekEvents.length} events · auto-refreshes every 60s while this tab is open</p>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,margin:'8px 0 0',fontSize:9,color:'var(--text3)'}}>
+              <span>{weekEvents.length} events</span>
+              <span>·</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:8,height:8,borderRadius:2,background:'linear-gradient(135deg,rgba(34,197,94,.6),rgba(16,185,129,.4))',boxShadow:'0 0 6px rgba(34,197,94,.4)'}}/>= 1.5h+ free slot</span>
+              <span>·</span>
+              <span>{BIZ_START}am–{BIZ_END-12}pm</span>
+            </div>
           </div>
           {/* Day list */}
           {days.map(d=>{
             const isToday=d.key===todayKey;
             const isPast=d.key<todayKey;
             const dayLabel=d.date.toLocaleDateString('en-SG',{weekday:'long',day:'numeric',month:'short'});
-            return<div key={d.key} className="card" style={{marginBottom:8,padding:'12px 14px',opacity:isPast&&!isToday?0.6:1,borderColor:isToday?'rgba(99,102,241,.3)':'var(--border)'}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:d.events.length?8:0}}>
-                <p style={{margin:0,fontSize:12,fontWeight:800,color:isToday?'var(--accent2)':'#f1f5f9'}}>{dayLabel}{isToday?' · TODAY':''}</p>
-                <span style={{fontSize:9,color:'var(--text3)'}}>{d.events.length?d.events.length+' event'+(d.events.length===1?'':'s'):'Free'}</span>
+            // Compute free slots for this day (only for today and future days)
+            const _evWithTimes=d.events.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
+            const freeSlots=isPast?[]:findFreeSlots(d.date,_evWithTimes,BIZ_START,BIZ_END);
+            const bigSlots=freeSlots.filter(s=>s.hours>=1.5);
+            const totalFreeHrs=freeSlots.reduce((a,s)=>a+s.hours,0);
+            return<div key={d.key} className="card" style={{marginBottom:8,padding:'12px 14px',opacity:isPast&&!isToday?0.55:1,borderColor:isToday?'rgba(99,102,241,.4)':'var(--border)',background:isToday?'linear-gradient(135deg,rgba(99,102,241,.04),var(--bg2))':undefined}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:d.events.length||bigSlots.length?8:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <p style={{margin:0,fontSize:12,fontWeight:800,color:isToday?'var(--accent2)':'#f1f5f9'}}>{dayLabel}{isToday?' · TODAY':''}</p>
+                  {bigSlots.length>0&&<span className="pill" style={{background:'rgba(34,197,94,.15)',color:'#22c55e',fontSize:9,fontWeight:700,border:'1px solid rgba(34,197,94,.3)'}}>✨ {bigSlots.length} open · {totalFreeHrs.toFixed(1)}h</span>}
+                </div>
+                <span style={{fontSize:9,color:'var(--text3)'}}>{d.events.length?d.events.length+' event'+(d.events.length===1?'':'s'):isPast?'Past':'Free'}</span>
               </div>
-              {d.events.map((ev,i)=>{
-                const es=new Date(ev.start?.dateTime||ev.start?.date||0);
-                const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
-                const allDay=!ev.start?.dateTime;
-                const timeStr=allDay?'All day':es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})+'–'+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'});
-                return<div key={i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
-                  <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:'var(--accent)',flexShrink:0}}/>
-                  <div style={{flex:1,minWidth:0}}>
-                    <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:'var(--accent2)'}}>{timeStr}</p>
-                    <p style={{margin:'2px 0 0',fontSize:12,fontWeight:600,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</p>
-                    {ev.location&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📍 {ev.location}</p>}
-                  </div>
-                </div>;
-              })}
-              {d.events.length===0&&<p style={{margin:0,fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>No events</p>}
+              {/* Timeline: interleave events + free slots in chronological order */}
+              {(()=>{const timeline=[];
+                d.events.forEach(ev=>{const es=new Date(ev.start?.dateTime||ev.start?.date||0);timeline.push({_type:'event',ev,sortKey:es.getTime()})});
+                freeSlots.forEach(s=>{timeline.push({_type:'slot',slot:s,sortKey:s.start.getTime()})});
+                timeline.sort((a,b)=>a.sortKey-b.sortKey);
+                return timeline.map((item,i)=>{
+                  if(item._type==='event'){
+                    const ev=item.ev;const es=new Date(ev.start?.dateTime||ev.start?.date||0);const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
+                    const allDay=!ev.start?.dateTime;
+                    const timeStr=allDay?'All day':es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
+                    return<div key={'e'+i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
+                      <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:'var(--accent)',flexShrink:0,minHeight:28}}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:'var(--accent2)'}}>{timeStr}</p>
+                        <p style={{margin:'2px 0 0',fontSize:12,fontWeight:600,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</p>
+                        {ev.location&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📍 {ev.location}</p>}
+                      </div>
+                    </div>;
+                  }
+                  // Free slot row
+                  const s=item.slot;const isBig=s.hours>=1.5;
+                  const timeStr=s.start.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+s.end.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
+                  const hrsLabel=s.hours>=1?s.hours.toFixed(s.hours%1===0?0:1)+'h':Math.round(s.hours*60)+'m';
+                  return<div key={'s'+i} className={isBig?'free-slot':undefined} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:isBig?undefined:'rgba(148,163,184,.04)',border:isBig?undefined:'1px dashed var(--border)'}}>
+                    <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:isBig?'linear-gradient(180deg,#22c55e,#10b981)':'var(--text3)',flexShrink:0,minHeight:28,boxShadow:isBig?'0 0 8px rgba(34,197,94,.5)':'none'}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:isBig?'#22c55e':'var(--text3)'}}>{timeStr}</p>
+                      <p style={{margin:'2px 0 0',fontSize:11,fontWeight:600,color:isBig?'#86efac':'var(--text3)'}}>{isBig?'✨ Free · ':'Gap · '}{hrsLabel}</p>
+                    </div>
+                    {isBig&&role!=='admin'&&gOk&&<button onClick={async()=>{
+                      const title=prompt('New event title (e.g. "Call Winnie", "Prep meeting"):');
+                      if(!title)return;
+                      try{toast('Creating event…','info');
+                        const evt=await gCal.create(title,'Created from AutoDial free slot',s.start.toISOString(),s.end.toISOString(),[]);
+                        if(evt?.id){toast('✓ Event created');setWeekEvents(p=>[...p,{id:evt.id,summary:title,start:{dateTime:s.start.toISOString()},end:{dateTime:s.end.toISOString()},_calId:'primary'}])}
+                        else{toast('Create failed','err')}
+                      }catch(e){toast('Create failed: '+(e.message||e),'err')}
+                    }} style={{padding:'6px 10px',borderRadius:8,background:'linear-gradient(135deg,rgba(34,197,94,.2),rgba(16,185,129,.12))',color:'#22c55e',fontSize:10,fontWeight:800,border:'1px solid rgba(34,197,94,.4)',flexShrink:0,position:'relative',zIndex:1}}>+ Book</button>}
+                  </div>;
+                })})()}
+              {d.events.length===0&&freeSlots.length===0&&<p style={{margin:0,fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>{isPast?'No events':'No events · Outside business hours'}</p>}
             </div>;
           })}
         </>;
@@ -5421,11 +5498,11 @@ function App(){
         </div>
         {/* ═══ In-app calendar view — shows this week's events to prevent booking clashes ═══ */}
         {gOk&&weekEvents.length>0&&(()=>{
-          // Group events by day
+          // Group events by day (LOCAL time — fixes UTC drift bug)
           const byDay={};
           weekEvents.forEach(ev=>{
             const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
-            const dayKey=dt.toISOString().slice(0,10);
+            const dayKey=localDateKey(dt);
             if(!byDay[dayKey])byDay[dayKey]=[];
             byDay[dayKey].push(ev);
           });
@@ -5452,7 +5529,7 @@ function App(){
             {days.map(dayKey=>{
               const dayDate=new Date(dayKey+'T00:00:00');
               const label=dayDate.toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'});
-              const isToday=dayKey===new Date().toISOString().slice(0,10);
+              const isToday=dayKey===localDateKey(new Date());
               return<div key={dayKey} style={{marginBottom:6}}>
                 <p style={{margin:'0 0 3px',fontSize:10,fontWeight:700,color:isToday?'var(--accent2)':'var(--text2)'}}>{label}{isToday?' · Today':''}</p>
                 {byDay[dayKey].map((ev,i)=>{
