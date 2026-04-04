@@ -1679,9 +1679,10 @@ function App(){
         if(role==='admin'&&_SB){
           try{const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_appts_'+myEmail).single();
             if(ar.data&&ar.data.biz_name){const shared=JSON.parse(ar.data.biz_name);
-              if(shared.length){setAppointments(prev=>{
-                const existIds=new Set(prev.map(a=>a.id));
-                const newAppts=shared.filter(a=>!existIds.has(a.id));
+              if(shared.length){const delIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+                setAppointments(prev=>{
+                const existIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
+                const newAppts=shared.filter(a=>{const aid=a.id||a.phone+'_'+(a.createdAt||'');return!existIds.has(aid)&&!delIds.has(aid)});
                 if(newAppts.length)console.log('[AutoDial] Loaded '+newAppts.length+' shared appointments');
                 return newAppts.length?[...prev,...newAppts]:prev})}}}catch(e){}
           // Load session log from Supabase
@@ -1708,7 +1709,9 @@ function App(){
         if(role!=='admin'&&_SB){
           try{const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+myEmail).single();
             if(ar.data&&ar.data.biz_name){const myA=JSON.parse(ar.data.biz_name);
-              if(myA.length>appointments.length){setAppointments(myA);console.log('[AutoDial] Cross-device: loaded '+myA.length+' appointments')}}}catch(e){}
+              if(myA.length){const delIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+                const filtered=myA.filter(a=>!delIds.has(a.id||a.phone+'_'+(a.createdAt||'')));
+                if(filtered.length>appointments.length){setAppointments(filtered);console.log('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
               if(sl.length>sessionLog.length){setSessionLog(sl);console.log('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}}catch(e){}
@@ -1732,7 +1735,8 @@ function App(){
           }
           if(cloud.adminConfigs&&!Object.keys(adminConfigs).length)setAdminConfigs(cloud.adminConfigs);
           if(cloud.sessions?.length&&!sessionLog.length)setSessionLog(cloud.sessions);
-          if(cloud.appointments?.length&&!appointments.length)setAppointments(cloud.appointments);
+          if(cloud.appointments?.length&&!appointments.length){const _dIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+            const _filt=cloud.appointments.filter(a=>!_dIds.has(a.id||a.phone+'_'+(a.createdAt||'')));if(_filt.length)setAppointments(_filt)}
           if(cloud.incentives?.length&&!incentives.length)setIncentives(cloud.incentives);
           if(cloud.payments?.length&&!paymentHistory.length)setPaymentHistory(cloud.payments);
           if(cloud.userState){
@@ -1923,7 +1927,13 @@ function App(){
         const st=p('stabs_');if(st?.length)setSTabs(prev=>st.length>prev.length?st:prev);
         const gf=p('gamify_');if(gf){if(gf.bestStreak)setBestStreak(prev=>gf.bestStreak>prev?gf.bestStreak:prev);if(gf.achievements?.length)setAchievements(prev=>gf.achievements.length>prev.length?gf.achievements:prev)}
         const sl=p('slog_');if(sl?.length)setSessionLog(prev=>sl.length>prev.length?sl:prev);
-        const ap=p('appts_');if(ap?.length)setAppointments(prev=>ap.length>prev.length?ap:prev);
+        const ap=p('appts_');if(ap?.length)setAppointments(prev=>{
+          const delIds=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+          const filtered=ap.filter(a=>!delIds.has(a.id||a.phone+'_'+(a.createdAt||'')));
+          // Merge: add cloud items not in local, but never re-add deleted ones
+          const localIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
+          const newFromCloud=filtered.filter(a=>!localIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!delIds.has(a.id||a.phone+'_'+(a.createdAt||'')));
+          return newFromCloud.length?[...prev,...newFromCloud]:prev});
         const ts=p('ts_');if(ts?.ts)setTotalSets(prev=>ts.ts>prev?ts.ts:prev);
 
         window._lastPull=Date.now();
@@ -2620,7 +2630,10 @@ function App(){
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{fontSize:10,color:'var(--text3)'}}>{appointments.length} total</span>
-          {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;setAppointments([]);save('appts',[]);cloudSave('appts',[]);
+          {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
+              // Track all IDs as deleted so sync never brings them back
+              const allIds=appointments.map(a=>a.id||a.phone+'_'+(a.createdAt||''));localStorage.setItem('_deletedApptIds',JSON.stringify(allIds.slice(-500)));
+              setAppointments([]);save('appts',[]);cloudSave('appts',[]);
               // Clear shared appointment keys for all admins
               if(_SB&&role!=='admin'){Object.keys(adminConfigs).forEach(email=>{
                 _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+email.toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})});
@@ -2658,7 +2671,11 @@ function App(){
             </div>
             <div style={{display:'flex',alignItems:'center',gap:4}}>
               <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
-              <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?'))setAppointments(p=>p.filter(x=>x.id!==a.id))}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
+              <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?')){
+                // Track deleted ID so cloud sync never brings it back
+                const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+                delIds.push(a.id||a.phone+'_'+(a.createdAt||''));localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
+                setAppointments(p=>p.filter(x=>x.id!==a.id))}}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
             </div>
           </div>
           
@@ -2672,6 +2689,17 @@ function App(){
               <button key={k} onClick={()=>{
                 const now=new Date().toISOString();
                 setAppointments(p=>p.map(x=>x.id===a.id?{...x,followUp:k,followUpDate:now}:x));
+                // Write status update to Google Sheet "Appointments Set" tab
+                const tsId=myCfg.timesheetId||cfg.sheetId;
+                if(tsId&&localStorage.getItem('ad_gt')){
+                  try{gSheets.vals(tsId,'Appointments Set!A:L').then(rows=>{
+                    if(!rows||rows.length<2)return;
+                    // Find row by matching phone number + appt date
+                    for(let ri=1;ri<rows.length;ri++){
+                      if((rows[ri][3]||'')===(a.phone||'')&&(rows[ri][4]||'')===(a.apptDate||'')){
+                        const cell='Appointments Set!I'+(ri+1); // Column I = Status/Follow-Up
+                        gSheets.put(tsId,cell,k==='met'?'Met':k==='closed'?'Closed':k==='flykite'?'Fly Kite':k==='postponed'?'Postponed':'Pending').catch(()=>{});
+                        break}}}).catch(()=>{})}catch(e){}}
                 // Met → create incentive with CURRENT date (not appt creation date)
                 // This ensures it lands in the current billing cycle even if appt was months ago
                 if(k==='met'){
@@ -3985,10 +4013,10 @@ function App(){
               if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs}:a));
               setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
               toast('Event created!');
-              // Write to Google Sheet Appointments Set tab
-              const apptSheetId=cfg.sheetId;
+              // Write to Google Sheet Appointments Set tab (use admin's sheet if available)
+              const apptSheetId=myCfg.timesheetId||cfg.sheetId;
               if(apptSheetId&&localStorage.getItem('ad_gt')){
-                gSheets.appendAppt(apptSheetId,{name:lead?.name,phone:lead?.phone,apptDate,apptTime,location:apptLocation,duration:dur,remarks:apptObs},userName)}}catch(ev){toast(ev.message,'err')}
+                gSheets.appendAppt(apptSheetId,{name:lead?.name,phone:lead?.phone,apptDate,apptTime,location:apptLocation,duration:dur,remarks:apptObs},userName).catch(()=>{})}}catch(ev){toast(ev.message,'err')}
             setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
           <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
         </div>
