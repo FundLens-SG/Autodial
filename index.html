@@ -25,7 +25,7 @@
 <script>
 if(!navigator.locks)navigator.locks={request:(n,o,c)=>{if(typeof o==='function')c=o;return Promise.resolve(c({name:n}))}};
 (function(){var w=console.warn;console.warn=function(){if(typeof(arguments[0])==='string'&&(arguments[0].includes('gotrue')||arguments[0].includes('lock:')))return;w.apply(console,arguments)}})();
-if('serviceWorker'in navigator&&!location.hostname.includes('claude.ai'))window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js')});
+if('serviceWorker'in navigator&&!location.hostname.includes('claude')&&location.protocol!=='blob:')window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})});
 </script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -1464,6 +1464,21 @@ function App(){
   useEffect(()=>{save('activeSession',session)},[session]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[totalStars,setTotalStars]=useState(load('totalStars')||0);
+  const[starBank,setStarBank]=useState(load('starBank')||0); // Lifetime accumulated stars
+  const[rankStarsAwarded,setRankStarsAwarded]=useState(load('rankStarsAwarded')||[]); // Rank indices awarded stars this month
+  // Monthly reset: on 1st of month, bank the stars and reset monthly tracking
+  useEffect(()=>{
+    const lastReset=localStorage.getItem('_lastStarReset')||'';
+    const thisMonth=new Date().toISOString().slice(0,7); // "2026-04"
+    if(lastReset!==thisMonth){
+      // New month! Bank current stars and reset
+      if(totalStars>0){setStarBank(p=>{const nb=p+totalStars;save('starBank',nb);return nb});
+        toast('🏦 '+totalStars+' stars banked! New month, new grind.','info')}
+      setTotalStars(0);save('totalStars',0);
+      setRankStarsAwarded([]);save('rankStarsAwarded',[]);
+      localStorage.setItem('_lastStarReset',thisMonth);
+    }
+  },[]);
   const[promotionLog,setPromotionLog]=useState(load('promo')||[]);  // [{date,fromTier,toTier,atSets,newRate}]
   const[milestone,setMilestone]=useState(null);const[confetti,setConfetti]=useState(false);
   const[sessionLog,setSessionLog]=useState(load('slog')||[]);
@@ -1572,7 +1587,9 @@ function App(){
 
   },[totalSets]);
   useEffect(()=>{save('totalStars',totalStars);cloudSave('totalStars',totalStars);
-    if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'stars_'+_user.email.toLowerCase(),biz_name:JSON.stringify({stars:totalStars,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})},[totalStars]);
+    if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'stars_'+_user.email.toLowerCase(),biz_name:JSON.stringify({stars:totalStars,bank:starBank,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})},[totalStars]);
+  useEffect(()=>{save('starBank',starBank)},[starBank]);
+  useEffect(()=>{save('rankStarsAwarded',rankStarsAwarded)},[rankStarsAwarded]);
 
   useEffect(()=>{save('promo',promotionLog);cloudSave('promo',promotionLog);
     if(_SB&&_user&&window._cloudReady&&promotionLog.length)_SB.from('autodial_admin_config').upsert({admin_email:'promo_'+_user.email.toLowerCase(),biz_name:JSON.stringify(promotionLog)},{onConflict:'admin_email'}).catch(function(){})},[promotionLog]);
@@ -2103,9 +2120,13 @@ function App(){
         const newMonthly=monthlyAppts+1; // +1 for this new set
         const oldRank=getRank(monthlyAppts,cfg.starThresholds);const newRank=getRank(newMonthly);
         if(newRank.idx>oldRank.idx){
-          // RANK UP! 🎉
+          // RANK UP! Award milestone stars 🎉
+          const mStars=(cfg.milestoneStars||[0,10,25,50,100,200,500])[newRank.idx]||0;
+          if(role!=='admin'&&mStars>0&&!rankStarsAwarded.includes(newRank.idx)){
+            setTotalStars(p=>p+mStars);
+            setRankStarsAwarded(p=>{const n=[...p,newRank.idx];save('rankStarsAwarded',n);return n})}
           setTimeout(()=>{setConfetti(true);setTimeout(()=>setConfetti(false),4000);
-            setMilestone({title:'RANK UP!',sub:`${oldRank.label} → ${newRank.label}\n\n${newMonthly} appointments this month!\nKeep pushing to ${getNextRank(newMonthly)?.label||'glory'}!`,emoji:newRank.emoji})},300)}
+            setMilestone({title:'RANK UP!',sub:`${oldRank.label} → ${newRank.label}${mStars>0?'\n\n⭐ +'+mStars+' stars earned!':''}\n\n${newMonthly} appointments this month!\nKeep pushing to ${getNextRank(newMonthly)?.label||'glory'}!`,emoji:newRank.emoji})},300)}
         else if(s.sets===3){setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'ON FIRE! 🔥',sub:`${s.sets} appointments this session!\nYou're crushing it!`,emoji:'🔥'})}
         else if(s.sets===5){setConfetti(true);setTimeout(()=>setConfetti(false),3000);setMilestone({title:'UNSTOPPABLE!',sub:`${s.sets} appointments in ONE session!\nLegendary performance!`,emoji:'⚡'})}
       }
@@ -2130,8 +2151,6 @@ function App(){
         return ns});
       
       if(session){const s=session.sets+1;
-        // Main earns stars per set
-        if(role!=='admin'){setTotalStars(p=>p+(cfg.starsPerSet||3))}
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
         if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,4)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
@@ -2396,7 +2415,7 @@ function App(){
             <span>{rank.emoji} → {nextRank.emoji} {nextRank.label}</span>
             <span style={{color:nextRank.color,fontWeight:700}}>{monthlyAppts+session.sets}/{nextRank.cumStars} ⭐</span>
           </div>
-          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,((monthlyAppts+session.sets)/nextRank.cumStars)*100)+'%',background:'linear-gradient(90deg,'+displayRank.color+','+displayNext.color+')',transition:'width .5s'}}/></div>
+          <div style={{height:6,borderRadius:3,background:'var(--bg)',overflow:'hidden'}}><div style={{height:'100%',borderRadius:3,width:Math.min(100,((monthlyAppts+session.sets)/(nextRank.cumStars||1))*100)+'%',background:'linear-gradient(90deg,'+rank.color+','+nextRank.color+')',transition:'width .5s'}}/></div>
         </div>}
       </div>}
 
@@ -3591,42 +3610,42 @@ function App(){
               </div>})}
           </div>
         </div>
-        {role!=='admin'&&<div style={{padding:'10px 12px',borderRadius:10,background:'var(--bg)',border:'1px solid rgba(240,180,41,.2)',marginBottom:10}}>
-          <p style={{margin:'0 0 8px',fontSize:12,fontWeight:700,color:'var(--gold)'}}>⭐ Star Ranks {isCreatorUser?'(Edit Thresholds)':'(for Main Callers)'}</p>
-          {isCreatorUser?
-            <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
-              {ML_RANKS.map((r,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:3,fontSize:9}}>
-                <span>{r.emoji}</span>
-                <span style={{color:'var(--text3)'}}>{r.label}:</span>
-                <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??''} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:36,fontSize:9,textAlign:'center',padding:'2px'}} disabled={i===0}/>
+        {role!=='admin'&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System {isCreatorUser&&'(Owner Edit)'}</p>
+            <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              <span style={{fontSize:9,color:'var(--text3)'}}>🏦 Star Bank:</span>
+              <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{starBank+totalStars} ⭐</span>
+            </div>
+          </div>
+          {isCreatorUser?<>
+            <p style={{margin:'0 0 6px',fontSize:9,fontWeight:600,color:'var(--text3)'}}>Min Appts/Month per Rank + Milestone Stars Awarded:</p>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:10}}>
+              {ML_RANKS.map((r,i)=><div key={i} style={{textAlign:'center',padding:'6px 4px',borderRadius:8,background:'var(--bg2)',border:'1px solid var(--border)'}}>
+                <span style={{fontSize:14}}>{r.emoji}</span>
+                <p style={{margin:'2px 0',fontSize:8,color:r.color,fontWeight:700}}>{r.label}</p>
+                <label style={{fontSize:7,color:'var(--text3)'}}>Min Appts</label>
+                <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??0} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px'}} disabled={i===0}/>
+                <label style={{fontSize:7,color:'var(--gold)'}}>⭐ Stars</label>
+                <input type="number" min="0" value={(cfg.milestoneStars||[0,10,25,50,100,200,500])[i]??0} onChange={e=>{const t=[...(cfg.milestoneStars||[0,10,25,50,100,200,500])];t[i]=+e.target.value||0;setCfg(s=>({...s,milestoneStars:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px',borderColor:'rgba(240,180,41,.3)'}}/>
               </div>)}
             </div>
-          :<div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-            {ML_RANKS.map((r,i)=>{const threshold=(cfg.starThresholds||[0,5,10,15,25,35,50])[i]||0;const isActive=monthlyAppts>=threshold;
-              return<div key={i} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:8,
-                background:isActive?r.color+'18':'var(--bg3)',border:'1px solid '+(isActive?r.color+'40':'var(--border)'),opacity:isActive?1:0.5}}>
-                <span style={{fontSize:14}}>{r.emoji}</span>
-                <div><p style={{margin:0,fontSize:9,fontWeight:700,color:isActive?r.color:'var(--text3)'}}>{r.label}</p>
-                <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{threshold} appts</p></div>
+            <div style={{display:'flex',gap:6}}>
+              <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Dial</label>
+              <input type="number" min="0" step="0.1" value={cfg.starsPerDial||0.1} onChange={e=>setCfg(s=>({...s,starsPerDial:parseFloat(e.target.value)||0.1}))} style={{textAlign:'center',fontSize:12,padding:'6px'}}/></div>
+            </div>
+          </>:<div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            {ML_RANKS.map((r,i)=>{const threshold=(cfg.starThresholds||[0,5,10,15,25,35,50])[i]||0;
+              const mStars=(cfg.milestoneStars||[0,10,25,50,100,200,500])[i]||0;
+              const isActive=monthlyAppts>=threshold;const isAwarded=rankStarsAwarded.includes(i);
+              return<div key={i} style={{display:'flex',alignItems:'center',gap:4,padding:'5px 10px',borderRadius:10,
+                background:isActive?r.color+'18':'var(--bg3)',border:'1px solid '+(isActive?r.color+'40':'var(--border)'),opacity:isActive?1:0.45,position:'relative'}}>
+                <span style={{fontSize:16}}>{r.emoji}</span>
+                <div><p style={{margin:0,fontSize:10,fontWeight:700,color:isActive?r.color:'var(--text3)'}}>{r.label}</p>
+                <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>≥{threshold} appts</p>
+                {mStars>0&&<p style={{margin:0,fontSize:7,color:isAwarded?'var(--green)':'var(--gold)'}}>{isAwarded?'✓ ':''}+{mStars}⭐</p>}</div>
               </div>})}
           </div>}
-        </div>}
-        {isCreatorUser&&<div style={{marginBottom:12,padding:'10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
-          <p style={{margin:'0 0 6px',fontSize:12,fontWeight:700,color:'var(--accent2)'}}>⭐ Star System (Calling Mode)</p>
-          <div style={{display:'flex',gap:6,marginBottom:6}}>
-            <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Set</label>
-            <input type="number" min="1" value={cfg.starsPerSet||3} onChange={e=>setCfg(s=>({...s,starsPerSet:+e.target.value||3}))} style={{textAlign:'center',fontSize:12,padding:'6px'}}/></div>
-            <div style={{flex:1}}><label style={{fontSize:8,color:'var(--text3)'}}>Stars per Dial</label>
-            <input type="number" min="0" step="0.1" value={cfg.starsPerDial||0.1} onChange={e=>setCfg(s=>({...s,starsPerDial:parseFloat(e.target.value)||0.1}))} style={{textAlign:'center',fontSize:12,padding:'6px'}}/></div>
-          </div>
-          <p style={{margin:'0 0 4px',fontSize:9,fontWeight:600,color:'var(--text3)'}}>ML Rank Thresholds (total stars needed):</p>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:4}}>
-            {ML_RANKS.slice(0,8).map((r,i)=><div key={i} style={{textAlign:'center'}}>
-              <span style={{fontSize:10}}>{r.emoji}</span>
-              <p style={{margin:0,fontSize:7,color:r.color,fontWeight:600}}>{r.label}</p>
-              <input type="number" min="0" value={(cfg.mlThresholds||[])[i]??r.cumStars} onChange={e=>{const t=[...(cfg.mlThresholds||ML_RANKS.map(x=>x.cumStars))];t[i]=+e.target.value;setCfg(s=>({...s,mlThresholds:t}))}} style={{textAlign:'center',fontSize:9,padding:'3px',width:'100%'}}/>
-            </div>)}
-          </div>
         </div>}
         {role!=='admin'&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div>
