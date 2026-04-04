@@ -1,4 +1,4 @@
-# 📞 AutoDial Pro — User Guide
+# 📞 AutoDial — User Guide
 
 **The cold-calling power tool
 
