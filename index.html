@@ -1416,11 +1416,16 @@ function App(){
   });
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
-  const[running,setRunning]=useState(()=>{const s=load('activeSession');return s&&!s.ended?true:false});
+  const[running,setRunning]=useState(()=>{const s=load('activeSession');
+    // Safety: clear sessions older than 24h or sessions with no startTime
+    if(s&&!s.ended&&(!s.startTime||Date.now()-s.startTime>86400000)){save('activeSession',null);return false}
+    return s&&!s.ended?true:false});
   const[curIdx,setCurIdx]=useState(()=>load('curIdx')||-1);
   useEffect(()=>{save('curIdx',curIdx)},[curIdx]);
   const[countdown,setCountdown]=useState(0);
-  const[phase,setPhase]=useState('idle');
+  const[phase,setPhase]=useState(()=>{
+    // If running was restored but no valid session, reset to idle
+    const s=load('activeSession');if(!s||s.ended)return'idle';return'idle'});
   const[tab,setTab]=useState(role==='admin'?'dial':'leads');
   const[mainMode,setMainMode]=useState(load('mainMode')||'manage'); // 'call' or 'manage' (Main only)
   const[search,setSearch]=useState('');
@@ -1439,7 +1444,11 @@ function App(){
     if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'stabs_'+_user.email.toLowerCase(),biz_name:JSON.stringify(sTabs)},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}}},[sTabs]);const[sLoad,setSLoad]=useState(false);
 
   const[sheetQ,setSheetQ]=useState('');const[sheetResults,setSheetResults]=useState([]);const[sheetSearching,setSheetSearching]=useState(false);
-  const[session,setSession]=useState(()=>load('activeSession')||null);
+  const[session,setSession]=useState(()=>{
+    const s=load('activeSession');
+    // Clear stale sessions (>24h old or corrupted)
+    if(s&&!s.ended&&(!s.startTime||Date.now()-s.startTime>86400000)){save('activeSession',null);return null}
+    return s||null});
   const[streak,setStreak]=useState(0);
   const[bestStreak,setBestStreak]=useState(load('bestStreak')||0);
   const[achievements,setAchievements]=useState(load('achievements')||[]);
@@ -1801,6 +1810,14 @@ function App(){
         if(!load('bestStreak')&&!load('achievements'))
           await _hs('gamify_'+myEmail,d=>{if(d.bestStreak)setBestStreak(d.bestStreak);if(d.achievements?.length)setAchievements(d.achievements)});
       }
+      // Cross-device session check — if another device ended the session, clear it here
+      if(session&&!session.ended&&_SB){
+        try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sess_'+myEmail).single();
+          if(sr.data&&sr.data.biz_name){const sd=JSON.parse(sr.data.biz_name);
+            if(sd.ended&&sd.endTime&&sd.endTime>session.startTime){
+              console.log('[AutoDial] Session was ended on another device');
+              setSession(null);setRunning(false);setPhase('idle');save('activeSession',null);
+              toast('Session ended on another device','info')}}}catch(e){}}
       // Auto-refresh Google via Worker (silent, no popup)
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
         try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
@@ -2074,6 +2091,8 @@ function App(){
     DB.saveSess(s,_user?.id,myEmail);
     DB.notify(null,'session_end','Session ended: '+myEmail,s.sets+' appts | '+rank.label,{email:myEmail,sets:s.sets,rank:rank.label});
     setCallLog([]);syncSend('end',{session:s});syncSend('adminSession',{session:s,email:myEmail});
+    // Sync session end to Supabase so other devices know
+    if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'sess_'+_user.email.toLowerCase(),biz_name:JSON.stringify({ended:true,endTime:Date.now()})},{onConflict:'admin_email'}).catch(function(){});
     if(localStorage.getItem('ad_gt')){const tsId=myCfg.timesheetId||cfg.sheetId||'';
       if(tsId){gSheets.ensureTabs(tsId,['Timesheet','Appointments Set','Pay'])}
       gTimesheet.append(s,userName,myCfg,tsId||undefined)}};
@@ -2171,7 +2190,7 @@ function App(){
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
     if(phase==='waiting'&&countdown===0&&running&&cur){setPhase('calling');dial(cur.phone)}},[phase,countdown,running,cur,dial]);
 
-  const startDial=(chosenSlot)=>{if(!session||session.ended){const slots=(myCfg.sessionSlots||[]).filter(sl=>n(sl.hours,0)>0);if(slots.length>1&&!chosenSlot){setShowSlotPicker(true);return}startSession(chosenSlot||slots[0]||null)}const f=getNextDialable(leads,-1,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads','err');return}
+  const startDial=(chosenSlot)=>{if(!session||session.ended){const slots=(myCfg.sessionSlots||[]).filter(sl=>n(sl.hours,0)>0);if(slots.length>1&&!chosenSlot){setShowSlotPicker(true);return}startSession(chosenSlot||slots[0]||null)}const f=getNextDialable(leads,-1,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});if(f===-1){toast('No eligible leads — session cleared','err');setSession(null);setRunning(false);setPhase('idle');save('activeSession',null);return}
     setCurIdx(f);setRunning(true);setPhase('calling');setTab('dial');setTimeout(()=>dial(leads[f].phone),500);syncSend('start',{curIdx:f,phase:'calling',session:{startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false},phone:leads[f].phone,leads})};
   const pauseDial=()=>{setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);syncSend('pause',{})};
 
