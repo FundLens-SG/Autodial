@@ -2296,7 +2296,7 @@ function App(){
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {tab==='appts'&&<div className='content-pad'>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-        <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'Admin Appointments'}</h3>
+        <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <span style={{fontSize:10,color:'var(--text3)'}}>{appointments.filter(a=>isCallMode?(a.admin===myEmail||!a.admin):a.admin!==myEmail).length} total</span>
       </div>
       <input value={apptSearch} onChange={e=>setApptSearch(e.target.value)} placeholder="🔍 Search appointments…" style={{marginBottom:10}}/>
@@ -3050,12 +3050,11 @@ function App(){
                     <button onClick={async()=>{try{toast('Importing appointments...','info');
                       const vals=await gSheets.vals(ac.timesheetId,ac._detectedAppt);
                       if(!vals||vals.length<2){toast('Empty tab','err');return}
-                      // Find header row (might not be row 0 - scan first 5 rows)
                       let hdrRow=-1;
                       for(let r=0;r<Math.min(5,vals.length);r++){
-                        const row=(vals[r]||[]).map(h=>(h||'').toString().toLowerCase());
-                        if(row.some(h=>/name|client|prospect/i.test(h))&&row.some(h=>/phone|hp|mobile|number|date|time/i.test(h))){hdrRow=r;break}}
-                      if(hdrRow<0){toast('No header row found','err');return}
+                        const row=(vals[r]||[]).map(h=>(h||'').toString().toLowerCase().trim());
+                        if(row.some(h=>/name/i.test(h))&&(row.some(h=>/phone|hp|number|date|time/i.test(h)))){hdrRow=r;break}}
+                      if(hdrRow<0){toast('No header row found (need Name + Phone/Date columns)','err');return}
                       const headers=vals[hdrRow].map(h=>(h||'').toString().toLowerCase());
                       const nameIdx=headers.findIndex(h=>/^name$|client|prospect|full.?name/i.test(h));
                       const dateIdx=headers.findIndex(h=>/^date$/i.test(h));
@@ -3101,47 +3100,42 @@ function App(){
                     <button onClick={async()=>{try{toast('Importing timesheet...','info');
                       const vals=await gSheets.vals(ac.timesheetId,ac._detectedTs);
                       if(!vals||vals.length<2){toast('Empty tab','err');return}
-                      // Find header row
                       let hdrRow=-1;
                       for(let r=0;r<Math.min(5,vals.length);r++){
-                        const row=(vals[r]||[]).map(h=>(h||'').toString().toLowerCase());
+                        const row=(vals[r]||[]).map(h=>(h||'').toString().toLowerCase().trim());
+                        if(row.some(h=>/day/i.test(h))&&row.some(h=>/date/i.test(h))){hdrRow=r;break}
                         if(row.some(h=>/date/i.test(h))&&row.some(h=>/time|hour|start/i.test(h))){hdrRow=r;break}}
-                      if(hdrRow<0){toast('No timesheet headers found','err');return}
-                      const headers=vals[hdrRow].map(h=>(h||'').toString().toLowerCase());
+                      if(hdrRow<0){toast('No timesheet headers found (need Day/Date columns)','err');return}
+                      const headers=vals[hdrRow].map(h=>(h||'').toString().toLowerCase().trim());
                       const dayIdx=headers.findIndex(h=>/^day$/i.test(h));
                       const dateIdx=headers.findIndex(h=>/^date$/i.test(h));
-                      const startIdx=headers.findIndex(h=>/start|time.?start|clock.?in/i.test(h));
-                      const endIdx=headers.findIndex(h=>/end|time.?end|clock.?out/i.test(h));
-                      const hoursIdx=headers.findIndex(h=>/total.?hour|hour|duration/i.test(h));
-                      const setIdx=headers.findIndex(h=>/appt|set|appointment/i.test(h));
+                      const hoursIdx=headers.findIndex(h=>/total.?hour/i.test(h));
+                      const setIdx=headers.findIndex(h=>/appt|set/i.test(h));
                       const paidIdx=headers.findIndex(h=>/^paid$/i.test(h));
-                      const totalIdx=headers.findIndex(h=>/total.?hourly|hourly|wage|rate/i.test(h));
-                      const metIdx=headers.findIndex(h=>/met.?incentive|incentive/i.test(h));
-                      const chaIdx=headers.findIndex(h=>/cha.?ching|total.?pay|grand|net/i.test(h));
-                      let pastSessions=[];let skipped=0;
+                      const hourlyIdx=headers.findIndex(h=>/total.?hourly|hourly|\/day/i.test(h));
+                      let pastSessions=[];let skipped=0;let totalImportedSets=0;
                       for(let r=hdrRow+1;r<vals.length;r++){
                         const row=vals[r]||[];
-                        const dateVal=row[dateIdx>=0?dateIdx:1];
                         const dayVal=(row[dayIdx>=0?dayIdx:0]||'').toString().trim();
-                        // Skip week headers, sample rows, empty rows
-                        if(!dateVal||/^week|^sample|^$/i.test(dayVal)||/^week/i.test((dateVal||'').toString()))continue;
-                        // Skip formula-only rows
-                        if(dateVal.toString().startsWith('='))continue;
-                        // Parse date safely
-                        let startTime;try{const d=new Date(dateVal);if(isNaN(d)){skipped++;continue}startTime=d.toISOString()}catch(e){skipped++;continue}
-                        // Parse hours
-                        let hours=0;const hv=row[hoursIdx>=0?hoursIdx:4];
-                        if(hv){const hvs=hv.toString();if(hvs.startsWith('=')){hours=5}else{hours=parseFloat(hvs)||0}}
+                        const dateVal=(row[dateIdx>=0?dateIdx:1]||'').toString().trim();
+                        if(!dayVal&&!dateVal)continue;
+                        if(/^week|^sample|^s$/i.test(dayVal))continue;
+                        if(/^week/i.test(dateVal))continue;
+                        if(!dateVal||dateVal==='-')continue;
+                        if(!(/mon|tue|wed|thu|fri|sat|sun/i.test(dayVal)))continue;
+                        let hours=0;const hv=(row[hoursIdx>=0?hoursIdx:4]||'').toString();
+                        if(hv&&!hv.startsWith('=')){hours=parseFloat(hv)||0}
+                        if(hours<=0)continue;
                         const sets=parseInt(row[setIdx>=0?setIdx:5])||0;
-                        const isPaid=paidIdx>=0&&row[paidIdx]?(row[paidIdx].toString().toLowerCase()==='true'||row[paidIdx]==='TRUE'):false;
-                        const metInc=parseFloat(row[metIdx>=0?metIdx:8])||0;
-                        pastSessions.push({
-                          startTime,dialed:0,sets,np:0,
-                          pay:0,creditHours:hours,
-                          tier:'Imported',paid:true,paidDate:new Date().toISOString(),
-                          source:'imported',ended:true,metIncentive:metInc})}
-                      if(pastSessions.length){setSessionLog(p=>[...pastSessions,...p]);setTotalSets(p=>p+pastSessions.reduce((a,s)=>a+s.sets,0))}
-                      toast(pastSessions.length+' sessions imported'+(skipped?' ('+skipped+' skipped)':'')+' ✓');
+                        const pay=parseFloat((row[hourlyIdx>=0?hourlyIdx:7]||'').toString().replace(/[^0-9.\-]/g,''))||0;
+                        let startTime;
+                        try{const dStr=dateVal.replace(/(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i,'$1 $2 2026');
+                          const d=new Date(dStr);if(isNaN(d)){const d2=new Date(dateVal);if(isNaN(d2)){skipped++;continue}startTime=d2.toISOString()}else{startTime=d.toISOString()}}catch(e){skipped++;continue}
+                        totalImportedSets+=sets;
+                        pastSessions.push({startTime,dialed:0,sets,np:0,pay,creditHours:hours,
+                          tier:'Imported',paid:true,paidDate:new Date().toISOString(),source:'imported',ended:true})}
+                      if(pastSessions.length){setSessionLog(p=>[...pastSessions,...p]);setTotalSets(p=>p+totalImportedSets)}
+                      toast(pastSessions.length+' sessions imported ('+totalImportedSets+' appts)'+(skipped?' · '+skipped+' skipped':''));
                     }catch(e){toast('Import failed: '+e.message,'err')}}} style={{padding:'3px 8px',borderRadius:4,background:'var(--adim)',color:'var(--accent2)',fontSize:8,fontWeight:600}}>Import as Past Pay</button>
                   </div>}
                 </div>}
