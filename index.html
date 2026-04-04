@@ -792,7 +792,7 @@ function publishAdminConfigs(configs){
     var email=entry[0],cfg=entry[1];
     if(!email||email.indexOf('@')<0)return;
     // Remove transient fields
-    var clean=Object.assign({},cfg);delete clean._tsResults;delete clean._tsName;
+    var clean=Object.assign({},cfg);delete clean._tsResults;
     try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_admincfg_'+email.toLowerCase(),biz_name:JSON.stringify(clean)},{onConflict:'admin_email'}).then(function(){}).catch(function(){})}catch(e){}
   });
 }
@@ -1452,6 +1452,17 @@ function App(){
               console.log('[AutoDial] Loaded global config')}catch(pe){}
             }
           }catch(e){console.warn('[AdminCfg]',e.message||'no global config')}
+          // Load shared script from Main
+          try{
+            const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_script').single();
+            if(sr.data&&sr.data.biz_name){const s=JSON.parse(sr.data.biz_name);
+              if(s.html&&!localStorage.getItem('scriptHtml')){setScriptHtml(s.html);if(s.notes)setNotesHtml(s.notes);console.log('[AutoDial] Loaded shared script from Main')}}
+          }catch(e){}
+        }
+        // Auto-set sheet ID and tab from synced admin config
+        if(adminConfigs[myEmail]){
+          const ac=adminConfigs[myEmail];
+          if(ac.timesheetId)setCfg(p=>({...p,sheetId:ac.timesheetId,sheetTab:ac.sheetTab||p.sheetTab||''}));
         }
         if(Object.keys(cloud).length>0){
           console.log('[CloudSync] Loaded '+Object.keys(cloud).length+' buckets from cloud');
@@ -1540,7 +1551,11 @@ function App(){
     // Load CB queue
     DB.getCBQueue((role==='admin'||(role==='main'&&mainMode==='call'))?myEmail:null).then(setCbQueue);
     // Load WA templates
-    DB.getWATemplates().then(setWaTemplates);
+    DB.getWATemplates().then(t=>{
+        if(t&&t.length)setWaTemplates(t);
+        else if(role==='admin'&&_SB){_SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_wa_templates').single().then(r=>{
+          if(r.data&&r.data.biz_name){try{const shared=JSON.parse(r.data.biz_name);if(shared.length)setWaTemplates(shared)}catch(e){}}}).catch(()=>{})}
+      });
     // Load notifications
     if(_user?.id)DB.getNotifs(_user.id).then(setNotifications);
     // Main: subscribe to live feed
@@ -1669,7 +1684,7 @@ function App(){
     DB.saveSess(s,_user?.id,myEmail);
     DB.notify(null,'session_end','Session ended: '+myEmail,s.sets+' appts | '+rank.label,{email:myEmail,sets:s.sets,rank:rank.label});
     setCallLog([]);syncSend('end',{session:s});syncSend('adminSession',{session:s,email:myEmail});
-    if(localStorage.getItem('ad_gt')){const tsId=adminConfigs[myEmail]?.timesheetId||cfg.sheetId||'';
+    if(localStorage.getItem('ad_gt')){const tsId=myCfg.timesheetId||cfg.sheetId||'';
       if(tsId){gSheets.ensureTabs(tsId,['Timesheet','Appointments Set','Pay']).catch(()=>{})}
       gTimesheet.append(s,userName,myCfg,tsId||undefined).catch(()=>{})}};
 
@@ -2851,10 +2866,23 @@ function App(){
                   {ac._tsResults.slice(0,5).map(f=><div key={f.id} onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:f.id,_tsName:f.name,_tsResults:[]}}))} style={{padding:'8px 10px',fontSize:11,color:'#f1f5f9',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>📗 {f.name}</div>)}
                 </div>}
               </div>
-              {ac.timesheetId&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 0'}}>
-                <p style={{fontSize:9,color:'var(--green)',margin:0,flex:1}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>
-                <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:'',_tsName:''}}))} style={{padding:'2px 8px',borderRadius:4,background:'var(--rdim)',color:'var(--red)',fontSize:8,fontWeight:600,border:'none',cursor:'pointer'}}>Unlink</button>
-              </div>}
+              {ac.timesheetId&&<>
+                <div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 0'}}>
+                  <p style={{fontSize:9,color:'var(--green)',margin:0,flex:1}}>✓ Linked: {ac._tsName||ac.timesheetId.slice(0,20)+'...'}</p>
+                  <button onClick={()=>setAdminConfigs(p=>({...p,[em]:{...p[em],timesheetId:'',_tsName:'',sheetTab:'',_sheetTabs:[]}}))} style={{padding:'2px 8px',borderRadius:4,background:'var(--rdim)',color:'var(--red)',fontSize:8,fontWeight:600,border:'none',cursor:'pointer'}}>Unlink</button>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:4,margin:'6px 0 0'}}>
+                  <label style={{fontSize:9,color:'var(--accent2)',fontWeight:600}}>Tab:</label>
+                  {ac._sheetTabs?.length>0?
+                    <select value={ac.sheetTab||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sheetTab:e.target.value}}))} style={{flex:1,fontSize:11,padding:'6px',borderRadius:6,background:'var(--bg)',color:'var(--accent2)',border:'1px solid var(--border)'}}>
+                      <option value="">Select tab...</option>
+                      {ac._sheetTabs.map(t=><option key={t} value={t}>{t}</option>)}
+                    </select>
+                  :<input value={ac.sheetTab||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],sheetTab:e.target.value}}))} placeholder="Tab name" style={{flex:1,fontSize:11,padding:'6px'}}/>}
+                  <button onClick={async()=>{if(!gOk)return toast('Connect Google','err');try{const meta=await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+ac.timesheetId+'?fields=sheets.properties')).json();const tabs=(meta.sheets||[]).map(s=>s.properties.title);setAdminConfigs(p=>({...p,[em]:{...p[em],_sheetTabs:tabs}}));toast(tabs.length+' tabs found')}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'4px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,fontWeight:600,whiteSpace:'nowrap'}}>Load Tabs</button>
+                </div>
+                {ac.sheetTab&&<p style={{fontSize:9,color:'var(--green)',margin:'4px 0 0'}}>📋 {ac._tsName||'Sheet'} → <b>{ac.sheetTab}</b></p>}
+              </>}
               <p style={{fontSize:9,color:'var(--text3)',margin:'6px 0 0',lineHeight:1.4}}>💡 Just add the leads sheet — <b style={{color:'var(--accent2)'}}>Timesheet</b>, <b style={{color:'var(--accent2)'}}>Appointments</b> & <b style={{color:'var(--accent2)'}}>Pay</b> tabs are auto-created!</p>
             </div>
             <div style={{marginBottom:6}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>Invoice Name</label>
@@ -2961,7 +2989,7 @@ function App(){
         <div style={{marginBottom:8}}><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>PayNow Number</label>
         <input value={myCfg.payNow||localStorage.getItem('ad_paynow')||''} onChange={e=>localStorage.setItem('ad_paynow',e.target.value)} placeholder="+65 9xxx xxxx" disabled={!!myCfg.payNow} style={{opacity:myCfg.payNow?.6:1}}/></div>
         {myCfg.timesheetId&&<div><label style={{fontSize:9,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>📋 Linked Sheet</label>
-        <p style={{fontSize:11,color:'var(--green)',margin:0}}>✓ {myCfg._tsName||myCfg.timesheetId}</p></div>}
+        <p style={{fontSize:11,color:'var(--green)',margin:0}}>✓ {myCfg._tsName||'Sheet'}{myCfg.sheetTab?' → '+myCfg.sheetTab:''}</p></div>}
         <p style={{fontSize:8,color:'var(--text3)',margin:'6px 0 0'}}>Payment details are managed by your team lead</p>
       </div>}
 
@@ -2981,8 +3009,11 @@ function App(){
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google Sheets</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:4}}>{gOk?'✓ Connected via manager':'Waiting for manager to share access'}</p>
-        {myCfg.timesheetId&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0'}}>📋 Sheet: {myCfg._tsName||myCfg.timesheetId.slice(0,25)+'...'}</p>}
-        <p style={{fontSize:9,color:'var(--text3)',margin:'4px 0 0'}}>Your manager shares Google Sheets access automatically</p>
+        {myCfg.timesheetId&&<div style={{padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid rgba(63,185,80,.2)',margin:'6px 0'}}>
+          <p style={{margin:0,fontSize:11,color:'var(--green)',fontWeight:600}}>📋 {myCfg._tsName||'Shared Sheet'}</p>
+          {myCfg.sheetTab&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--accent2)'}}>Tab: <b>{myCfg.sheetTab}</b></p>}
+        </div>}
+        {!myCfg.timesheetId&&<p style={{fontSize:9,color:'var(--text3)',margin:'4px 0 0'}}>Waiting for manager to assign a sheet</p>}
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
@@ -3054,7 +3085,9 @@ function App(){
             <option value="appointment">Appointment</option><option value="reminder">Reminder</option><option value="followup">Follow-up</option><option value="custom">Custom</option>
           </select>
           <button onClick={()=>{if(!newWA.name||!newWA.template)return toast('Fill name and template','err');
-            DB.saveWATemplate(newWA,_user?.id);setWaTemplates(p=>[...p,{...newWA,id:Date.now()}]);setNewWA({name:'',template:'',category:'appointment'});toast('Template saved')
+            DB.saveWATemplate(newWA,_user?.id);setWaTemplates(p=>{const updated=[...p,{...newWA,id:Date.now()}];
+              if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(updated)},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}}
+              return updated});setNewWA({name:'',template:'',category:'appointment'});toast('Template saved')
           }} style={{width:'100%',padding:'10px',borderRadius:10,background:'rgba(37,211,102,.15)',color:'#25d366',fontSize:12,fontWeight:700,border:'1px solid rgba(37,211,102,.2)'}}>+ Add Template</button>
         </div>
       </div>}
