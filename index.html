@@ -299,7 +299,8 @@ window.onSync=function(cb){_syncCbs.push(cb);return function(){_syncCbs=_syncCbs
 var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com',_gToken=null;
 var GSCOPES='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 // ↓↓↓ SET THIS to your Cloudflare Worker URL for permanent Google auth ↓↓↓
-var WORKER_URL='https://autodial-google-auth.chungakwanc.workers.dev'; // e.g. 'https://autodial-google-auth.yourname.workers.dev'
+var WORKER_URL='https://autodial-google-auth.chungakwanc.workers.dev';
+window.claudeKey=function(){return localStorage.getItem('autodial_claude_key')||''}; // e.g. 'https://autodial-google-auth.yourname.workers.dev'
 
 // ═══ SAVE TOKEN — shared helper ═══
 function _saveGToken(token){
@@ -476,6 +477,138 @@ window.aiAnalyzeSheet=async function(headers,rows){var key=geminiKey();if(!key)r
     '- For rows beyond the sample, set status="pending" and notes="" unless you can infer from the pattern';
   try{var r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:16000,temperature:.05}})});
     var d=await r.json();if(d.error){console.warn('[AI]',d.error.message);return null}var t=(d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();return JSON.parse(t)}catch(e){console.warn('[AI Parse]',e.message);return null}};
+
+// ═══ CLAUDE AI — sheet analysis via Cloudflare Worker proxy ═══
+window.claudeAnalyzeSheet=async function(headers,rows){
+  if(!WORKER_URL)return null;
+  var today=new Date().toISOString().slice(0,10);
+  var sysPrompt='You are a data analyst for Singapore insurance cold-calling. Analyze spreadsheets and return ONLY valid JSON (no markdown, no backticks, no explanation).';
+  var userPrompt='Analyze this spreadsheet.\nTODAY: '+today+'\nHEADERS: '+JSON.stringify(headers)+'\nSAMPLE ROWS (first 30):\n'+rows.slice(0,30).map(function(r,i){return'R'+(i+1)+': '+JSON.stringify(r)}).join('\n')+
+    '\n\nThis sheet may contain MULTIPLE BATCHES from different providers pasted together.\n'+
+    'Signs: phone numbers shift columns, names suddenly in different positions, format changes mid-sheet.\n\n'+
+    'Return JSON:\n{\n  "columns": {\n    "phone": <0-based col index or -1>,\n    "first_name": <index or -1>,\n    "last_name": <index or -1>,\n    "full_name": <index or -1>,\n    "email": <index or -1>,\n    "age": <index or -1>,\n    "nric": <index or -1>,\n    "birthday": <index or -1>,\n    "race": <index or -1>,\n    "gender": <index or -1>,\n    "status": <index or -1>,\n    "remarks": <index or -1>\n  },\n'+
+    '  "statuses": [\n    {"row":1, "status":"pending|np|cb|ni|set", "np_count":0, "notes":"original remarks text", "computed_age":<number or null>}\n  ]\n}\n\n'+
+    'RULES:\n'+
+    '- Singapore phones: 8 digits starting with 8 or 9. With +65 prefix = same. "Transaction ID" that looks like 8-digit number starting with 8/9 = phone\n'+
+    '- Dates like DD-MM-YYYY or DD/MM/YYYY = birthday, NOT phone. Calculate age from birthday\n'+
+    '- "Residential Status" = race column\n'+
+    '- NRIC [STFGM]\\d{7}[A-Z]: S/F=19xx, T/G/M=20xx born. Calculate age, NEVER output raw NRIC\n'+
+    '- Remarks: "NI"/"not interested"/"WN"/"wrong number"/"deceased"/"DNC" → ni\n'+
+    '  "NP"/"no pick"/"NPx2" → np (extract count). "CB"/"callback" → cb. "appt set"/date+time+location → set\n'+
+    '- Return statuses for ALL '+rows.length+' rows. Rows beyond sample: status="pending", notes=""\n'+
+    '- If a batch has different column layout, map the PRIMARY batch (first/largest)';
+  try{
+    var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:8192,system:sysPrompt,messages:[{role:'user',content:userPrompt}]})});
+    if(!r.ok){var err=await r.json().catch(function(){return{}});console.warn('[Claude]',err.error||r.status);return null}
+    var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    console.log('[Claude] Sheet analysis complete');return JSON.parse(text)}
+  catch(e){console.warn('[Claude Parse]',e.message);return null}};
+
+// ═══ CLAUDE POST-PROCESS — features 1,2,3,4 in ONE call ═══
+// 1: Validate column mapping  2: Classify unrecognized remarks  3: Extract missing names  4: Confidence scoring
+window.claudePostProcess=async function(leads,headers,rawRows,colMap){
+  if(!WORKER_URL||!leads.length)return leads;
+  // Collect problems to fix
+  var unrec=[];var nameless=[];
+  leads.forEach(function(l,i){
+    if(l.needsReview&&l.notes)unrec.push({idx:i,remark:l.notes.slice(0,100)});
+    if(l.name===l.phone||/^\+?\d{7,}$/.test(l.name)){
+      var ri=(l.sheetRow||0)-2;var rowData=ri>=0&&ri<rawRows.length?rawRows[ri]:[];
+      nameless.push({idx:i,phone:l.phone,row:rowData.map(function(v){return String(v||'').slice(0,40)}).slice(0,10)})}
+  });
+  if(!unrec.length&&!nameless.length&&colMap)return leads; // Nothing to fix
+  var prompt='You are a Singapore insurance cold-calling data assistant.\n\n';
+  // Feature 1+4: Column validation + confidence
+  if(colMap&&headers){
+    prompt+='TASK 1: Validate this column mapping and rate confidence 1-10 for each.\n'+
+      'Headers: '+JSON.stringify(headers.slice(0,15))+'\nSample row 1: '+JSON.stringify((rawRows[0]||[]).slice(0,15))+'\nSample row 2: '+JSON.stringify((rawRows[1]||[]).slice(0,15))+'\n'+
+      'Current mapping: '+JSON.stringify(colMap)+'\n\n'}
+  // Feature 2: Batch remark classification
+  if(unrec.length){
+    prompt+='TASK 2: Classify these unrecognized remarks into statuses.\n'+
+      unrec.slice(0,50).map(function(u){return'['+u.idx+'] "'+u.remark+'"'}).join('\n')+'\n\n'}
+  // Feature 3: Name extraction
+  if(nameless.length){
+    prompt+='TASK 3: Extract the person\'s name from these raw rows (name was not auto-detected).\n'+
+      nameless.slice(0,30).map(function(n){return'['+n.idx+'] phone='+n.phone+' row='+JSON.stringify(n.row)}).join('\n')+'\n\n'}
+  prompt+='Return ONLY JSON (no markdown):\n{\n'+
+    '  "column_fixes": {"phone":<new idx or null>, "first_name":<or null>, ...only include fixes, null=keep current},\n'+
+    '  "confidence": {"phone":8, "first_name":7, ...1-10 for each mapped column},\n'+
+    '  "low_confidence_columns": ["field1","field2"], // any column scored <6\n'+
+    '  "remark_statuses": [{"idx":0, "status":"ni|np|cb|set|pending", "reason":"short explanation"}],\n'+
+    '  "names": [{"idx":0, "name":"extracted name"}],\n'+
+    '  "warnings": ["any issues found"]\n}';
+  try{
+    var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:4096,
+        system:'You validate cold-calling lead data for Singapore insurance consultants. Return ONLY valid JSON.',
+        messages:[{role:'user',content:prompt}]})});
+    if(!r.ok)return leads;
+    var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    var result=JSON.parse(text);
+    var updated=[...leads];var fixes=0;
+    // Apply remark classifications (#2)
+    if(result.remark_statuses){result.remark_statuses.forEach(function(rs){
+      if(rs.idx>=0&&rs.idx<updated.length&&rs.status&&rs.status!=='pending'){
+        updated[rs.idx]={...updated[rs.idx],status:rs.status,needsReview:false,_claudeReason:rs.reason};fixes++}})};
+    // Apply name extractions (#3)
+    if(result.names){result.names.forEach(function(nm){
+      if(nm.idx>=0&&nm.idx<updated.length&&nm.name&&nm.name.length>1){
+        updated[nm.idx]={...updated[nm.idx],name:nm.name};fixes++}})};
+    // Store confidence for UI (#4)
+    if(result.low_confidence_columns?.length){
+      window._claudeConfidence=result.confidence||{};window._lowConfCols=result.low_confidence_columns;
+      console.warn('[Claude] Low confidence columns:',result.low_confidence_columns)}
+    if(result.warnings?.length)result.warnings.forEach(function(w){console.warn('[Claude]',w)});
+    if(fixes)console.log('[Claude] Post-process fixed '+fixes+' leads');
+    return updated}
+  catch(e){console.warn('[Claude PostProcess]',e.message);return leads}};
+
+// ═══ CLAUDE DEDUP — feature 5 ═══
+window.claudeDedup=async function(leads){
+  if(!WORKER_URL||leads.length<10)return{dupes:[],leads:leads};
+  // Send compact lead list for dedup analysis
+  var compact=leads.map(function(l,i){return{i:i,n:l.name.slice(0,30),p:l.phone}});
+  // Chunk to keep token count reasonable
+  var chunk=compact.slice(0,300);
+  try{
+    var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:2048,
+        system:'Identify duplicate leads. Return ONLY JSON array of duplicate groups.',
+        messages:[{role:'user',content:'Find duplicates in this lead list (same person, different format/spelling).\n'+
+          JSON.stringify(chunk)+'\n\nReturn JSON: {"duplicates":[[idx1,idx2],[idx3,idx4,idx5]]} — groups of indices that are the same person.\nOnly flag CLEAR duplicates (same phone, or very similar name+phone). Return empty array if none found.'}]})});
+    if(!r.ok)return{dupes:[],leads:leads};
+    var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    var result=JSON.parse(text);
+    if(result.duplicates?.length){
+      console.log('[Claude] Found '+result.duplicates.length+' duplicate groups');
+      // Mark duplicates (keep first in each group, mark rest)
+      var dupeIndices=new Set();
+      result.duplicates.forEach(function(group){
+        for(var gi=1;gi<group.length;gi++){dupeIndices.add(group[gi])}});
+      var cleaned=leads.map(function(l,i){return dupeIndices.has(i)?{...l,_isDupe:true,status:'ni',notes:(l.notes?l.notes+' | ':'')+'[Duplicate]'}:l});
+      return{dupes:result.duplicates,leads:cleaned}}
+    return{dupes:[],leads:leads}}
+  catch(e){console.warn('[Claude Dedup]',e.message);return{dupes:[],leads:leads}}};
+
+// ═══ CLAUDE LEARN PATTERN — feature 6 ═══
+window.claudeLearnPattern=async function(remark,status,learnedPatterns){
+  if(!WORKER_URL||!remark)return null;
+  try{
+    var r=await fetch(WORKER_URL+'/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:512,
+        system:'Extract generalizable patterns from remark→status corrections for Singapore cold-calling.',
+        messages:[{role:'user',content:'The user corrected this remark to status "'+status+'":\nRemark: "'+remark+'"\n\n'+
+          'Existing patterns: '+JSON.stringify(Object.keys(learnedPatterns||{}).slice(0,20))+'\n\n'+
+          'Return JSON: {"patterns":["pattern1","pattern2"]} — list of lowercase text patterns that should map to "'+status+'" in the future.\n'+
+          'Include the exact remark plus any reasonable generalizations (e.g. "refund" → also add "refund case", "refund pending").\n'+
+          'Only return patterns you are confident about. Max 5 patterns.'}]})});
+    if(!r.ok)return null;
+    var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    var result=JSON.parse(text);
+    return result.patterns||null}
+  catch(e){return null}};
 
 // ══════ GOOGLE DRIVE — Upload Files ══════
 window.gDriveUpload={
@@ -1335,7 +1468,14 @@ function parseSheet(rows,h){window._learnedPatterns=window._learnedPatterns||{};
     leads.push({id:Date.now()+Math.random(),name:(fn+' '+ln).trim()||ph,phone:ph,email:c.email!==-1?String(r[c.email]||'').trim():'',age,race:c.race!==-1?String(r[c.race]||'').trim():'',income:c.income!==-1?String(r[c.income]||'').trim():'',gender:c.gender!==-1?String(r[c.gender]||'').trim():'',status,npCount,cbDate,cbTime,cbHistory:[],calledAt:null,notes:rmk,needsReview,sheetRow:ri+2,statusCol:c.remarks!==-1?c.remarks:(c.status!==-1?c.status:-1)})}
   return{leads,error:null,count:leads.length}}
 
-async function aiParse(rows,h){const ai=await aiAnalyzeSheet(h,rows);if(!ai?.columns||ai.columns.phone===-1)return null;
+async function aiParse(rows,h){
+  // Try Claude first (via Worker), fall back to Gemini
+  var ai=null;
+  if(WORKER_URL){
+    try{ai=await claudeAnalyzeSheet(h,rows);if(ai)console.log('[AutoDial] Using Claude AI for analysis')}
+    catch(e){console.warn('[Claude fallback]',e.message)}}
+  if(!ai){ai=await aiAnalyzeSheet(h,rows);if(ai)console.log('[AutoDial] Using Gemini AI for analysis')}
+  if(!ai?.columns||ai.columns.phone===-1)return null;
   const c=ai.columns,st={};if(ai.statuses)ai.statuses.forEach(s=>{st[s.row-1]=s});const leads=[];
   for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn='',ln='';if(c.first_name!==-1)fn=String(r[c.first_name]||'').trim();if(c.last_name!==-1)ln=String(r[c.last_name]||'').trim();if(!fn&&c.full_name!==-1)fn=String(r[c.full_name]||'').trim();
@@ -1456,16 +1596,25 @@ function App(){
   });
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:4,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
+  const[isOffline,setIsOffline]=useState(!navigator.onLine);
+  useEffect(()=>{const on=()=>setIsOffline(false);const off=()=>{setIsOffline(true);toast('📴 Offline — changes saved locally','info')};
+    window.addEventListener('online',on);window.addEventListener('offline',off);
+    return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off)}},[]);
+  // Flush sheet queue when coming back online
+  useEffect(()=>{if(!isOffline&&sheetQueueRef?.current?.length){flushSheetQueue();toast('📶 Back online — syncing…','info')}},[isOffline]);
   const[running,setRunning]=useState(()=>{const s=load('activeSession');
     // Safety: clear sessions older than 24h or sessions with no startTime
     if(s&&!s.ended&&(!s.startTime||Date.now()-s.startTime>86400000)){save('activeSession',null);return false}
     return s&&!s.ended?true:false});
   const[curIdx,setCurIdx]=useState(()=>load('curIdx')||-1);
-  useEffect(()=>{save('curIdx',curIdx)},[curIdx]);
+  useEffect(()=>{save('curIdx',curIdx);save('_dialPhase',phase);save('_dialRunning',running)},[curIdx,phase,running]);
   const[countdown,setCountdown]=useState(0);
   const[phase,setPhase]=useState(()=>{
-    // If running was restored but no valid session, reset to idle
-    const s=load('activeSession');if(!s||s.ended)return'idle';return'idle'});
+    const s=load('activeSession');if(!s||s.ended)return'idle';
+    // Recover phase from crash
+    const savedPhase=load('_dialPhase');
+    if(savedPhase==='calling'||savedPhase==='waiting')return'calling'; // Resume calling
+    return'idle'});
   const[tab,setTab]=useState(role==='admin'?'dial':'leads');
   const[mainMode,setMainMode]=useState(load('mainMode')||'manage'); // 'call' or 'manage' (Main only)
   const[search,setSearch]=useState('');
@@ -1564,7 +1713,13 @@ function App(){
       .replace(/\{\{npcount\}\}/gi,String(lead.npCount||0))
       .replace(/\{\{admin\}\}/gi,userName).replace(/\{\{company\}\}/gi,'PolicyLens')};
   const[learnedPatterns,setLearnedPatterns]=useState(load('learned')||{}); // {remarkText: status}
-  const learnStatus=(remark,status)=>{if(!remark||remark.length<2)return;const key=remark.toLowerCase().trim();setLearnedPatterns(p=>({...p,[key]:status}));toast('Learned: "'+remark.slice(0,30)+'…" = '+status.toUpperCase())};
+  const learnStatus=(remark,status)=>{if(!remark||remark.length<2)return;const key=remark.toLowerCase().trim();
+    setLearnedPatterns(p=>{const updated={...p,[key]:status};
+      if(WORKER_URL){claudeLearnPattern(remark,status,p).then(patterns=>{
+        if(patterns?.length){const expanded={...updated};patterns.forEach(pt=>{expanded[pt.toLowerCase().trim()]=status});
+          setLearnedPatterns(expanded);console.log('[Claude] Learned '+patterns.length+' generalized patterns')}}).catch(()=>{})}
+      return updated});
+    toast('Learned: "'+remark.slice(0,30)+'…" = '+status.toUpperCase())};
   // Appointments tracking
   const[appointments,setAppointments]=useState(load('appts')||[]);
   const[incentives,setIncentives]=useState(load('incv')||[]); // {id,admin,leadName,type:'met'|'closed',amount,date(current!),apptDate(original),paid}
@@ -1580,6 +1735,13 @@ function App(){
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
   const[showPostCall,setShowPostCall]=useState(null);
+  const[undoInfo,setUndoInfo]=useState(null); // {leadIdx,name,status,ts} for 10s undo
+  // Auto-clear undo after 10 seconds
+  useEffect(()=>{if(!undoInfo)return;const t=setTimeout(()=>setUndoInfo(null),10000);return()=>clearTimeout(t)},[undoInfo]);
+  const doUndo=()=>{if(!undoInfo)return;const u=window._lastUndo;if(!u)return;
+    setLeads(p=>p.map((l,i)=>i===u.leadIdx?{...l,status:u.prevStatus,npCount:u.prevNpCount}:l));
+    setCurIdx(u.leadIdx);setPhase('calling');setRunning(true);
+    toast('↩️ Undone — back to '+undoInfo.name);setUndoInfo(null);window._lastUndo=null};
   const[postCallNote,setPostCallNote]=useState('');
   const[sessionTarget,setSessionTarget]=useState(load('starget')||{type:'dials',count:50});
 
@@ -2044,15 +2206,7 @@ function App(){
 
   const pending=leads.filter(l=>l.status==='pending'||l.status==='cb');
   const cur=curIdx>=0&&curIdx<leads.length?leads[curIdx]:null;
-  // AUTO-SKIP: if current lead is NI/Set while running, skip to next immediately
-  useEffect(()=>{
-    if(!running||!cur||phase==='idle'||phase==='preview')return;
-    if(cur.status==='ni'||cur.status==='set'){
-      console.warn('[AutoDial] Auto-skipping NI/Set lead:',cur.name,cur.status);
-      const nextIdx=getNextDialable(leads,curIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
-      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done','info')}
-      else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},300)}
-    }},[cur?.status,curIdx,running,phase]);
+  const nextLeadRef=useRef(-1); // Pre-computed next lead index
   const progress=leads.length?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
   const tier=getTier(totalSets,myCfg.tierMins);const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
   const userName=window._prof?.full_name||myEmail||'User';
@@ -2093,26 +2247,43 @@ function App(){
     else{toast('📱 Dial sent → open AutoDial on phone','info')}
     syncSend('dial',{phone:ph})},[cfg.dncStart,cfg.dncEnd]);
 
-  const syncSheet=useCallback(async(lead,st)=>{if(!cfg.sheetId||!lead.sheetRow||!localStorage.getItem('ad_gt'))return;
-    try{
-      let colIdx=lead.statusCol;
-      // If no status column found, try to create one
-      if(colIdx===-1||colIdx===undefined){
-        const newCol=await gSheets.addColumn(cfg.sheetId,cfg.sheetTab||'Sheet1','Remarks');
-        if(newCol>=0){colIdx=newCol;
-          // Update lead with new column
-          setLeads(p=>p.map(l=>({...l,statusCol:newCol})));
-          toast('Created "Remarks" column in sheet','info')}
-        else return;
-      }
-      const col=String.fromCharCode(65+colIdx);
-      let v=st.toUpperCase();
-      if(st==='np')v='NP x'+(lead.npCount+1);
-      if(st==='cb')v=('CB '+lead.cbDate+' '+lead.cbTime).trim();
-      if(st==='set')v='appt set';
-      if(st==='ni')v='NI';
-      await gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,v)
-    }catch(e){console.warn('[SyncSheet]',e.message)}},[cfg]);
+  // ═══ FEATURE 2: Sheet Write-Back Queue ═══
+  const sheetQueueRef=useRef([]);
+  const sheetFlushTimer=useRef(null);
+  const flushSheetQueue=useCallback(async()=>{
+    const q=[...sheetQueueRef.current];if(!q.length)return;sheetQueueRef.current=[];
+    if(!cfg.sheetId||!localStorage.getItem('ad_gt'))return;
+    // Batch: group by cell, keep only latest value per cell
+    const byCell={};q.forEach(item=>{byCell[item.cell]=item.value});
+    const entries=Object.entries(byCell);
+    for(const[cell,value]of entries){
+      try{await gSheets.put(cfg.sheetId,cell,value)}
+      catch(e){console.warn('[SheetQ]',e.message);
+        // If offline, re-queue
+        if(!navigator.onLine){sheetQueueRef.current.push({cell,value});
+          save('_sheetQueue',sheetQueueRef.current)}}}
+  },[cfg]);
+  const syncSheet=useCallback(async(lead,st)=>{if(!cfg.sheetId||!lead.sheetRow)return;
+    let colIdx=lead.statusCol;
+    if(colIdx===-1||colIdx===undefined){
+      try{const newCol=await gSheets.addColumn(cfg.sheetId,cfg.sheetTab||'Sheet1','Remarks');
+        if(newCol>=0){colIdx=newCol;setLeads(p=>p.map(l=>({...l,statusCol:newCol})));toast('Created "Remarks" column','info')}else return}catch(e){return}}
+    const col=String.fromCharCode(65+colIdx);
+    let v=st.toUpperCase();
+    if(st==='np')v='NP x'+(lead.npCount+1);if(st==='cb')v=('CB '+lead.cbDate+' '+lead.cbTime).trim();
+    if(st==='set')v='appt set';if(st==='ni')v='NI';
+    const cell=(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow;
+    sheetQueueRef.current.push({cell,value:v});
+    // Debounce: flush after 3 seconds of no new writes
+    clearTimeout(sheetFlushTimer.current);
+    sheetFlushTimer.current=setTimeout(()=>flushSheetQueue(),3000);
+  },[cfg,flushSheetQueue]);
+  // Flush queue on session end or unmount
+  useEffect(()=>{
+    // Restore offline queue
+    const saved=load('_sheetQueue');if(saved?.length){sheetQueueRef.current=saved;save('_sheetQueue',null);flushSheetQueue()}
+    return()=>{if(sheetQueueRef.current.length)flushSheetQueue()}
+  },[]);
 
   const startSession=(chosenSlot)=>{setSession({startTime:Date.now(),dialed:0,np:0,ni:0,cb:0,sets:0,ended:false,selectedSlot:chosenSlot||null});setElapsed(0);setShowSlotPicker(false);toast(chosenSlot?'🔥 '+n(chosenSlot.hours,5)+'h challenge accepted!':'Session started! 🔥')};
   const endSession=()=>{if(!session)return;const s={...session,ended:true,endTime:Date.now(),elapsed};
@@ -2156,6 +2327,23 @@ function App(){
       gTimesheet.append(s,userName,myCfg,tsId||undefined)}};
 
 
+  // ═══ FEATURE 4: Live Leaderboard — broadcast stats ═══
+  const broadcastStats=useCallback(()=>{
+    if(!_SB||!_user||!session||session.ended)return;
+    const stats={email:myEmail,name:window._prof?.full_name||myEmail,dialed:session.dialed||0,sets:session.sets||0,
+      np:session.np||0,ni:session.ni||0,rank:rank?.label||'',ts:Date.now()};
+    try{_SB.from('autodial_admin_config').upsert({admin_email:'lb_'+myEmail.toLowerCase(),biz_name:JSON.stringify(stats)},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}
+  },[session,myEmail,rank]);
+  // Broadcast every 30 seconds during active session
+  useEffect(()=>{if(!session||session.ended)return;broadcastStats();
+    const t=setInterval(broadcastStats,30000);return()=>clearInterval(t)},[session,broadcastStats]);
+  const[leaderboard,setLeaderboard]=useState([]);
+  // Load leaderboard data
+  useEffect(()=>{if(!_SB||role==='admin')return;
+    const loadLB=async()=>{try{const r=await _SB.from('autodial_admin_config').select('admin_email,biz_name').like('admin_email','lb_%');
+      if(r.data){const lb=r.data.map(d=>{try{const s=JSON.parse(d.biz_name);return s}catch(e){return null}}).filter(Boolean).filter(s=>Date.now()-s.ts<86400000).sort((a,b)=>b.sets-a.sets||b.dialed-a.dialed);
+        setLeaderboard(lb)}}catch(e){}};
+    loadLB();const t=setInterval(loadLB,30000);return()=>clearInterval(t)},[]);
   const applyOutcome=useCallback((status,extra={})=>{const idx=curIdx;
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
       if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=n(myCfg.npMax,5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
@@ -2197,17 +2385,41 @@ function App(){
   const moveNext=useCallback(()=>{setLeads(p=>{const n=getNextDialable(p,curIdx,filters);
     if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return p}setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);return p})},[curIdx,cfg.delay,filters]);
 
-  const proceedToLead=useCallback((idx)=>{
+  // ═══ FEATURE 7: Conflict — claim lead before dialing ═══
+  const claimLead=useCallback((leadIdx)=>{
+    if(!_SB||!_user||leadIdx<0||leadIdx>=leads.length)return;
+    const lead=leads[leadIdx];
+    _SB.from('autodial_admin_config').upsert({admin_email:'claim_'+lead.phone,biz_name:JSON.stringify({
+      email:myEmail,name:window._prof?.full_name||myEmail,ts:Date.now(),leadName:lead.name})},{onConflict:'admin_email'}).catch(()=>{})
+  },[leads,myEmail]);
+  const checkClaim=useCallback(async(leadIdx)=>{
+    if(!_SB||leadIdx<0||leadIdx>=leads.length)return null;
+    const lead=leads[leadIdx];
+    try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','claim_'+lead.phone).single();
+      if(r.data){const c=JSON.parse(r.data.biz_name);
+        // If claimed by someone else within last 10 minutes
+        if(c.email!==myEmail&&Date.now()-c.ts<600000)return c}
+    }catch(e){}return null},[leads,myEmail]);
+  const proceedToLead=useCallback(async(idx)=>{
     const curLeads=leadsRef.current;
     // SAFETY: if the lead at idx is already NI/Set, find REAL next lead
     if(idx>=0&&idx<curLeads.length&&(curLeads[idx].status==='ni'||curLeads[idx].status==='set')){
       console.warn('[AutoDial] proceedToLead: lead '+idx+' is '+curLeads[idx].status+', finding next…');
       idx=getNextDialable(curLeads,idx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority})}
     if(idx===-1||idx>=curLeads.length){setRunning(false);setPhase('idle');setCurIdx(-1);setShowNextPreview(false);toast('No more leads','info');return}
+    // Check if someone else is calling this lead
+    const claim=await checkClaim(idx);
+    if(claim){toast('⚠️ '+claim.name+' is already calling '+leadsRef.current[idx]?.name,'err');
+      // Skip to next lead instead
+      const nextIdx=getNextDialable(leadsRef.current,idx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return}
+      idx=nextIdx}
     setCurIdx(idx);setRunning(true);setPhase('calling');setShowNextPreview(false);
-    setTimeout(()=>{const l=leadsRef.current[idx];if(l)dial(l.phone)},300)},[dial,filters,cfg,myCfg]);
+    claimLead(idx);
+    setTimeout(()=>{const l=leadsRef.current[idx];if(l)dial(l.phone)},300)},[dial,filters,cfg,myCfg,checkClaim,claimLead]);
 
   const handleOutcome=useCallback((status,extra={})=>{
+    const leadIdx=curIdx;
     if(status==='set'){
       setStreak(p=>{const ns=p+1;if(ns>bestStreak){setBestStreak(ns);save('bestStreak',ns);if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'gamify_'+_user.email.toLowerCase(),biz_name:JSON.stringify({bestStreak:ns,achievements})},{onConflict:'admin_email'}).catch(function(){})}}
 
@@ -2222,33 +2434,47 @@ function App(){
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
         if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,4)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
-      }const lead=curIdx>=0&&curIdx<leads.length?{...leads[curIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
+      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true)}
     else{applyOutcome(status,extra)}
-    // Show post-call remarks input
-    setShowPostCall({leadIdx:curIdx,status});setPostCallNote('');
-    },[applyOutcome,curIdx,leads,filters]);
+    // ═══ PRE-COMPUTE next lead by simulating status change ═══
+    const simulated=leads.map((l,i)=>{
+      if(i!==leadIdx)return l;
+      if(status==='ni')return{...l,status:'ni'};
+      if(status==='np')return{...l,status:(l.npCount||0)+1>=n(myCfg.npMax,5)?'ni':'np',npCount:(l.npCount||0)+1};
+      if(status==='set')return{...l,status:'set'};
+      if(status==='cb')return{...l,status:'cb'};
+      return l});
+    nextLeadRef.current=getNextDialable(simulated,leadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+    // ═══ SMART AUTO-DIAL: NI/NP skip post-call, auto-advance ═══
+    if(status==='ni'||status==='np'){
+      // Store undo info before advancing
+      window._lastUndo={leadIdx,status,prevStatus:leads[leadIdx]?.status||'pending',prevNpCount:leads[leadIdx]?.npCount||0,ts:Date.now()};
+      setUndoInfo({leadIdx,name:leads[leadIdx]?.name||'',status,ts:Date.now()});
+      // Auto-advance to next lead immediately
+      const nextIdx=nextLeadRef.current;
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
+      else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},400)}
+    }else{
+      // CB/Set/Skip: show post-call remarks
+      setShowPostCall({leadIdx,status});setPostCallNote('')}
+    },[applyOutcome,curIdx,leads,filters,cfg,myCfg,bestStreak,session,dial]);
 
   const finishPostCall=useCallback(()=>{
     if(postCallNote.trim()&&showPostCall){
       const idx=showPostCall.leadIdx;
       setLeads(p=>p.map((l,i)=>i===idx?{...l,notes:(l.notes?l.notes+' | ':'')+postCallNote.trim()}:l));
       // Write back to Google Sheet
-      const curLeads=leadsRef.current;
-      if(cfg.sheetId&&curLeads[idx]?.statusCol>=0&&curLeads[idx]?.sheetRow){
-        const lead=curLeads[idx];const col=String.fromCharCode(65+lead.statusCol);
+      if(cfg.sheetId&&leads[idx]?.statusCol>=0&&leads[idx]?.sheetRow){
+        const lead=leads[idx];const col=String.fromCharCode(65+lead.statusCol);
         const val=(lead.notes?lead.notes+' | ':'')+postCallNote.trim();
         if(localStorage.getItem('ad_gt'))gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,val)
       }
     }
     setShowPostCall(null);
-    // Use leadsRef.current to get LATEST leads (after NI/NP was applied)
-    const savedLeadIdx=showPostCall?.leadIdx??curIdx;
-    setTimeout(()=>{
-      const currentLeads=leadsRef.current;
-      const nextIdx=getNextDialable(currentLeads,savedLeadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
-      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
-      else{setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')}
-    },150)
+    // ═══ USE PRE-COMPUTED next lead — no closures, no stale data ═══
+    const nextIdx=nextLeadRef.current;
+    if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
+    else{setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')}
   },[postCallNote,showPostCall,leads,curIdx,filters,cfg,myCfg]);
 
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
@@ -2276,50 +2502,54 @@ function App(){
     }catch(e){toast('AI error: '+e.message,'err')}
     setAiAnalyzing(false)};
 
+  // ═══ Claude post-processing pipeline (runs after any parse method) ═══
+  const claudePipeline=async(parsed,headers,rows,colMap)=>{
+    if(!WORKER_URL)return parsed;
+    try{
+      toast('🧠 Claude refining…','info');
+      var processed=await claudePostProcess(parsed,headers,rows,colMap);
+      var dedup=await claudeDedup(processed);
+      if(dedup.dupes.length)toast('🔍 '+dedup.dupes.length+' duplicate groups found & marked');
+      if(window._lowConfCols?.length)toast('⚠️ Low confidence: '+window._lowConfCols.join(', ')+' — tap 🔧 Columns','info');
+      return dedup.leads}
+    catch(e){console.warn('[Claude Pipeline]',e.message);return parsed}};
+
   const fetchLeads=async()=>{if(!cfg.sheetId||!cfg.sheetTab)return;setSLoad(true);toast('Analyzing…','info');
     try{const v=await gSheets.vals(cfg.sheetId,cfg.sheetTab);if(v.length<2){toast('Empty','err');setSLoad(false);return}
       const h=v[0].map(String),r=v.slice(1);
-      setRawSheet({headers:h,rows:r}); // Store for re-analysis
+      setRawSheet({headers:h,rows:r});
 
-      // ═══ STEP 0: Multi-batch detection (misaligned providers) ═══
+      // ═══ STEP 0: Multi-batch detection ═══
       const multiBatch=parseSheetMultiBatch(h,r);
       if(multiBatch&&multiBatch.leads.length){
-        // Multi-batch detected! Validate and use
         const validated=validateStatuses(multiBatch.leads,r,-1);
-        setLeads(validated);
-        const ni=validated.filter(l=>l.status==='ni').length,set=validated.filter(l=>l.status==='set').length;
-        const cb=validated.filter(l=>l.status==='cb').length,pend=validated.filter(l=>l.status==='pending').length;
-        toast('🔀 '+multiBatch.batches+' batches detected! '+multiBatch.count+' leads | '+pend+' callable, '+ni+' NI, '+set+' Set, '+cb+' CB');
-        multiBatch.summary.forEach(s=>console.log('[AutoDial] '+s));
-        setSLoad(false);return;
-      }
+        const final=await claudePipeline(validated,h,r,multiBatch._colMap||null);
+        setLeads(final);if(multiBatch._colMap)setDetectedColMap(multiBatch._colMap);
+        const ni=final.filter(l=>l.status==='ni').length,pend=final.filter(l=>l.status==='pending').length;
+        toast('🔀 '+multiBatch.batches+' batches | '+final.length+' leads | '+pend+' callable, '+ni+' NI');
+        setSLoad(false);return}
 
-      // ═══ STEP 1: Single-batch flow (original) ═══
-      // Detect remarks column directly from headers (don't rely on AI)
-      // Step 1: exact match for common names
+      // ═══ STEP 1: AI parse (Claude → Gemini → manual) ═══
       let rmkCol=h.findIndex(x=>/^(remarks?|notes?|comments?|result|outcome)$/i.test(x.trim()));
-      // Step 2: if no exact match, try "status" only as exact match (avoid "Residential Status")
       if(rmkCol===-1)rmkCol=h.findIndex(x=>/^status$/i.test(x.trim()));
-      // Step 3: partial match but only short headers (skip "Residential Status" etc)
       if(rmkCol===-1)rmkCol=h.findIndex(x=>x.trim().length<12&&/remarks|notes|comment/i.test(x.trim()));
-      if(rmkCol>=0)console.log('[AutoDial] Remarks column: '+h[rmkCol]+' (col '+rmkCol+')');
       const ai=await aiParse(r,h);
-      if(ai?.leads.length){const validated=validateStatuses(ai.leads,r,rmkCol);setLeads(validated);const ni=validated.filter(l=>l.status==='ni').length,set=validated.filter(l=>l.status==='set').length,cb=validated.filter(l=>l.status==='cb').length,pend=validated.filter(l=>l.status==='pending').length;toast('✨ '+ai.count+' leads | '+pend+' callable, '+ni+' NI, '+set+' Set, '+cb+' CB');setSLoad(false);return}
-      // No AI — use basic parser
+      if(ai?.leads.length){
+        const validated=validateStatuses(ai.leads,r,rmkCol);
+        const final=await claudePipeline(validated,h,r,ai.colMap||null);
+        setLeads(final);
+        const ni=final.filter(l=>l.status==='ni').length,pend=final.filter(l=>l.status==='pending').length;
+        toast('✨ '+final.length+' leads | '+pend+' callable, '+ni+' NI');setSLoad(false);return}
+      // No AI — basic parser
       const res=parseSheet(r,h);if(res.error){toast(res.error,'err');setSLoad(false);return}
       if(res.colMap)setDetectedColMap(res.colMap);
-      // Check for ambiguous status/remarks columns — find candidates
-      const statusCandidates=h.map((col,i)=>({idx:i,name:col})).filter(({name})=>/status|remark|notes?|comment|result|outcome/i.test(name));
-      if(statusCandidates.length>1){
-        // Multiple possible columns — ask user to pick
-        setShowColPicker({headers:h,candidates:statusCandidates,rows:r});
-        const v3=validateStatuses(res.leads,r,rmkCol);setLeads(v3);toast(v3.filter(l=>l.status==='pending').length+' callable of '+res.count+' leads loaded — please confirm status column','info')
-      }else{
-        const validated2=validateStatuses(res.leads,r,rmkCol);setLeads(validated2);
-        const ni2=validated2.filter(l=>l.status==='ni').length,set2=validated2.filter(l=>l.status==='set').length,pend2=validated2.filter(l=>l.status==='pending').length;
-        toast(res.count+' leads | '+pend2+' callable, '+ni2+' NI, '+set2+' Set');
-        if(!geminiKey())toast('Add Gemini AI for smarter analysis','info')
-      }}catch(e){toast(e.message,'err')}setSLoad(false)};
+      const validated2=validateStatuses(res.leads,r,rmkCol);
+      const final=await claudePipeline(validated2,h,r,res.colMap||null);
+      setLeads(final);
+      const ni2=final.filter(l=>l.status==='ni').length,pend2=final.filter(l=>l.status==='pending').length;
+      toast(final.length+' leads | '+pend2+' callable, '+ni2+' NI');
+      if(!geminiKey()&&!WORKER_URL)toast('Add AI for smarter analysis','info')
+    }catch(e){toast(e.message,'err')}setSLoad(false)};
   const handleFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const ext=f.name.split('.').pop().toLowerCase();let h,r;
     if(['csv','tsv','txt'].includes(ext)){const p=Papa.parse(await f.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}
     else{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
@@ -2357,7 +2587,8 @@ function App(){
       {(isCreatorUser||isCreator(window._user?.email||''))&&<button onClick={()=>{setShowApprovalModal(true);if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data)}}).catch(e=>console.warn('[Users]',e))}} style={{padding:'4px 10px',borderRadius:8,background:pendingUsers.length?'var(--rdim)':'var(--adim)',border:'1px solid '+(pendingUsers.length?'rgba(248,81,73,.3)':'rgba(99,102,241,.2)'),color:pendingUsers.length?'var(--red)':'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0,marginRight:2}}>
         👥{pendingUsers.length>0?' '+pendingUsers.length:''}
       </button>}
-      {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
+      {isOffline&&<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:8,padding:'2px 7px'}}>OFFLINE</span>}
+            {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:8,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
       {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:8,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
       <button onClick={()=>setShowHelp(true)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:12,fontWeight:700}}>?</button>
       <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
@@ -2553,6 +2784,12 @@ function App(){
       </div>
 
       {/* ═══ POST-CALL REMARKS ═══ */}
+      {/* ═══ UNDO TOAST — 10 second window ═══ */}
+      {undoInfo&&<div style={{marginBottom:8,padding:'10px 14px',borderRadius:12,background:'linear-gradient(135deg,rgba(240,180,41,.1),rgba(210,153,34,.05))',border:'1px solid rgba(240,180,41,.3)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+        <span style={{fontSize:12,color:'var(--amber)'}}>{undoInfo.status.toUpperCase()} → {undoInfo.name}</span>
+        <button onClick={doUndo} style={{padding:'6px 14px',borderRadius:8,background:'var(--amdim)',color:'var(--amber)',fontSize:11,fontWeight:700,flexShrink:0,border:'1px solid rgba(240,180,41,.3)'}}>↩️ Undo</button>
+      </div>}
+
       {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.2)'}}>
         <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent)',textTransform:'uppercase',letterSpacing:'.1em'}}>Quick note (optional)</p>
         <input value={postCallNote} onChange={e=>setPostCallNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')finishPostCall()}} placeholder="Receptiveness, tone, objections..." style={{marginBottom:8,fontSize:12}} autoFocus/>
@@ -2712,6 +2949,28 @@ function App(){
           {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
         </div>})}
     </div>})()}
+
+    {/* ═══ LIVE LEADERBOARD ═══ */}
+    {tab==='rank'&&isCallMode&&leaderboard.length>0&&<div className="card" style={{marginTop:12}}>
+      <h3 style={{margin:'0 0 10px',fontSize:14,fontWeight:800,color:'var(--gold)'}}>🏆 Today's Leaderboard</h3>
+      {leaderboard.map((s,i)=>{const isMe=s.email?.toLowerCase()===myEmail.toLowerCase();const isLive=Date.now()-s.ts<120000;
+        return<div key={s.email||i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:10,marginBottom:4,
+          background:isMe?'rgba(99,102,241,.08)':'var(--bg)',border:'1px solid '+(isMe?'rgba(99,102,241,.2)':'var(--border)')}}>
+          <span style={{fontSize:16,fontWeight:800,color:i===0?'var(--gold)':i===1?'#c0c0c0':i===2?'#cd7f32':'var(--text3)',minWidth:24}}>{i+1}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:12,fontWeight:700,color:isMe?'var(--accent2)':'#cbd5e1'}}>{s.name?.split('@')[0]||'User'}</span>
+              {isLive&&<span style={{width:6,height:6,borderRadius:'50%',background:'var(--green)',flexShrink:0}}/>}
+              {isMe&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:7}}>YOU</span>}
+            </div>
+            <span style={{fontSize:9,color:'var(--text3)'}}>{s.rank||''}</span>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <p style={{margin:0,fontSize:14,fontWeight:800,color:'var(--green)'}}>{s.sets}</p>
+            <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{s.dialed} dials</p>
+          </div>
+        </div>})}
+    </div>}
 
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {tab==='appts'&&<div className='content-pad'>
@@ -3810,6 +4069,13 @@ function App(){
           }} disabled={aiAnalyzing} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{aiAnalyzing?'Analyzing…':'Save & Analyze'}</button>
           {leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginLeft:6}}>🧠 Re-analyze Leads</button>}
       </div>
+
+      {WORKER_URL&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:9,fontWeight:400,color:'var(--text3)'}}>(smarter sheet analysis)</span></h3>
+        <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
+        <input value={localStorage.getItem('autodial_claude_key')||''} onChange={e=>{localStorage.setItem('autodial_claude_key',e.target.value.trim());e.target.parentElement.querySelector('.ck-status').textContent=e.target.value.trim()?'✓ Key saved':'No key'}} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
+        <p className="ck-status" style={{margin:0,fontSize:10,color:localStorage.getItem('autodial_claude_key')?'var(--green)':'var(--text3)'}}>{localStorage.getItem('autodial_claude_key')?'✓ Key saved — Claude will analyze your leads':'No key — using Gemini only'}</p>
+      </div>}
 
       {/* Calendar Sharing (Main only) */}
       {role==='main'&&<div className="card" style={{marginBottom:12}}>
