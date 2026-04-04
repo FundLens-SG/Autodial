@@ -952,10 +952,12 @@ const FUZZY_STATUS_MAP=[
 function fuzzyStatusMatch(text){
   if(!text||text.length<2)return null;
   var t=text.toLowerCase().trim();
-  // Exact known abbreviations
-  if(t==='ni'||t==='n.i.'||t==='n.i')return'ni';
-  if(t==='np'||t==='n.p.'||t==='n.p')return'np';
-  if(t==='cb'||t==='c.b.'||t==='c.b')return'cb';
+  // Exact known abbreviations (also handle hidden chars by stripping non-printable)
+  t=t.replace(/[^\x20-\x7E]/g,'').trim();
+  if(!t||t.length<2)return null;
+  if(t==='ni'||t==='n.i.'||t==='n.i'||/^ni\s*$/i.test(t))return'ni';
+  if(t==='np'||t==='n.p.'||t==='n.p'||/^np\s*$/i.test(t))return'np';
+  if(t==='cb'||t==='c.b.'||t==='c.b'||/^cb\s*$/i.test(t))return'cb';
   // Common aliases — WN (Wrong Number), DNC (Do Not Call) = NI
   if(t==='wn'||t==='w.n.'||t==='wrong number'||t==='wrongnumber'||t==='wrong no'||t==='wrong num')return'ni';
   if(t==='dnc'||t==='d.n.c.'||t==='do not call'||t==='dont call'||t==='dnd')return'ni';
@@ -1360,6 +1362,31 @@ function validateStatuses(leads,rawRows,remarksIdx){
     if(!rmk&&rawRows&&remarksIdx>=0){
       var ri=(l.sheetRow||0)-2;
       if(ri>=0&&ri<rawRows.length){rmk=String(rawRows[ri][remarksIdx]||'').trim();if(rmk)l=Object.assign({},l,{notes:rmk})}
+    }
+    // ═══ NUCLEAR SAFETY NET: scan ALL columns of raw row for status indicators ═══
+    if(l.status==='pending'&&rawRows){
+      var ri2=(l.sheetRow||0)-2;
+      if(ri2>=0&&ri2<rawRows.length){
+        var row=rawRows[ri2];
+        for(var ci=0;ci<(row||[]).length;ci++){
+          var cv=String(row[ci]||'').trim().toLowerCase().replace(/[^\x20-\x7E]/g,'');
+          if(!cv||cv.length>20)continue; // Skip long text, only check short status-like values
+          // Exact matches in ANY column
+          if(cv==='ni'||cv==='n.i.'||cv==='n.i'||cv==='not interested'){
+            if(!rmk)rmk=String(row[ci]||'').trim();
+            l=Object.assign({},l,{status:'ni',_validated:true,notes:rmk||l.notes,statusCol:ci});break}
+          if(cv==='wn'||cv==='wrong number'||cv==='deceased'||cv==='dnc'){
+            if(!rmk)rmk=String(row[ci]||'').trim();
+            l=Object.assign({},l,{status:'ni',_validated:true,notes:rmk||l.notes,statusCol:ci});break}
+          if(/^np\s*x?\s*\d*$/i.test(cv)){var _m=cv.match(/np\s*x?\s*(\d+)/i);
+            l=Object.assign({},l,{status:'np',npCount:_m?parseInt(_m[1]):1,_validated:true,notes:rmk||String(row[ci]||'').trim(),statusCol:ci});break}
+          if(cv==='cb'||cv==='callback'||cv==='call back'){
+            l=Object.assign({},l,{status:'cb',_validated:true,notes:rmk||String(row[ci]||'').trim(),statusCol:ci});break}
+          if(cv==='appointment set'||cv==='appt set'||cv==='set'){
+            l=Object.assign({},l,{status:'set',_validated:true,notes:rmk||String(row[ci]||'').trim(),statusCol:ci});break}
+        }
+        if(l.status!=='pending')return l; // Already found by nuclear scan
+      }
     }
     if(!rmk)return l;
     var rl=rmk.toLowerCase().trim();
@@ -1998,6 +2025,8 @@ function App(){
   const syncRef=useRef(null);
   const broadcast=useCallback((extra={})=>{clearTimeout(syncRef.current);syncRef.current=setTimeout(()=>{syncSend('sync',{leads,cfg:{sheetId:cfg.sheetId,sheetTab:cfg.sheetTab,delay:cfg.delay},curIdx,phase,running,session,countdown,...extra})},300)},[leads,cfg,curIdx,phase,running,session,countdown]);
   const prevLeads=useRef(leads);
+  const leadsRef=useRef(leads); // Always-current leads for callbacks
+  useEffect(()=>{leadsRef.current=leads},[leads]);
   useEffect(()=>{if(leads!==prevLeads.current){prevLeads.current=leads;broadcast()}},[leads,broadcast]);
 
   // Sync listener
@@ -2015,6 +2044,15 @@ function App(){
 
   const pending=leads.filter(l=>l.status==='pending'||l.status==='cb');
   const cur=curIdx>=0&&curIdx<leads.length?leads[curIdx]:null;
+  // AUTO-SKIP: if current lead is NI/Set while running, skip to next immediately
+  useEffect(()=>{
+    if(!running||!cur||phase==='idle'||phase==='preview')return;
+    if(cur.status==='ni'||cur.status==='set'){
+      console.warn('[AutoDial] Auto-skipping NI/Set lead:',cur.name,cur.status);
+      const nextIdx=getNextDialable(leads,curIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done','info')}
+      else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},300)}
+    }},[cur?.status,curIdx,running,phase]);
   const progress=leads.length?Math.round((leads.filter(l=>l.status!=='pending').length/leads.length)*100):0;
   const tier=getTier(totalSets,myCfg.tierMins);const hourlyRate=myCfg.payRates[tier.idx]||myCfg.payRates[0];
   const userName=window._prof?.full_name||myEmail||'User';
@@ -2160,10 +2198,14 @@ function App(){
     if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return p}setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);return p})},[curIdx,cfg.delay,filters]);
 
   const proceedToLead=useCallback((idx)=>{
-    if(idx===-1||idx>=leads.length){setRunning(false);setPhase('idle');setCurIdx(-1);setShowNextPreview(false);return}
+    const curLeads=leadsRef.current;
+    // SAFETY: if the lead at idx is already NI/Set, find REAL next lead
+    if(idx>=0&&idx<curLeads.length&&(curLeads[idx].status==='ni'||curLeads[idx].status==='set')){
+      console.warn('[AutoDial] proceedToLead: lead '+idx+' is '+curLeads[idx].status+', finding next…');
+      idx=getNextDialable(curLeads,idx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority})}
+    if(idx===-1||idx>=curLeads.length){setRunning(false);setPhase('idle');setCurIdx(-1);setShowNextPreview(false);toast('No more leads','info');return}
     setCurIdx(idx);setRunning(true);setPhase('calling');setShowNextPreview(false);
-    // Dial immediately — user already clicked "Dial", no need for countdown
-    setTimeout(()=>dial(leads[idx].phone),300)},[cfg.delay,leads,dial]);
+    setTimeout(()=>{const l=leadsRef.current[idx];if(l)dial(l.phone)},300)},[dial,filters,cfg,myCfg]);
 
   const handleOutcome=useCallback((status,extra={})=>{
     if(status==='set'){
@@ -2191,20 +2233,22 @@ function App(){
       const idx=showPostCall.leadIdx;
       setLeads(p=>p.map((l,i)=>i===idx?{...l,notes:(l.notes?l.notes+' | ':'')+postCallNote.trim()}:l));
       // Write back to Google Sheet
-      if(cfg.sheetId&&leads[idx]?.statusCol>=0&&leads[idx]?.sheetRow){
-        const lead=leads[idx];const col=String.fromCharCode(65+lead.statusCol);
+      const curLeads=leadsRef.current;
+      if(cfg.sheetId&&curLeads[idx]?.statusCol>=0&&curLeads[idx]?.sheetRow){
+        const lead=curLeads[idx];const col=String.fromCharCode(65+lead.statusCol);
         const val=(lead.notes?lead.notes+' | ':'')+postCallNote.trim();
         if(localStorage.getItem('ad_gt'))gSheets.put(cfg.sheetId,(cfg.sheetTab||'Sheet1')+'!'+col+lead.sheetRow,val)
       }
     }
     setShowPostCall(null);
-    // Show next lead preview — leads is current because user interacted (React re-rendered)
+    // Use leadsRef.current to get LATEST leads (after NI/NP was applied)
     const savedLeadIdx=showPostCall?.leadIdx??curIdx;
     setTimeout(()=>{
-      const nextIdx=getNextDialable(leads,savedLeadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+      const currentLeads=leadsRef.current;
+      const nextIdx=getNextDialable(currentLeads,savedLeadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
       if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
       else{setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')}
-    },100)
+    },150)
   },[postCallNote,showPostCall,leads,curIdx,filters,cfg,myCfg]);
 
   useEffect(()=>{if(phase==='waiting'&&countdown>0&&running){cdRef.current=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(cdRef.current)}
@@ -2512,9 +2556,7 @@ function App(){
       {showPostCall&&!showNextPreview&&<div className="card fi" style={{marginBottom:10,borderColor:'rgba(99,102,241,.2)'}}>
         <p style={{margin:'0 0 6px',fontSize:10,fontWeight:700,color:'var(--accent)',textTransform:'uppercase',letterSpacing:'.1em'}}>Quick note (optional)</p>
         <input value={postCallNote} onChange={e=>setPostCallNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')finishPostCall()}} placeholder="Receptiveness, tone, objections..." style={{marginBottom:8,fontSize:12}} autoFocus/>
-        <div style={{display:'flex',gap:6}}>
-          <button onClick={finishPostCall} style={{flex:1,padding:'10px',background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700}}>{postCallNote.trim()?'Save & Next':'Skip to Next'}</button>
-        </div>
+        <button onClick={finishPostCall} style={{width:'100%',padding:'12px',background:postCallNote.trim()?'linear-gradient(135deg,var(--accent),#8b5cf6)':'var(--adim)',color:postCallNote.trim()?'#fff':'var(--accent2)',fontSize:13,fontWeight:700,borderRadius:12}}>{postCallNote.trim()?'💾 Save & Next Lead →':'➡️ Next Lead'}</button>
       </div>}
 
       {/* ═══ NEXT LEAD PREVIEW ═══ */}
