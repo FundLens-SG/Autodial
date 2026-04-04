@@ -956,6 +956,11 @@ function fuzzyStatusMatch(text){
   if(t==='ni'||t==='n.i.'||t==='n.i')return'ni';
   if(t==='np'||t==='n.p.'||t==='n.p')return'np';
   if(t==='cb'||t==='c.b.'||t==='c.b')return'cb';
+  // Common aliases — WN (Wrong Number), DNC (Do Not Call) = NI
+  if(t==='wn'||t==='w.n.'||t==='wrong number'||t==='wrongnumber'||t==='wrong no'||t==='wrong num')return'ni';
+  if(t==='dnc'||t==='d.n.c.'||t==='do not call'||t==='dont call'||t==='dnd')return'ni';
+  if(t==='deceased'||t==='passed away'||t==='rip')return'ni';
+  if(t==='refund'||t==='cancelled'||t==='canceled')return'ni';
   // Check learned patterns first
   var lp=window._learnedPatterns||{};
   if(lp[t])return lp[t];
@@ -983,7 +988,17 @@ window.fuzzyStatusMatch=fuzzyStatusMatch;
 // Detects when a sheet has multiple lead batches pasted with different column layouts.
 // Returns an array of batch objects, each with its own column mapping.
 
-function isPhoneLike(v){if(!v)return false;var s=String(v).replace(/[\s\-().+]/g,'');return/^\d{7,15}$/.test(s)}
+function isPhoneLike(v){if(!v)return false;var s=String(v).trim();
+  // Reject date patterns (DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD, etc.)
+  if(/^\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4}$/.test(s))return false;
+  if(/^\d{4}[-\/\.]\d{1,2}[-\/\.]\d{1,2}$/.test(s))return false;
+  var clean=s.replace(/[\s\-().+]/g,'');
+  if(!/^\d{7,15}$/.test(clean))return false;
+  // Singapore validation: 8-digit starting with 8 or 9, or with 65 prefix
+  if(clean.length===8)return/^[89]/.test(clean);
+  if(clean.length===10&&clean.startsWith('65'))return/^65[89]/.test(clean);
+  if(clean.length===11&&clean.startsWith('65'))return/^65[89]/.test(clean);
+  return clean.length>=7} // International numbers pass through
 function isEmailLike(v){return v&&/@/.test(String(v))}
 function isAgeLike(v){if(!v)return false;var n=parseInt(String(v));return!isNaN(n)&&n>=16&&n<=100&&String(v).trim().length<=3}
 function isNameLike(v){if(!v)return false;var s=String(v).trim();
@@ -2142,11 +2157,14 @@ function App(){
       }
     }
     setShowPostCall(null);
-    // Now show next lead preview
+    // Now show next lead preview — use functional update to get LATEST leads
     setTimeout(()=>{
-      const nextIdx=getNextDialable(leads,showPostCall?.leadIdx??curIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
-      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info');return}
-      setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')
+      setLeads(currentLeads=>{
+        const startFrom=showPostCall?.leadIdx??curIdx;
+        const nextIdx=getNextDialable(currentLeads,startFrom,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+        if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
+        else{setNextPreviewIdx(nextIdx);setShowNextPreview(true);setPhase('preview')}
+        return currentLeads}) // Don't modify leads, just read them
     },100)
   },[postCallNote,showPostCall,leads,curIdx,filters,cfg,myCfg]);
 
