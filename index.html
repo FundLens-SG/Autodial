@@ -6189,7 +6189,7 @@ function App(){
 
     {/* ═══ TIP INPUT MODAL — Met→Closed / Pending→Closed flow ═══ */}
     <Modal show={tipModal} onClose={()=>setTipModal(null)} align="center" bg=".85" zIndex={101}>
-      <div style={{width:'100%',maxWidth:420,borderRadius:20,padding:'24px 22px',border:'1px solid rgba(240,180,41,.3)'}} className="glass fi">
+      {tipModal&&<div style={{width:'100%',maxWidth:420,borderRadius:20,padding:'24px 22px',border:'1px solid rgba(240,180,41,.3)'}} className="glass fi">
         <div style={{textAlign:'center',marginBottom:16}}>
           <p style={{margin:0,fontSize:32}}>💰</p>
           <h3 style={{margin:'6px 0 2px',fontSize:18,fontWeight:800,color:'var(--gold)'}}>{role==='main'?'EFYC Amount':'Tip Amount'}</h3>
@@ -6237,7 +6237,7 @@ function App(){
             setTipModal(null);setTipAmountInput('');
           }} style={{flex:2,padding:'12px',borderRadius:12,background:'linear-gradient(135deg,var(--gold),#d97706)',color:'#fff',fontSize:13,fontWeight:800,boxShadow:'0 4px 16px rgba(240,180,41,.3)'}}>💰 Mark Closed</button>
         </div>
-      </div>
+      </div>}
     </Modal>
 
     {/* ═══ TIP CELEBRATION OVERLAY — intensity scales by $100 up to $1000 ═══ */}
@@ -6285,7 +6285,7 @@ function App(){
 
     {/* ═══ Column Picker Modal (ambiguous status/remarks) ═══ */}
     <Modal show={showColPicker} onClose={()=>setShowColPicker(null)} align="center" bg=".85" zIndex={100}>
-      <div style={{width:'100%',maxWidth:400,background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+      {showColPicker&&<div style={{width:'100%',maxWidth:400,background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>Which column has status/remarks?</h3>
         <p style={{margin:'0 0 16px',fontSize:12,color:'var(--text3)'}}>Multiple columns look like they could contain lead status. Pick the one that has NI/NP/CB/Set info:</p>
         {showColPicker.candidates.map(col=>{
@@ -6319,14 +6319,14 @@ function App(){
             {samples.length>0&&<p style={{margin:'6px 0 0',fontSize:10,color:'var(--text3)'}}>Samples: {samples.join(' | ')}</p>}
           </button>})}
         <button onClick={()=>setShowColPicker(null)} style={{width:'100%',padding:'12px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,marginTop:4}}>Skip — keep all as Pending</button>
-      </div>
+      </div>}
     </Modal>
 
     {/* ═══ Session Replay Modal ═══ */}
 
     {/* ═══ Column Map Override Modal ═══ */}
     <Modal show={showColMap&&rawSheet} onClose={()=>setShowColMap(false)} align="center" bg=".88" zIndex={100}>
-      <div style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
+      {showColMap&&rawSheet&&<div style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 4px',fontSize:16,fontWeight:800,color:'#f1f5f9'}}>🔧 Column Mapping</h3>
         <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)'}}>Tap a role to reassign. Changes re-import your leads.</p>
         {(()=>{
@@ -6400,13 +6400,13 @@ function App(){
             <button onClick={()=>setShowColMap(false)} style={{width:'100%',padding:'10px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:12,marginTop:2}}>Cancel</button>
           </div>
         })()}
-      </div>
+      </div>}
     </Modal>
 
     {/* ═══ Session Replay Modal ═══ */}
     {/* ═══ CYCLE CLOSE PREVIEW MODAL ═══ */}
     <Modal show={cycleCloseModal} onClose={()=>setCycleCloseModal(null)} align="center" bg=".88" zIndex={103}>
-      <div style={{width:'100%',maxWidth:460,maxHeight:'88vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'18px 16px',border:'1px solid var(--border2)'}}>
+      {cycleCloseModal&&<div style={{width:'100%',maxWidth:460,maxHeight:'88vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'18px 16px',border:'1px solid var(--border2)'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
           <div><h3 style={{margin:0,fontSize:17,fontWeight:800,color:'#f1f5f9'}}>🔒 Close Cycle {cycleCloseModal.cycleNum}</h3>
             <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>Archive unpaid work into a locked billing cycle</p></div>
@@ -6450,7 +6450,7 @@ function App(){
             toast('🔒 Cycle '+cycleCloseModal.cycleNum+' closed · '+_newCycles.length+' admin'+(_newCycles.length===1?'':'s')+' · $'+cycleCloseModal.total.toFixed(2))
           }} style={{flex:2,padding:'11px',borderRadius:12,background:'linear-gradient(135deg,var(--amber),#d97706)',color:'#fff',fontSize:12,fontWeight:800,border:'none',boxShadow:'0 2px 10px rgba(210,153,34,.35)'}}>🔒 Close Cycle {cycleCloseModal.cycleNum}</button>
         </div>
-      </div>
+      </div>}
     </Modal>
 
     {/* ═══ INVITE LINK MODAL ═══ */}
@@ -6568,7 +6568,7 @@ function App(){
   </Modal>})()}
 
     <Modal show={showReplay} onClose={()=>setShowReplay(null)} align="center" bg=".85" zIndex={100}>
-      <div style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
+      {showReplay&&<div style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 14px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>📹 Session Replay</h3>
         {showReplay.log?.length?showReplay.log.map((l,i)=>{
           const t=new Date(l.ts);const icons={call:'📲',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭'};
@@ -6580,7 +6580,7 @@ function App(){
           </div>
         }):<p style={{color:'var(--text3)',textAlign:'center',padding:20}}>No call log available for this session</p>}
         <button onClick={()=>setShowReplay(null)} style={{width:'100%',marginTop:14,padding:'12px',borderRadius:14,background:'var(--bg3)',color:'var(--text3)',fontSize:13}}>Close</button>
-      </div>
+      </div>}
     </Modal>
   </div>
 
