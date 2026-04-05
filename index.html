@@ -1843,15 +1843,19 @@ function App(){
   const[apptLocation,setApptLocation]=useState('');const[apptObs,setApptObs]=useState('');
   const[savedInvitees,setSavedInvitees]=useState(load('invitees')||[]);
   // ═══ Appointment Date Picker (shows multi-week free slots before form) ═══
-  const[apptPickerOpen,setApptPickerOpen]=useState(false);
   const[pickerEvents,setPickerEvents]=useState([]);
   const[pickerLoading,setPickerLoading]=useState(false);
   const[pickerWeekIdx,setPickerWeekIdx]=useState(0); // 0 = current week, 1 = next, etc.
   const[apptShaky,setApptShaky]=useState(false); // Shaky flag on new appointment
+  const[pendingShakyKey,setPendingShakyKey]=useState(null); // "dayKey_HH:MM" for inline confirm
   const[calViewMode,setCalViewMode]=useState(()=>load('calvm')||'list'); // 'list' | 'grid' for Cal tab
   // Shaky flags stored per-appointment-id in localStorage (since schema doesn't have column)
   const[shakyMap,setShakyMap]=useState(()=>{try{return JSON.parse(localStorage.getItem('shakyAppts')||'{}')}catch(e){return{}}});
   const setShaky=(apptId,val)=>{setShakyMap(p=>{const n={...p};if(val)n[apptId]=true;else delete n[apptId];localStorage.setItem('shakyAppts',JSON.stringify(n));return n})};
+  // Single source of truth for shaky status — checks both the a.shaky column (from Supabase) and local shakyMap cache
+  const isApptShaky=(a)=>!!(a&&((a.shaky)||(shakyMap&&a.phone&&shakyMap[a.phone])));
+  // 60s cache for picker events to avoid refetching on every modal open
+  const pickerEventsCacheRef=useRef({key:'',ts:0,data:null});
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);const[newF,setNewF]=useState({name:'',phone:''});
   const[showFilters,setShowFilters]=useState(false);
@@ -2238,32 +2242,81 @@ function App(){
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'apptdur_'+_user.email.toLowerCase(),biz_name:JSON.stringify({dur:apptDuration,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})},[apptDuration]);
   // Persist Cal tab view mode
   useEffect(()=>{save('calvm',calViewMode)},[calViewMode]);
-  // ═══ Load picker events (4 weeks forward from today) when picker opens ═══
-  useEffect(()=>{if(!apptPickerOpen||!gOk)return;
-    let cancelled=false;
-    (async()=>{
-      setPickerLoading(true);
-      try{
-        // Same cal selection as the Cal tab loader
-        let calFetchList=['primary'];
-        if(role==='main'&&calList&&calList.length){
-          const visible=calList.filter(c=>c.selected!==false&&c.accessRole&&c.accessRole!=='freeBusyReader');
-          calFetchList=visible.map(c=>c.id);
-          if(!calFetchList.includes('primary'))calFetchList.unshift('primary');
-        }else if(role==='admin'){
-          const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
-          calFetchList=['primary',...myShares];
-        }
-        // Load from start of today through 4 weeks (28 days)
-        const now=new Date();
-        const minD=new Date(now.getFullYear(),now.getMonth(),now.getDate());
-        const maxD=new Date(minD.getTime()+56*86400000); // 8 weeks forward
-        const evs=await gCal.loadRange(calFetchList,minD,maxD);
-        if(!cancelled){setPickerEvents(evs);setPickerLoading(false)}
-      }catch(e){if(!cancelled){setPickerEvents([]);setPickerLoading(false)}}
-    })();
-    return()=>{cancelled=true};
-  },[apptPickerOpen,gOk,role,calList,adminConfigs,myEmail]);
+  // ═══ UNIFIED EVENT LOADER — single source of truth for Cal tab + picker ═══
+  // Fetches 8 weeks of events with full enrichment (_calId/_calName/_calColor) and dedup.
+  // Cached 60s. Cal tab's loadWeekEvents reads this cache when the target week is within range.
+  const loadPickerEventsIfStale=useCallback(async(force)=>{
+    if(!gOk)return[];
+    // Build the calendar list WITH metadata (matches Cal tab's format)
+    let calFetchList=[{id:'primary',summary:'Primary',backgroundColor:'#1a73e8'}];
+    if(role==='main'&&calList&&calList.length){
+      const visible=calList.filter(c=>c.selected!==false&&c.accessRole&&c.accessRole!=='freeBusyReader');
+      if(visible.length)calFetchList=visible.map(c=>({id:c.id,summary:c.summary||c.summaryOverride||c.id,backgroundColor:c.backgroundColor||'#6366f1',primary:!!c.primary}));
+    }else if(role==='admin'){
+      const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>({id:c.id,summary:c.name||c.id,backgroundColor:'#6366f1'})).filter(c=>c.id);
+      const legacyShares=(calShares||[]).map(c=>({id:c.calendar_id,summary:c.name||c.calendar_id,backgroundColor:'#6366f1'})).filter(c=>c.id);
+      calFetchList=[{id:'primary',summary:'My Primary',backgroundColor:'#1a73e8'},...myShares,...legacyShares];
+    }
+    // Dedupe by calendar id
+    {const seen=new Set();calFetchList=calFetchList.filter(c=>{if(seen.has(c.id))return false;seen.add(c.id);return true})}
+    const cacheKey=calFetchList.map(c=>c.id).sort().join('|');
+    const cache=pickerEventsCacheRef.current;
+    // Reuse cache if same calendar set AND <60s old AND data present
+    if(!force&&cache&&cache.key===cacheKey&&cache.data&&(Date.now()-cache.ts)<60000){
+      if(pickerEvents!==cache.data)setPickerEvents(cache.data);
+      return cache.data;
+    }
+    setPickerLoading(true);
+    try{
+      const now=new Date();
+      const minD=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+      const maxD=new Date(minD.getTime()+56*86400000); // 8 weeks forward
+      // Parallel fetch from every calendar, enrich with _calName/_calColor like Cal tab
+      const results=await Promise.all(calFetchList.map(async c=>{
+        try{
+          const evs=c.id==='primary'
+            ?await gCal.events(minD.toISOString(),maxD.toISOString())
+            :await gCal.eventsFromCal(c.id,minD.toISOString(),maxD.toISOString());
+          return evs.map(e=>({...e,_calId:c.id,_calName:c.summary,_calColor:c.backgroundColor}))
+        }catch(_){return[]}
+      }));
+      // Flatten + dedupe by event id (same event can appear on multiple calendars)
+      const seen=new Map();
+      results.flat().forEach(e=>{const k=e.id||(e.iCalUID||'')+'_'+(e.start?.dateTime||e.start?.date||'');
+        if(!seen.has(k)||e._calId==='primary')seen.set(k,e)});
+      const all=Array.from(seen.values()).sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
+      pickerEventsCacheRef.current={key:cacheKey,ts:Date.now(),data:all,minD,maxD};
+      setPickerEvents(all);
+      setPickerLoading(false);
+      return all;
+    }catch(e){setPickerLoading(false);return[]}
+  },[gOk,role,calList,adminConfigs,calShares,myEmail]);
+  // Shared filter pipeline: applies visibility/invited/declined/admin-hide filters to raw cached events
+  const applyCalFilters=useCallback((events)=>{
+    return(events||[]).filter(ev=>{
+      if(calVisibility[ev._calId]===false)return false;
+      const isOrganizer=ev.organizer?.self===true;
+      if(isOrganizer)return true;
+      const me=(ev.attendees||[]).find(a=>a.self);
+      if(!me)return true;
+      const status=me.responseStatus;
+      if(status==='accepted')return true;
+      if(status==='declined')return !!showDeclined;
+      return !!showInvited;
+    }).map(ev=>{
+      // Admin hideDetails masking
+      if(role==='admin'){
+        const hideMap={};(adminConfigs[myEmail]?.sharedCals||[]).forEach(c=>{if(c.hideDetails)hideMap[c.id]=true});
+        if(hideMap[ev._calId])return{...ev,summary:'Busy',description:'',location:''};
+      }
+      return ev;
+    });
+  },[calVisibility,showInvited,showDeclined,role,adminConfigs,myEmail]);
+  // Trigger on: (a) Dial tab entry (pre-fetch), (b) modal open — cache makes this cheap
+  useEffect(()=>{
+    if(!gOk)return;
+    if(tab==='dial'||showAppt)loadPickerEventsIfStale();
+  },[tab,showAppt,gOk,loadPickerEventsIfStale]);
 
   // Hard sync WA templates (shared + own key for cross-device)
   useEffect(()=>{
@@ -2627,7 +2680,22 @@ function App(){
       const end=new Date(start.getTime()+7*86400000);
       setCalRefreshing(true);
       try{
-        // Parallel fetch from every calendar the user can read
+        // ═══ UNIFIED PIPELINE: try the 8-week shared cache first (avoids duplicate fetch) ═══
+        const cache=pickerEventsCacheRef.current;
+        const cacheCovers=cache&&cache.data&&cache.minD&&cache.maxD&&cache.minD<=start&&cache.maxD>=end&&(Date.now()-cache.ts)<60000;
+        if(cacheCovers){
+          // Slice the cache for this week, then apply filters via the shared helper
+          const weekSlice=cache.data.filter(ev=>{
+            const et=new Date(ev.start?.dateTime||ev.start?.date||0);
+            return et>=start&&et<end;
+          });
+          const filtered=applyCalFilters(weekSlice);
+          setWeekEvents(filtered);
+          console.log('[Cal] '+filtered.length+' events from shared cache (no fetch)');
+          setCalRefreshing(false);
+          return;
+        }
+        // Cache miss — fall back to direct fetch for just this week
         const results=await Promise.all(calFetchList.map(async c=>{
           try{
             const evs=c.id==='primary'
@@ -2636,35 +2704,15 @@ function App(){
             return evs.map(e=>({...e,_calId:c.id,_calName:c.summary,_calColor:c.backgroundColor}))
           }catch(_){return[]}
         }));
-        // Flatten + dedupe by event id (same event can appear on multiple calendars when organizer + attendees overlap)
         const seen=new Map();
         results.flat().forEach(e=>{const k=e.id||(e.iCalUID||'')+'_'+(e.start?.dateTime||e.start?.date||'');
-          // Prefer the copy from the primary calendar (user-owned) so the "on their calendar" context is correct
           if(!seen.has(k)||e._calId==='primary')seen.set(k,e)});
         let all=Array.from(seen.values());
         all.sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
-        // ═══ USER FILTERS: per-calendar visibility + invited-event RSVP status ═══
-        all=all.filter(ev=>{
-          // Calendar visibility: absent/true = visible, false = hidden
-          if(calVisibility[ev._calId]===false)return false;
-          // Invited events filter: if user is not the organizer and is listed as an attendee, respect their choice
-          const isOrganizer=ev.organizer?.self===true;
-          if(isOrganizer)return true;
-          const me=(ev.attendees||[]).find(a=>a.self);
-          if(!me)return true; // Not an invite (e.g. subscribed calendar, no attendees)
-          const status=me.responseStatus;
-          if(status==='accepted')return true;
-          if(status==='declined')return !!showDeclined;
-          // needsAction or tentative
-          return !!showInvited;
-        });
-        // For admin with hideDetails flag, strip event titles/descriptions so only time blocks show
-        if(role==='admin'){
-          const hideMap={};(adminConfigs[myEmail]?.sharedCals||[]).forEach(c=>{if(c.hideDetails)hideMap[c.id]=true});
-          all=all.map(e=>hideMap[e._calId]?{...e,summary:'Busy',description:'',location:''}:e);
-        }
+        // Apply filters via the shared helper (DRY)
+        all=applyCalFilters(all);
         setWeekEvents(all);
-        console.log('[Cal] Loaded',all.length,'events from',calFetchList.length,'calendars (after filters)');
+        console.log('[Cal] '+all.length+' events fetched directly (outside cache range)');
       }catch(e){console.warn('[WeekEvents]',e?.message||e)}
       finally{setCalRefreshing(false)}
     };
@@ -3026,7 +3074,7 @@ function App(){
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
         if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,3)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
-      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setApptShaky(false);setPickerWeekIdx(0);if(gOk){setApptPickerOpen(true)}else{setShowAppt(true)}setSetDone(true)}
+      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setApptShaky(false);setApptDate('');setApptTime('');setPickerWeekIdx(0);setShowAppt(true);setSetDone(true)}
     else{applyOutcome(status,extra)}
     // ═══ PRE-COMPUTE next lead by simulating status change ═══
     const simulated=leads.map((l,i)=>{
@@ -3926,7 +3974,7 @@ function App(){
                       if(endH<=HR_START||startH>=HR_END)return null;
                       const top=Math.max(0,(startH-HR_START)*HOUR_PX);
                       const height=Math.max(18,(Math.min(endH,HR_END)-Math.max(startH,HR_START))*HOUR_PX-2);
-                      const isShaky=(appointments||[]).some(a=>a.calEventId===ev.id&&(a.shaky||(shakyMap&&shakyMap[a.phone])));
+                      const isShaky=(appointments||[]).some(a=>a.calEventId===ev.id&&isApptShaky(a));
                       return<div key={'e-'+ei} title={ev.summary} style={{position:'absolute',left:2,right:2,top:top+2,height,borderRadius:5,padding:'2px 4px',fontSize:9,fontWeight:700,overflow:'hidden',background:isShaky?'linear-gradient(135deg,rgba(251,146,60,.35),rgba(234,88,12,.2))':'linear-gradient(135deg,rgba(99,102,241,.35),rgba(79,70,229,.2))',border:'1px solid '+(isShaky?'rgba(251,146,60,.6)':'rgba(99,102,241,.5)'),color:isShaky?'#fb923c':'#a5b4fc',boxShadow:isShaky?'0 0 8px rgba(251,146,60,.3)':'none',cursor:'default'}}>
                         <div style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{isShaky?'🟠 ':''}{ev.summary||'Busy'}</div>
                         <div style={{fontSize:8,opacity:.8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{String(start.getHours()).padStart(2,'0')}:{String(start.getMinutes()).padStart(2,'0')}</div>
@@ -3969,7 +4017,7 @@ function App(){
                     const allDay=!ev.start?.dateTime;
                     const timeStr=allDay?'All day':es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
                     // Shaky? Cross-ref appointments by calEventId or by phone in shakyMap
-                    const _isShaky=(appointments||[]).some(a=>(a.calEventId&&a.calEventId===ev.id)&&((a.shaky)||(shakyMap&&shakyMap[a.phone])));
+                    const _isShaky=(appointments||[]).some(a=>(a.calEventId&&a.calEventId===ev.id)&&isApptShaky(a));
                     return<div key={'e'+i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:_isShaky?'linear-gradient(135deg,rgba(251,146,60,.08),rgba(234,88,12,.04))':'var(--bg)',border:'1px solid '+(_isShaky?'rgba(251,146,60,.45)':'var(--border)'),boxShadow:_isShaky?'0 0 10px rgba(251,146,60,.2)':'none'}}>
                       <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:_isShaky?'linear-gradient(180deg,#fb923c,#ea580c)':(ev._calColor||'var(--accent)'),flexShrink:0,minHeight:28,boxShadow:_isShaky?'0 0 6px rgba(251,146,60,.6)':'none'}}/>
                       <div style={{flex:1,minWidth:0}}>
@@ -4159,7 +4207,7 @@ function App(){
           {a.apptDate&&<p style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>📅 {a.apptDate} {a.apptTime} {a.location?'· 📍'+a.location:''}</p>}
           {/* Shaky tickbox — tap to toggle whether this slot reappears as an "available (shaky)" slot in future pickers */}
           {a.apptDate&&(()=>{
-            const isShaky=!!(shakyMap&&shakyMap[a.phone])||!!a.shaky;
+            const isShaky=isApptShaky(a);
             return<div onClick={e=>{e.stopPropagation();const next=!isShaky;setShaky(a.phone,next);setAppointments(p=>p.map(x=>x.id===a.id?{...x,shaky:next}:x));
               // Sync shaky flag to Supabase so other devices see it
               DB.updateApptShaky(a.admin||myEmail,a.phone,a.apptDate,next).then(ok=>{if(!ok&&_SB)console.warn('[Shaky] cloud sync failed — local only')}).catch(()=>{});
@@ -5733,16 +5781,38 @@ function App(){
               ['Next week Mon',(()=>{const d=new Date(now);const daysUntilMon=(8-d.getDay())%7||7;d.setDate(d.getDate()+daysUntilMon);return{date:d.toISOString().slice(0,10),time:'10:00'}})(),''],
               ['In 2 weeks',mkDate(14,10,0),'']
             ];
-            return picks.map(([label,p,sub],i)=>
-              <button key={i} onClick={()=>{
+            // ═══ Clash detection helper — compares against cached pickerEvents (pre-fetched on Dial tab entry) ═══
+            const checkClash=(dateStr,timeStr)=>{
+              if(!pickerEvents||!pickerEvents.length)return null;
+              try{
+                const start=new Date(dateStr+'T'+timeStr);
+                const end=new Date(start.getTime()+30*60000); // assume 30min CB
+                // Also check existing leads scheduled as CB at this time
+                const cbLeadClash=(leads||[]).find(l=>l.status==='cb'&&l.cbDate===dateStr&&l.cbTime===timeStr);
+                if(cbLeadClash)return{type:'cb',name:cbLeadClash.name};
+                const evClash=pickerEvents.find(ev=>{
+                  const es=new Date(ev.start?.dateTime||ev.start?.date||0);
+                  const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
+                  return start<ee&&end>es;
+                });
+                if(evClash)return{type:'event',name:evClash.summary||'Busy'};
+              }catch(e){}
+              return null;
+            };
+            return picks.map(([label,p,sub],i)=>{
+              const clash=checkClash(p.date,p.time);
+              return<button key={i} onClick={()=>{
+                if(clash&&!confirm('⚠ This slot clashes with "'+clash.name+'". Schedule CB anyway?'))return;
                 setCbDate(p.date);setCbTime(p.time);
                 handleOutcome('cb',{cbDate:p.date,cbTime:p.time});
                 setShowCb(false);setCbDate('');setCbTime('');
-              }} style={{padding:'10px 8px',borderRadius:10,background:'var(--bg3)',color:'#f1f5f9',fontSize:11,fontWeight:700,border:'1px solid var(--border)',textAlign:'left'}}>
+              }} style={{padding:'10px 8px',borderRadius:10,background:clash?'linear-gradient(135deg,rgba(248,81,73,.12),var(--bg3))':'var(--bg3)',color:'#f1f5f9',fontSize:11,fontWeight:700,border:'1px solid '+(clash?'rgba(248,81,73,.45)':'var(--border)'),textAlign:'left',position:'relative'}}>
+                {clash&&<span style={{position:'absolute',top:4,right:6,fontSize:10,color:'var(--red)',fontWeight:800}}>⚠</span>}
                 <div style={{fontSize:11,fontWeight:800}}>{label}</div>
                 <div style={{fontSize:9,color:'var(--text3)',marginTop:2,fontWeight:600}}>{new Date(p.date+'T'+p.time).toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'})} · {p.time}{sub?' · '+sub:''}</div>
+                {clash&&<div style={{fontSize:8,color:'var(--red)',marginTop:3,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>Clashes: {clash.name}</div>}
               </button>
-            );
+            });
           })()}
         </div>
         {/* ═══ MANUAL DATE/TIME ═══ */}
@@ -5759,173 +5829,19 @@ function App(){
     </div>}
 
     {/* Appt Modal */}
-    {/* ═══ APPOINTMENT DATE PICKER MODAL ═══
-       Multi-week free-slot view. User taps a green slot → auto-fill date/time & open the form.
-       Shaky appointments render as shiny orange "also available" chips. */}
-    {apptPickerOpen&&(()=>{
-      const now=new Date();
-      const todayMid=new Date(now.getFullYear(),now.getMonth(),now.getDate());
-      const todayKey=localDateKey(todayMid);
-      // Build 4 weeks of days starting from the current week's Sunday
-      const weekStart0=startOfWeek(todayMid);
-      const TOTAL_WEEKS=8; // 8-week lookahead
-      const allDays=[];
-      for(let w=0;w<TOTAL_WEEKS;w++){
-        for(let i=0;i<7;i++){
-          const d=new Date(weekStart0.getTime()+(w*7+i)*86400000);
-          const dLocal=new Date(d.getFullYear(),d.getMonth(),d.getDate());
-          allDays.push({week:w,idx:i,key:localDateKey(dLocal),date:dLocal})
-        }
-      }
-      // Group picker events by day
-      const byDay={};
-      (pickerEvents||[]).forEach(ev=>{
-        const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
-        const k=localDateKey(dt);
-        if(!byDay[k])byDay[k]=[];
-        byDay[k].push(ev);
-      });
-      // Build shaky overlay: map of phone → appt object for shaky appts
-      const shakyAppts=(appointments||[]).filter(a=>(shakyMap&&shakyMap[a.phone])||a.shaky).map(a=>({...a,_shaky:true}));
-      const shakyByDay={};
-      shakyAppts.forEach(a=>{if(a.apptDate){if(!shakyByDay[a.apptDate])shakyByDay[a.apptDate]=[];shakyByDay[a.apptDate].push(a)}});
-      const BIZ_START=9,BIZ_END=21,MIN_HRS=1.5;
-      // Visible week days
-      const visibleDays=allDays.filter(d=>d.week===pickerWeekIdx);
-      const weekStartDate=visibleDays[0]?.date;
-      const weekEndDate=visibleDays[6]?.date;
-      const weekLabel=weekStartDate?weekStartDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'})+' – '+weekEndDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
-      return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.92)',zIndex:110,display:'flex',alignItems:'stretch',justifyContent:'center'}} onClick={()=>{setApptPickerOpen(false)}}>
-        <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:980,maxHeight:'100vh',overflowY:'auto',borderRadius:0,padding:'16px 14px 24px',display:'flex',flexDirection:'column'}}>
-          {/* Header */}
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:8}}>
-            <div style={{flex:1,minWidth:0}}>
-              <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>📅 Pick a Slot</h3>
-              <p style={{margin:'2px 0 0',fontSize:11,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>For <b style={{color:'#f1f5f9'}}>{apptLead?.name||'lead'}</b>{apptLead?.phone?' · '+apptLead.phone:''} — tap a green slot to lock it in</p>
-            </div>
-            <button onClick={()=>{setApptPickerOpen(false);setShowAppt(true)}} style={{padding:'8px 12px',borderRadius:10,background:'var(--bg3)',color:'var(--text2)',fontSize:11,fontWeight:700,flexShrink:0,border:'1px solid var(--border)'}}>Manual ▸</button>
-            <button onClick={()=>setApptPickerOpen(false)} style={{padding:'8px 12px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:14,fontWeight:800,flexShrink:0,minWidth:40}}>×</button>
+    {/* ═══ COMBINED APPOINTMENT MODAL — picker + form in one surface ═══ */}
+    {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:100,display:'flex',alignItems:'stretch',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
+      <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:980,maxHeight:'100vh',overflowY:'auto',borderRadius:0,padding:'16px 14px 32px'}}>
+        {/* Header */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:8,position:'sticky',top:-16,background:'rgba(17,24,39,.92)',backdropFilter:'blur(8px)',padding:'8px 0',zIndex:2,margin:'-16px -14px 10px',paddingLeft:14,paddingRight:14}}>
+          <div style={{flex:1,minWidth:0}}>
+            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>📅 Set Appointment</h3>
+            <p style={{margin:'2px 0 0',fontSize:11,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>For <b style={{color:'#f1f5f9'}}>{apptLead?.name||'lead'}</b>{apptLead?.phone?' · '+apptLead.phone:''}</p>
           </div>
-          {/* Week navigation */}
-          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10,padding:'8px 10px',borderRadius:12,background:'var(--bg3)',border:'1px solid var(--border)'}}>
-            <button onClick={()=>setPickerWeekIdx(p=>Math.max(0,p-1))} disabled={pickerWeekIdx===0} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx===0?'var(--bg)':'var(--adim)',color:pickerWeekIdx===0?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx===0?.4:1}}>◀</button>
-            <div style={{flex:1,textAlign:'center'}}>
-              <p style={{margin:0,fontSize:13,fontWeight:800,color:'#f1f5f9'}}>{pickerWeekIdx===0?'This Week':pickerWeekIdx===1?'Next Week':'In '+pickerWeekIdx+' Weeks'}</p>
-              <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{weekLabel}</p>
-            </div>
-            <button onClick={()=>setPickerWeekIdx(p=>Math.min(TOTAL_WEEKS-1,p+1))} disabled={pickerWeekIdx>=TOTAL_WEEKS-1} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--bg)':'var(--adim)',color:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx>=TOTAL_WEEKS-1?.4:1}}>▶</button>
-          </div>
-          {/* Legend */}
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,fontSize:9,color:'var(--text3)',flexWrap:'wrap',justifyContent:'center'}}>
-            <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:10,height:10,borderRadius:3,background:'linear-gradient(135deg,#22c55e,#10b981)',boxShadow:'0 0 6px rgba(34,197,94,.5)'}}/>{MIN_HRS}h+ free</span>
-            <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:10,height:10,borderRadius:3,background:'linear-gradient(135deg,#fb923c,#ea580c)',boxShadow:'0 0 8px rgba(251,146,60,.6)'}}/>Shaky slot (may free up)</span>
-            <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:10,height:10,borderRadius:3,background:'rgba(148,163,184,.3)'}}/>Busy</span>
-          </div>
-          {pickerLoading?<div style={{textAlign:'center',padding:40,color:'var(--text3)',fontSize:12}}>⟳ Loading calendar…</div>:
-          /* Responsive day grid: 1 col on mobile, 7 cols on desktop */
-          <div className="picker-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:8,flex:1}}>
-            {visibleDays.map(d=>{
-              const isToday=d.key===todayKey;
-              const isPast=d.key<todayKey;
-              const dayEvents=(byDay[d.key]||[]).slice().sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
-              const _evWithTimes=dayEvents.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
-              // Subtract shaky appointments from the "busy" list so their slots read as shaky-free
-              const shakyOnDay=shakyByDay[d.key]||[];
-              const nonShakyBusy=_evWithTimes.filter(bt=>{
-                // If any shaky appt on this day overlaps this event's start time, mark it as shaky (excluded)
-                return !shakyOnDay.some(sa=>{
-                  if(!sa.apptTime)return false;
-                  const sh=new Date(d.key+'T'+sa.apptTime);
-                  const diff=Math.abs(sh.getTime()-bt.start.getTime());
-                  return diff<5*60000; // within 5 minutes
-                })
-              });
-              const freeSlots=isPast?[]:findFreeSlots(d.date,nonShakyBusy,BIZ_START,BIZ_END);
-              const bigSlots=freeSlots.filter(s=>s.hours>=MIN_HRS);
-              // Shaky slots on this day, rendered as orange
-              const shakySlots=shakyOnDay.filter(sa=>sa.apptTime).map(sa=>{
-                const sh=new Date(d.key+'T'+sa.apptTime);
-                const dur=sa.duration||90;
-                const en=new Date(sh.getTime()+dur*60000);
-                return{start:sh,end:en,hours:dur/60,name:sa.name,shaky:true}
-              });
-              const dayLabel=d.date.toLocaleDateString('en-SG',{weekday:'short'});
-              const dayNum=d.date.getDate();
-              const monLabel=d.date.toLocaleDateString('en-SG',{month:'short'});
-              return<div key={d.key} style={{padding:'10px 8px',borderRadius:12,background:isToday?'linear-gradient(135deg,rgba(99,102,241,.1),var(--bg2))':'var(--bg3)',border:'1px solid '+(isToday?'rgba(99,102,241,.4)':'var(--border)'),opacity:isPast?.4:1,display:'flex',flexDirection:'column',minHeight:180}}>
-                <div style={{textAlign:'center',marginBottom:8,paddingBottom:6,borderBottom:'1px solid var(--border)'}}>
-                  <p style={{margin:0,fontSize:10,fontWeight:700,color:isToday?'var(--accent2)':'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em'}}>{dayLabel}{isToday?' · Today':''}</p>
-                  <p style={{margin:'2px 0 0',fontSize:18,fontWeight:800,color:'#f1f5f9'}}>{dayNum}</p>
-                  <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>{monLabel}</p>
-                </div>
-                {/* Free slots (green, tappable) */}
-                <div style={{display:'flex',flexDirection:'column',gap:4,flex:1}}>
-                  {bigSlots.length===0&&shakySlots.length===0&&!isPast&&<p style={{margin:0,fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic',paddingTop:8}}>No free slots</p>}
-                  {isPast&&<p style={{margin:0,fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic',paddingTop:8}}>Past</p>}
-                  {bigSlots.map((s,si)=>{
-                    const hh=String(s.start.getHours()).padStart(2,'0');
-                    const mm=String(s.start.getMinutes()).padStart(2,'0');
-                    const eh=String(s.end.getHours()).padStart(2,'0');
-                    const em=String(s.end.getMinutes()).padStart(2,'0');
-                    return<button key={'f'+si} onClick={()=>{
-                      // Lock in the slot: fill date, start time, duration = 90 min (fits 1.5h minimum)
-                      setApptDate(d.key);
-                      setApptTime(hh+':'+mm);
-                      const slotMins=Math.round(s.hours*60);
-                      setApptDuration(Math.min(slotMins,90));
-                      setApptPickerOpen(false);
-                      setShowAppt(true);
-                      toast('Slot locked: '+d.date.toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'})+' '+hh+':'+mm,'info');
-                    }} style={{padding:'6px 6px',borderRadius:8,background:'linear-gradient(135deg,rgba(34,197,94,.25),rgba(16,185,129,.15))',border:'1px solid rgba(34,197,94,.5)',color:'#22c55e',fontSize:9,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:'0 0 6px rgba(34,197,94,.2)'}}>
-                      {hh}:{mm}–{eh}:{em}
-                      <div style={{fontSize:8,fontWeight:600,opacity:.8,marginTop:1}}>{s.hours.toFixed(1)}h free</div>
-                    </button>
-                  })}
-                  {/* Shaky slots (orange, tappable, shiny) */}
-                  {shakySlots.map((s,si)=>{
-                    const hh=String(s.start.getHours()).padStart(2,'0');
-                    const mm=String(s.start.getMinutes()).padStart(2,'0');
-                    const eh=String(s.end.getHours()).padStart(2,'0');
-                    const em=String(s.end.getMinutes()).padStart(2,'0');
-                    return<button key={'s'+si} onClick={()=>{
-                      if(!confirm('This slot is "shaky" — '+s.name+' may still show up at '+hh+':'+mm+'. Double-book it anyway?'))return;
-                      setApptDate(d.key);
-                      setApptTime(hh+':'+mm);
-                      setApptDuration(90);
-                      setApptPickerOpen(false);
-                      setShowAppt(true);
-                      toast('Shaky slot locked','info');
-                    }} style={{padding:'6px 6px',borderRadius:8,background:'linear-gradient(135deg,rgba(251,146,60,.3),rgba(234,88,12,.18))',border:'1px solid rgba(251,146,60,.6)',color:'#fb923c',fontSize:9,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:'0 0 10px rgba(251,146,60,.35),inset 0 0 8px rgba(251,146,60,.1)'}}>
-                      🟠 {hh}:{mm}
-                      <div style={{fontSize:7,fontWeight:600,opacity:.85,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name||'shaky'}</div>
-                    </button>
-                  })}
-                  {/* Busy events (non-tappable, dimmed) */}
-                  {dayEvents.length>0&&<div style={{marginTop:6,paddingTop:6,borderTop:'1px dashed var(--border)'}}>
-                    {dayEvents.slice(0,3).map((ev,ei)=>{
-                      const es=new Date(ev.start?.dateTime||ev.start?.date||0);
-                      const hh=String(es.getHours()).padStart(2,'0');
-                      const mm=String(es.getMinutes()).padStart(2,'0');
-                      return<div key={'b'+ei} style={{padding:'3px 4px',marginBottom:2,borderRadius:4,background:'rgba(148,163,184,.08)',fontSize:8,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                        <span className="mono" style={{color:'var(--text3)'}}>{hh}:{mm}</span> {ev.summary||'Busy'}
-                      </div>
-                    })}
-                    {dayEvents.length>3&&<p style={{margin:0,fontSize:8,color:'var(--text3)',textAlign:'center'}}>+{dayEvents.length-3} more</p>}
-                  </div>}
-                </div>
-              </div>;
-            })}
-          </div>}
-          <p style={{margin:'12px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>Minimum slot: {MIN_HRS}h · Business hours: {BIZ_START}:00–{BIZ_END}:00</p>
+          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('');setPendingShakyKey(null)}} style={{padding:'8px 14px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:14,fontWeight:800,flexShrink:0,minWidth:40}}>×</button>
         </div>
-      </div>;
-    })()}
-
-    {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
-      <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,maxHeight:'85vh',overflowY:'auto',borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
-        <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'var(--green)'}}>✓ Appointment Set!</h3>
-        {/* Auto-filled client info */}
-        <div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:12,border:'1px solid var(--border)'}}>
+        {/* Lead info card */}
+        <div style={{padding:'10px 12px',borderRadius:10,background:'var(--bg)',marginBottom:12,border:'1px solid var(--border)'}}>
           <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{apptLead?.name||'Lead'}</p>
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
             <span className="mono" style={{fontSize:11,color:'var(--text2)'}}>{apptLead?.phone}</span>
@@ -5936,111 +5852,226 @@ function App(){
           </div>
           {apptLead?.notes&&<p style={{margin:'4px 0 0',fontSize:10,color:'var(--amber)'}}>📝 {apptLead.notes}</p>}
         </div>
-        {/* ═══ In-app calendar view — shows this week's events to prevent booking clashes ═══ */}
-        {gOk&&weekEvents.length>0&&(()=>{
-          // Group events by day (LOCAL time — fixes UTC drift bug)
-          const byDay={};
-          weekEvents.forEach(ev=>{
-            const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
-            const dayKey=localDateKey(dt);
-            if(!byDay[dayKey])byDay[dayKey]=[];
-            byDay[dayKey].push(ev);
-          });
-          const days=Object.keys(byDay).sort();
-          // Detect clash with currently selected date+time
-          let clashEvent=null;
-          if(apptDate&&apptTime){
-            const sel=new Date(apptDate+'T'+apptTime);
-            const selEnd=new Date(sel.getTime()+(apptDuration||60)*60000);
-            clashEvent=weekEvents.find(ev=>{
-              const es=new Date(ev.start?.dateTime||ev.start?.date||0);
-              const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
-              return sel<ee&&selEnd>es;
-            });
+        {/* Selected slot banner (shown after picking) */}
+        {apptDate&&apptTime&&<div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',marginBottom:12,borderRadius:12,background:'linear-gradient(135deg,rgba(34,197,94,.15),rgba(16,185,129,.08))',border:'1px solid rgba(34,197,94,.5)',boxShadow:'0 0 14px rgba(34,197,94,.18)'}}>
+          <span style={{fontSize:18}}>✓</span>
+          <div style={{flex:1,minWidth:0}}>
+            <p style={{margin:0,fontSize:12,fontWeight:800,color:'#22c55e'}}>Slot locked</p>
+            <p style={{margin:'2px 0 0',fontSize:11,color:'#86efac'}}>{(()=>{try{return new Date(apptDate+'T'+apptTime).toLocaleDateString('en-SG',{weekday:'long',day:'numeric',month:'short'})+' · '+apptTime+' · '+(apptDuration||60)+' min'}catch(e){return apptDate+' '+apptTime}})()}</p>
+          </div>
+          <button onClick={()=>{setApptDate('');setApptTime('')}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flexShrink:0}}>Change</button>
+        </div>}
+        {/* ═══ PICKER SECTION — shown when gOk ═══ */}
+        {gOk&&(()=>{
+          const now=new Date();
+          const todayMid=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+          const todayKey=localDateKey(todayMid);
+          const weekStart0=startOfWeek(todayMid);
+          const TOTAL_WEEKS=8;
+          const visibleDays=[];
+          for(let i=0;i<7;i++){
+            const d=new Date(weekStart0.getTime()+(pickerWeekIdx*7+i)*86400000);
+            const dLocal=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+            visibleDays.push({key:localDateKey(dLocal),date:dLocal})
           }
-          return<div style={{marginBottom:10,padding:'10px',borderRadius:12,background:'rgba(66,133,244,.05)',border:'1px solid rgba(66,133,244,.2)',maxHeight:220,overflowY:'auto'}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
-              <p style={{margin:0,fontSize:11,fontWeight:800,color:'#4285f4',textTransform:'uppercase',letterSpacing:'.1em'}}>📅 {calWeekOffset===0?"This Week":calWeekOffset===1?"Next Week":calWeekOffset>1?("In "+calWeekOffset+" Weeks"):(Math.abs(calWeekOffset)+" Weeks Ago")} · Schedule</p>
-              <span style={{fontSize:9,color:'var(--text3)'}}>{weekEvents.length} events</span>
+          const weekStartDate=visibleDays[0]?.date;
+          const weekEndDate=visibleDays[6]?.date;
+          const weekLabel=weekStartDate?weekStartDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'})+' – '+weekEndDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
+          // Group gCal events by day
+          const byDay={};
+          (pickerEvents||[]).forEach(ev=>{
+            const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
+            const k=localDateKey(dt);
+            if(!byDay[k])byDay[k]=[];
+            byDay[k].push(ev);
+          });
+          // Shaky appointments → overlay slots
+          const shakyAppts=(appointments||[]).filter(a=>isApptShaky(a)).map(a=>({...a,_shaky:true}));
+          const shakyByDay={};
+          shakyAppts.forEach(a=>{if(a.apptDate){if(!shakyByDay[a.apptDate])shakyByDay[a.apptDate]=[];shakyByDay[a.apptDate].push(a)}});
+          // ═══ CB RESERVATIONS — block slots so we don't double-book callbacks (bug fix) ═══
+          const cbReservations=(leads||[]).filter(l=>l.status==='cb'&&l.cbDate&&l.cbTime&&!l.cbFlexible);
+          const cbByDay={};
+          cbReservations.forEach(l=>{if(!cbByDay[l.cbDate])cbByDay[l.cbDate]=[];cbByDay[l.cbDate].push(l)});
+          const BIZ_START=9,BIZ_END=21,MIN_HRS=1.5;
+          return<div style={{marginBottom:14,padding:'12px 10px',borderRadius:14,background:'var(--bg3)',border:'1px solid var(--border)'}}>
+            {/* Week nav */}
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8}}>
+              <button onClick={()=>setPickerWeekIdx(p=>Math.max(0,p-1))} disabled={pickerWeekIdx===0} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx===0?'var(--bg)':'var(--adim)',color:pickerWeekIdx===0?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx===0?.4:1}}>◀</button>
+              <div style={{flex:1,textAlign:'center'}}>
+                <p style={{margin:0,fontSize:12,fontWeight:800,color:'#f1f5f9'}}>{pickerWeekIdx===0?'This Week':pickerWeekIdx===1?'Next Week':'In '+pickerWeekIdx+' Weeks'}</p>
+                <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)'}}>{weekLabel}</p>
+              </div>
+              <button onClick={()=>setPickerWeekIdx(p=>Math.min(TOTAL_WEEKS-1,p+1))} disabled={pickerWeekIdx>=TOTAL_WEEKS-1} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--bg)':'var(--adim)',color:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx>=TOTAL_WEEKS-1?.4:1}}>▶</button>
             </div>
-            {clashEvent&&<div style={{padding:'6px 8px',borderRadius:8,background:'rgba(248,81,73,.12)',border:'1px solid rgba(248,81,73,.3)',marginBottom:6,fontSize:10,color:'var(--red)',fontWeight:700}}>
-              ⚠️ Clashes with: {clashEvent.summary||'Busy'} at {new Date(clashEvent.start?.dateTime||clashEvent.start?.date||0).toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})}
+            {/* Legend */}
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,fontSize:8,color:'var(--text3)',flexWrap:'wrap',justifyContent:'center'}}>
+              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'linear-gradient(135deg,#22c55e,#10b981)'}}/>Free {MIN_HRS}h+</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'linear-gradient(135deg,#fb923c,#ea580c)'}}/>Shaky</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'rgba(147,51,234,.4)'}}/>CB</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'rgba(148,163,184,.3)'}}/>Busy</span>
+            </div>
+            {pickerLoading&&!pickerEvents.length?<div style={{textAlign:'center',padding:30,color:'var(--text3)',fontSize:11}}>⟳ Loading calendar…</div>:
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:6}}>
+              {visibleDays.map(d=>{
+                const isToday=d.key===todayKey;
+                const isPast=d.key<todayKey;
+                const dayEvents=(byDay[d.key]||[]).slice().sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
+                const _evWithTimes=dayEvents.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
+                // Exclude shaky times from busy list (they appear as shiny orange "still available")
+                const shakyOnDay=shakyByDay[d.key]||[];
+                const nonShakyBusy=_evWithTimes.filter(bt=>!shakyOnDay.some(sa=>{
+                  if(!sa.apptTime)return false;
+                  const sh=new Date(d.key+'T'+sa.apptTime);
+                  return Math.abs(sh.getTime()-bt.start.getTime())<5*60000
+                }));
+                // ═══ ADD CB reservations as busy blocks (bug fix — callbacks no longer appear as free) ═══
+                const cbOnDay=cbByDay[d.key]||[];
+                const cbBusy=cbOnDay.map(l=>{
+                  const s=new Date(d.key+'T'+l.cbTime);
+                  return{start:s,end:new Date(s.getTime()+30*60000),_isCb:true,_name:l.name}
+                });
+                const allBusy=[...nonShakyBusy,...cbBusy];
+                const freeSlots=isPast?[]:findFreeSlots(d.date,allBusy,BIZ_START,BIZ_END);
+                const bigSlots=freeSlots.filter(s=>s.hours>=MIN_HRS);
+                const shakySlots=shakyOnDay.filter(sa=>sa.apptTime).map(sa=>{
+                  const sh=new Date(d.key+'T'+sa.apptTime);
+                  const dur=sa.duration||90;
+                  return{start:sh,end:new Date(sh.getTime()+dur*60000),hours:dur/60,name:sa.name,shaky:true}
+                });
+                const dayLabel=d.date.toLocaleDateString('en-SG',{weekday:'short'});
+                const dayNum=d.date.getDate();
+                const monLabel=d.date.toLocaleDateString('en-SG',{month:'short'});
+                const selectedOnDay=apptDate===d.key;
+                return<div key={d.key} style={{padding:'8px 6px',borderRadius:10,background:isToday?'linear-gradient(135deg,rgba(99,102,241,.1),var(--bg2))':'var(--bg2)',border:'1px solid '+(selectedOnDay?'rgba(34,197,94,.6)':(isToday?'rgba(99,102,241,.35)':'var(--border)')),opacity:isPast?.4:1,display:'flex',flexDirection:'column',minHeight:140,boxShadow:selectedOnDay?'0 0 10px rgba(34,197,94,.25)':'none'}}>
+                  <div style={{textAlign:'center',marginBottom:6,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+                    <p style={{margin:0,fontSize:9,fontWeight:700,color:isToday?'var(--accent2)':'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em'}}>{dayLabel}{isToday?' · Today':''}</p>
+                    <p style={{margin:'2px 0 0',fontSize:16,fontWeight:800,color:'#f1f5f9'}}>{dayNum}</p>
+                    <p style={{margin:0,fontSize:8,color:'var(--text3)'}}>{monLabel}</p>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:3,flex:1}}>
+                    {bigSlots.length===0&&shakySlots.length===0&&!isPast&&<p style={{margin:0,fontSize:8,color:'var(--text3)',textAlign:'center',fontStyle:'italic',paddingTop:6}}>No free slots</p>}
+                    {isPast&&<p style={{margin:0,fontSize:8,color:'var(--text3)',textAlign:'center',fontStyle:'italic',paddingTop:6}}>Past</p>}
+                    {bigSlots.map((s,si)=>{
+                      const hh=String(s.start.getHours()).padStart(2,'0');
+                      const mm=String(s.start.getMinutes()).padStart(2,'0');
+                      const eh=String(s.end.getHours()).padStart(2,'0');
+                      const em=String(s.end.getMinutes()).padStart(2,'0');
+                      const isSelectedSlot=selectedOnDay&&apptTime===hh+':'+mm;
+                      return<button key={'f'+si} onClick={()=>{
+                        // ═══ ITEM 1 FIX: respect saved apptDuration, fall back to slot length if slot is shorter ═══
+                        const slotMins=Math.round(s.hours*60);
+                        setApptDate(d.key);
+                        setApptTime(hh+':'+mm);
+                        setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
+                        toast('Slot locked · scroll down to create','info');
+                      }} style={{padding:'5px 4px',borderRadius:6,background:isSelectedSlot?'linear-gradient(135deg,#22c55e,#10b981)':'linear-gradient(135deg,rgba(34,197,94,.25),rgba(16,185,129,.15))',border:'1px solid '+(isSelectedSlot?'#22c55e':'rgba(34,197,94,.5)'),color:isSelectedSlot?'#fff':'#22c55e',fontSize:8,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:isSelectedSlot?'0 0 10px rgba(34,197,94,.5)':'0 0 4px rgba(34,197,94,.18)'}}>
+                        {hh}:{mm}–{eh}:{em}
+                        <div style={{fontSize:7,fontWeight:600,opacity:.85,marginTop:1}}>{s.hours.toFixed(1)}h</div>
+                      </button>
+                    })}
+                    {shakySlots.map((s,si)=>{
+                      const hh=String(s.start.getHours()).padStart(2,'0');
+                      const mm=String(s.start.getMinutes()).padStart(2,'0');
+                      const slotKey=d.key+'_'+hh+':'+mm;
+                      const isPending=pendingShakyKey===slotKey;
+                      if(isPending){
+                        // ═══ Inline confirmation UI — replaces the browser confirm() ═══
+                        return<div key={'s'+si} style={{padding:'5px 3px',borderRadius:6,background:'linear-gradient(135deg,rgba(251,146,60,.4),rgba(234,88,12,.25))',border:'1px solid rgba(251,146,60,.8)',textAlign:'center',boxShadow:'0 0 12px rgba(251,146,60,.5)'}}>
+                          <div style={{fontSize:7,fontWeight:800,color:'#fff',marginBottom:3,lineHeight:1.2}}>Double-book {hh}:{mm}?</div>
+                          <div style={{display:'flex',gap:2}}>
+                            <button onClick={(e)=>{e.stopPropagation();
+                              const slotMins=Math.round(s.hours*60);
+                              setApptDate(d.key);
+                              setApptTime(hh+':'+mm);
+                              setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
+                              setPendingShakyKey(null);
+                              toast('Shaky slot locked','info');
+                            }} style={{flex:1,padding:'3px 2px',borderRadius:4,background:'#22c55e',color:'#fff',fontSize:8,fontWeight:800,border:'none'}}>Yes</button>
+                            <button onClick={(e)=>{e.stopPropagation();setPendingShakyKey(null)}} style={{flex:1,padding:'3px 2px',borderRadius:4,background:'var(--bg3)',color:'var(--text3)',fontSize:8,fontWeight:800,border:'none'}}>No</button>
+                          </div>
+                        </div>
+                      }
+                      return<button key={'s'+si} onClick={()=>{setPendingShakyKey(slotKey)}} style={{padding:'5px 4px',borderRadius:6,background:'linear-gradient(135deg,rgba(251,146,60,.3),rgba(234,88,12,.18))',border:'1px solid rgba(251,146,60,.6)',color:'#fb923c',fontSize:8,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:'0 0 8px rgba(251,146,60,.35)'}}>
+                        🟠 {hh}:{mm}
+                        <div style={{fontSize:6,fontWeight:600,opacity:.85,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name||'shaky'}</div>
+                      </button>
+                    })}
+                    {/* CB reservations — render as purple pills (not bookable, just visible) */}
+                    {cbOnDay.map((l,ci)=>{
+                      const hh=(l.cbTime||'').slice(0,5);
+                      return<div key={'cb'+ci} title={'CB with '+l.name} style={{padding:'4px 4px',borderRadius:5,background:'rgba(147,51,234,.18)',border:'1px solid rgba(147,51,234,.45)',color:'#c084fc',fontSize:8,fontWeight:700,textAlign:'center'}}>
+                        📞 {hh}
+                        <div style={{fontSize:7,opacity:.85,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</div>
+                      </div>
+                    })}
+                    {/* Busy events */}
+                    {dayEvents.length>0&&<div style={{marginTop:4,paddingTop:4,borderTop:'1px dashed var(--border)'}}>
+                      {dayEvents.slice(0,2).map((ev,ei)=>{
+                        const es=new Date(ev.start?.dateTime||ev.start?.date||0);
+                        const hh=String(es.getHours()).padStart(2,'0');
+                        const mm=String(es.getMinutes()).padStart(2,'0');
+                        return<div key={'b'+ei} style={{padding:'2px 3px',marginBottom:1,borderRadius:3,background:'rgba(148,163,184,.08)',fontSize:7,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          <span className="mono">{hh}:{mm}</span> {ev.summary||'Busy'}
+                        </div>
+                      })}
+                      {dayEvents.length>2&&<p style={{margin:0,fontSize:7,color:'var(--text3)',textAlign:'center'}}>+{dayEvents.length-2} more</p>}
+                    </div>}
+                  </div>
+                </div>;
+              })}
             </div>}
-            {days.map(dayKey=>{
-              const dayDate=new Date(dayKey+'T00:00:00');
-              const label=dayDate.toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'});
-              const isToday=dayKey===localDateKey(new Date());
-              return<div key={dayKey} style={{marginBottom:6}}>
-                <p style={{margin:'0 0 3px',fontSize:10,fontWeight:700,color:isToday?'var(--accent2)':'var(--text2)'}}>{label}{isToday?' · Today':''}</p>
-                {byDay[dayKey].map((ev,i)=>{
-                  const es=new Date(ev.start?.dateTime||ev.start?.date||0);
-                  const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
-                  const timeStr=es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})+'–'+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'});
-                  return<div key={i} onClick={()=>{
-                    // Click an event to jump to its day (admin can see the busy slot clearly)
-                    setApptDate(dayKey);
-                  }} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',marginBottom:2,borderRadius:6,background:'rgba(66,133,244,.06)',cursor:'pointer',fontSize:10}}>
-                    <span className="mono" style={{color:'var(--text3)',minWidth:90}}>{timeStr}</span>
-                    <span style={{color:'#f1f5f9',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</span>
-                    {ev.location&&<span style={{color:'var(--text3)',fontSize:9,maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📍{ev.location}</span>}
-                  </div>;
-                })}
-              </div>;
-            })}
+            <p style={{margin:'8px 0 0',fontSize:8,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>{MIN_HRS}h min · {BIZ_START}:00–{BIZ_END}:00 · {pickerWeekIdx+1}/{TOTAL_WEEKS} weeks</p>
           </div>;
         })()}
-        {gOk&&!weekEvents.length&&<div style={{marginBottom:10,padding:'8px 10px',borderRadius:8,background:'var(--bg3)',fontSize:10,color:'var(--text3)',textAlign:'center'}}>📅 No events this week — you're free</div>}
-        <p style={{margin:'0 0 10px',fontSize:12,color:'var(--text3)'}}>Add to Google Calendar</p>
+        {/* ═══ FORM SECTION — manual date/time + all other fields ═══ */}
+        <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em'}}>{gOk?'Or adjust manually':'Date & Time'}</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
           <input type="date" value={apptDate} onChange={ev=>setApptDate(ev.target.value)} style={{colorScheme:'dark'}}/>
           <input type="time" value={apptTime} onChange={ev=>setApptTime(ev.target.value)} style={{colorScheme:'dark'}}/>
         </div>
         <input value={apptLocation} onChange={ev=>setApptLocation(ev.target.value)} placeholder="📍 Location (e.g. Starbucks Raffles Place)" style={{marginBottom:8}}/>
-        {/* Invitees with memory */}
         <input value={apptInvite} onChange={ev=>setApptInvite(ev.target.value)} placeholder="Invite emails (comma sep)" style={{marginBottom:4}}/>
         {savedInvitees.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8}}>
           {savedInvitees.slice(0,6).map(em=><button key={em} onClick={()=>setApptInvite(p=>p?(p+','+em):em)} style={{padding:'3px 8px',borderRadius:6,background:'var(--bg)',color:'var(--accent2)',fontSize:10,fontWeight:600,border:'1px solid var(--border)'}}>{em}</button>)}
         </div>}
-        {/* FC Observations */}
         <textarea value={apptObs} onChange={ev=>setApptObs(ev.target.value)} rows={3} placeholder="Observations for specialist…" style={{width:'100%',marginBottom:4,background:'var(--bg2)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:12,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
         <p style={{margin:'0 0 10px',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Hint: Receptiveness, industry, tone, objections (questions ≠ objections), and any observations that could help your specialist</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
           <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
             <input type="number" value={apptDuration} onChange={ev=>setApptDuration(ev.target.value===''?'':+ev.target.value)} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
         </div>
-        {/* ═══ Shaky appointment tickbox ═══ */}
-        <label onClick={()=>setApptShaky(p=>!p)} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'10px 12px',marginBottom:10,borderRadius:12,background:apptShaky?'linear-gradient(135deg,rgba(251,146,60,.12),rgba(234,88,12,.06))':'var(--bg3)',border:'1px solid '+(apptShaky?'rgba(251,146,60,.4)':'var(--border)'),cursor:'pointer',boxShadow:apptShaky?'0 0 12px rgba(251,146,60,.15)':'none',transition:'all .2s'}}>
+        {/* Shaky tickbox */}
+        <label onClick={()=>setApptShaky(p=>!p)} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'10px 12px',marginBottom:12,borderRadius:12,background:apptShaky?'linear-gradient(135deg,rgba(251,146,60,.12),rgba(234,88,12,.06))':'var(--bg3)',border:'1px solid '+(apptShaky?'rgba(251,146,60,.4)':'var(--border)'),cursor:'pointer',boxShadow:apptShaky?'0 0 12px rgba(251,146,60,.15)':'none',transition:'all .2s'}}>
           <div style={{width:20,height:20,borderRadius:5,background:apptShaky?'linear-gradient(135deg,#fb923c,#ea580c)':'var(--bg)',border:'1px solid '+(apptShaky?'#fb923c':'var(--border2)'),color:'#fff',fontSize:12,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,boxShadow:apptShaky?'0 0 8px rgba(251,146,60,.5)':'none'}}>{apptShaky?'✓':''}</div>
           <div style={{flex:1}}>
             <p style={{margin:0,fontSize:12,fontWeight:700,color:apptShaky?'#fb923c':'var(--text2)'}}>🟠 Shaky appointment</p>
             <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.35}}>Lead may cancel or reschedule. Slot will still show as available (orange) in future calendar views.</p>
           </div>
         </label>
-        <div style={{display:'flex',gap:8}}>
-          <button onClick={async()=>{if(!apptDate||!apptTime)return toast('Set date & time','err');
+        {/* Actions */}
+        <div style={{display:'flex',gap:8,position:'sticky',bottom:-32,background:'rgba(17,24,39,.92)',backdropFilter:'blur(8px)',padding:'12px 0',margin:'0 -14px -32px',paddingLeft:14,paddingRight:14}}>
+          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14,borderRadius:12,fontWeight:700}}>Skip</button>
+          <button disabled={!apptDate||!apptTime} onClick={async()=>{if(!apptDate||!apptTime)return toast('Pick a slot above or set date & time','err');
             const dur=apptDuration||60;const lead=apptLead;
-            // Build rich description with client info
             const desc=['Client: '+(lead?.name||''),'Phone: '+(lead?.phone||''),lead?.age?'Age: '+lead.age:'',lead?.email?'Email: '+lead.email:'',lead?.race?'Background: '+lead.race:'',apptObs?'\nFC Notes:\n'+apptObs:'',lead?.notes?'\nSheet Remarks: '+lead.notes:''].filter(Boolean).join('\n');
             try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
               const invites=apptInvite?apptInvite.split(',').map(s=>s.trim()).filter(Boolean):[];
               const evt=await gCal.create('Appt: '+(lead?.name||'')+(apptLocation?' @ '+apptLocation:''),desc,s.toISOString(),end.toISOString(),invites);
-              // Remember new invitees
               if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
               DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation,shaky:apptShaky},_user?.id);
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
-              // Wire undo: attach calEventId so doUndo can delete the gCal event
               if(window._lastUndo&&window._lastUndo.status==='set'){window._lastUndo.calEventId=evt?.id||'';window._lastUndo.apptId=lead?.phone}
-              // Persist shaky flag if ticked
               if(apptShaky&&lead?.phone)setShaky(lead.phone,true);
               if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs,shaky:apptShaky}:a));
+              // Invalidate picker cache so the new booking shows up on next open
+              pickerEventsCacheRef.current={key:'',ts:0,data:null};
               setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
               toast('Event created!');
-              // Write to Google Sheet Appointments Set tab (use admin's sheet if available)
               const apptSheetId=myCfg.timesheetId||cfg.sheetId;
               if(apptSheetId&&localStorage.getItem('ad_gt')){
                 gSheets.appendAppt(apptSheetId,{name:lead?.name,phone:lead?.phone,apptDate,apptTime,location:apptLocation,duration:dur,remarks:apptObs},userName).catch(()=>{})}}catch(ev){toast(ev.message,'err')}
-            setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--green),#059669)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Create</button>
-          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14}}>Skip</button>
+            setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:(!apptDate||!apptTime)?'var(--bg3)':'linear-gradient(135deg,var(--green),#059669)',color:(!apptDate||!apptTime)?'var(--text3)':'#fff',fontSize:14,fontWeight:800,borderRadius:12,opacity:(!apptDate||!apptTime)?.5:1}}>📅 Create Appointment</button>
         </div>
       </div>
     </div>}
