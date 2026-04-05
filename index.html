@@ -326,7 +326,7 @@ function authGrant(){document.getElementById('auth-gate').style.display='none';w
   function tryMount(){
     _mt++;
     if(typeof window.initApp==='function'){
-      console.log('[AutoDial] Mounting app...');
+      DBG('[AutoDial] Mounting app');
       if(!window._mounted){window._mounted=true;window.initApp()}
       else{document.getElementById('root').innerHTML='';window.initApp()}
     }else if(_mt>100){
@@ -400,7 +400,7 @@ window._workerRefresh=async function(){
   try{
     var r=await fetch(WORKER_URL+'/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})});
     if(!r.ok)return false;
-    var d=await r.json();if(d.access_token){_saveGToken(d.access_token);console.log('[Google] Token refreshed via Worker');return true}
+    var d=await r.json();if(d.access_token){_saveGToken(d.access_token);DBG('[Google] Token refreshed via Worker');return true}
   }catch(e){console.warn('[Google Worker]',e.message)}return false};
 
 // ═══ CONNECT — popup only on explicit tap ═══
@@ -436,7 +436,7 @@ window._autoRefreshGoogle=async function(){
   var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
   if(Date.now()-ts>2400000){// Token >40min old, refresh it
     var ok=await window._workerRefresh();
-    if(ok)console.log('[Google] Auto-refreshed on mount');
+    if(ok)DBG('[Google] Auto-refreshed on mount');
     return ok}
   return !!localStorage.getItem('ad_gt')};
 
@@ -648,7 +648,7 @@ window.claudeAnalyzeSheet=async function(headers,rows){
       body:JSON.stringify({api_key:claudeKey(),model:'claude-haiku-4-5-20251001',max_tokens:8192,system:sysPrompt,messages:[{role:'user',content:userPrompt}]})});
     if(!r.ok){var err=await r.json().catch(function(){return{}});console.warn('[Claude]',err.error||r.status);return null}
     var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
-    console.log('[Claude] Sheet analysis complete');return JSON.parse(text)}
+    DBG('[Claude] Sheet analysis complete');return JSON.parse(text)}
   catch(e){console.warn('[Claude Parse]',e.message);return null}};
 
 // ═══ CLAUDE POST-PROCESS — features 1,2,3,4 in ONE call ═══
@@ -687,7 +687,7 @@ window.claudePostProcess=async function(leads,headers,rawRows,colMap){
       window._claudeConfidence=result.confidence||{};window._lowConfCols=result.low_confidence_columns;
       console.warn('[Claude] Low confidence columns:',result.low_confidence_columns)}
     if(result.warnings?.length)result.warnings.forEach(function(w){console.warn('[Claude]',w)});
-    if(fixes)console.log('[Claude] Post-process fixed '+fixes+' leads');
+    if(fixes)DBG('[Claude] Post-process fixed',fixes,'leads');
     return updated}
   catch(e){console.warn('[Claude PostProcess]',e.message);return leads}};
 
@@ -707,7 +707,7 @@ window.claudeDedup=async function(leads){
     var d=await r.json();var text=(d.content?.[0]?.text||'').replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
     var result=JSON.parse(text);
     if(result.duplicates?.length){
-      console.log('[Claude] Found '+result.duplicates.length+' duplicate groups');
+      DBG('[Claude] Found',result.duplicates.length,'duplicate groups');
       // Mark duplicates (keep first in each group, mark rest)
       var dupeIndices=new Set();
       result.duplicates.forEach(function(group){
@@ -1200,6 +1200,49 @@ function getMonthlyAppts(appointments,email){const now=new Date(),y=now.getFullY
 function localDateKey(d){if(!d)return'';const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dd=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dd}
 // Returns Sunday of the week containing the given date, at local midnight.
 function startOfWeek(d){const s=new Date(d.getFullYear(),d.getMonth(),d.getDate());s.setDate(s.getDate()-s.getDay());return s}
+// ═══ DATE FORMATTERS — single source of truth for en-SG date strings ═══
+// Accepts a Date instance, a YYYY-MM-DD key, or a parseable string. Returns '' if invalid.
+function _toDate(d){if(!d)return null;if(d instanceof Date)return isNaN(d)?null:d;try{const x=new Date(d);return isNaN(x)?null:x}catch(e){return null}}
+function fmtDayMonth(d){const x=_toDate(d);return x?fmtDayMonth(x):''}
+function fmtWkdDayMonth(d){const x=_toDate(d);return x?fmtWkdDayMonth(x):''}
+function fmtLongDay(d){const x=_toDate(d);return x?fmtLongDay(x):''}
+function fmtFullDate(d){const x=_toDate(d);return x?fmtFullDate(x):''}
+function fmtWkdShort(d){const x=_toDate(d);return x?fmtWkdShort(x):''}
+function fmtLongFullDate(d){const x=_toDate(d);return x?fmtLongFullDate(x):''}
+// ═══ DBG GATE — set window.AUTODIAL_DEBUG=true in console to enable verbose logs ═══
+// Keeps diagnostic breadcrumbs in the code but silent in production. console.warn stays loud.
+const DBG=function(){if(typeof window!=='undefined'&&window.AUTODIAL_DEBUG)console.log.apply(console,arguments)};
+// ═══ COMMON STYLE CONSTANTS — extract repeated inline style objects ═══
+// Use with spread: style={{...MODAL_OVERLAY, zIndex:110}} to override specific properties.
+const MODAL_OVERLAY={position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'};
+const MODAL_SHEET={width:'100%',maxWidth:480,maxHeight:'85vh',overflowY:'auto',borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'};
+// ═══ Modal — reusable backdrop wrapper with ESC/scroll-lock/stopPropagation ═══
+// Usage: <Modal show={cond} onClose={fn} align="bottom|center|stretch" bg=".85" zIndex={100}>
+//          <div style={innerStyle}>content</div>
+//        </Modal>
+// Auto-handles: backdrop click to close, ESC key, body scroll lock, stopPropagation on children.
+function Modal({show,onClose,children,align='center',bg='.85',zIndex=100,padding=16}){
+  React.useEffect(()=>{
+    if(!show)return;
+    const h=e=>{if(e.key==='Escape'&&onClose)onClose()};
+    window.addEventListener('keydown',h);
+    const prev=document.body.style.overflow;document.body.style.overflow='hidden';
+    return()=>{window.removeEventListener('keydown',h);document.body.style.overflow=prev};
+  },[show,onClose]);
+  if(!show)return null;
+  const _ai=align==='bottom'?'flex-end':align==='stretch'?'stretch':'center';
+  return<div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,'+bg+')',zIndex,display:'flex',alignItems:_ai,justifyContent:'center',padding:align==='stretch'?0:padding}}>
+    <div onClick={e=>e.stopPropagation()} style={{display:'contents'}}>{children}</div>
+  </div>
+}
+// ═══ Btn — reusable button with variants ═══
+// Variants: 'primary' (accent), 'danger' (red), 'ghost' (bg3 neutral, default), 'success' (green), 'gold'
+// Sizes: 'sm' (padding 4/10, fs 10), 'md' (6/12, fs 11, default), 'lg' (10/16, fs 13)
+function Btn({variant='ghost',size='md',onClick,children,style,disabled,type}){
+  const _var={primary:['var(--adim)','var(--accent2)'],danger:['var(--rdim)','var(--red)'],ghost:['var(--bg3)','var(--text2)'],success:['var(--gdim)','var(--green)'],gold:['rgba(240,180,41,.15)','var(--gold)']}[variant]||['var(--bg3)','var(--text2)'];
+  const _sz={sm:['4px 10px',10],md:['6px 12px',11],lg:['10px 16px',13]}[size]||['6px 12px',11];
+  return<button type={type||'button'} disabled={disabled} onClick={onClick} style={{padding:_sz[0],borderRadius:8,background:_var[0],color:_var[1],fontSize:_sz[1],fontWeight:700,border:'none',opacity:disabled?.5:1,cursor:disabled?'not-allowed':'pointer',...(style||{})}}>{children}</button>
+}
 // Given a list of events on a specific day and business hours (defaults 9 AM - 9 PM local), return free slot gaps.
 // events: [{start:Date, end:Date}] already for THIS day, sorted by start
 // dayDate: Date at local midnight for the target day
@@ -1514,7 +1557,7 @@ function detectBatches(headers,rows){
           if(ri>batchStart){
             batches.push({startRow:batchStart,endRow:ri,headers:headers,colMap:detectBatchColumns(rows,batchStart,ri),isShifted:currentPhoneCol!==primaryPhoneCol,phoneCol:currentPhoneCol});
           }
-          console.log('[BatchDetect] Shift at row '+(ri+2)+': phone col '+currentPhoneCol+' → '+altPhoneCol);
+          DBG('[BatchDetect] Shift at row',(ri+2),'phone col',currentPhoneCol,'→',altPhoneCol);
           batchStart=ri;
           currentPhoneCol=altPhoneCol;
         }
@@ -1530,7 +1573,7 @@ function detectBatches(headers,rows){
   // If only 1 batch found and no shifts, return simple result
   if(batches.length<=1)return batches.length?batches:[{startRow:0,endRow:rows.length,headers:headers,colMap:null,isShifted:false}];
   
-  console.log('[BatchDetect] Found '+batches.length+' batches in sheet');
+  DBG('[BatchDetect] Found',batches.length,'batches');
   return batches;
 }
 
@@ -1603,8 +1646,8 @@ function parseSheetMultiBatch(headers,rows){
   
   if(allLeads.length===0)return null;
   
-  console.log('[BatchDetect] Parsed '+allLeads.length+' leads from '+batches.length+' batches');
-  batchSummary.forEach(function(s){console.log('[BatchDetect] '+s)});
+  DBG('[BatchDetect] Parsed',allLeads.length,'leads from',batches.length,'batches');
+  batchSummary.forEach(function(s){DBG('[BatchDetect] '+s)});
   
   return{leads:allLeads,count:allLeads.length,batches:batches.length,summary:batchSummary};
 }
@@ -1631,7 +1674,7 @@ function parseSheet(rows,h){window._learnedPatterns=window._learnedPatterns||{};
   if(c.name===-1&&c.first===-1)for(let i=0;i<h.length;i++){if(Object.values(c).includes(i))continue;if(rows.slice(0,10).filter(r=>r[i]&&/[a-zA-Z]/.test(String(r[i]))).length>=3){c.name=i;break}}
   // Auto-detect NRIC column by data pattern if not found by header
   if(c.nric===-1){for(let i=0;i<h.length;i++){if(Object.values(c).includes(i))continue;
-    if(rows.slice(0,15).filter(r=>isNRICLike(r[i])).length>=3){c.nric=i;console.log('[AutoDial] NRIC column detected: col '+i+' ('+h[i]+')');break}}}
+    if(rows.slice(0,15).filter(r=>isNRICLike(r[i])).length>=3){c.nric=i;DBG('[AutoDial] NRIC column detected: col '+i+' ('+h[i]+')');break}}}
   const leads=[];for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
     let fn=c.first!==-1?String(r[c.first]||'').trim():'',ln=c.last!==-1?String(r[c.last]||'').trim():'';if(!fn&&c.name!==-1)fn=String(r[c.name]||'').trim();
     // Compute age: priority → age column → birthday column → NRIC column
@@ -1672,9 +1715,9 @@ async function aiParse(rows,h){
   // Try Claude first (via Worker), fall back to Gemini
   var ai=null;
   if(WORKER_URL){
-    try{ai=await claudeAnalyzeSheet(h,rows);if(ai)console.log('[AutoDial] Using Claude AI for analysis')}
+    try{ai=await claudeAnalyzeSheet(h,rows);if(ai)DBG('[AutoDial] Using Claude AI for analysis')}
     catch(e){console.warn('[Claude fallback]',e.message)}}
-  if(!ai){ai=await aiAnalyzeSheet(h,rows);if(ai)console.log('[AutoDial] Using Gemini AI for analysis')}
+  if(!ai){ai=await aiAnalyzeSheet(h,rows);if(ai)DBG('[AutoDial] Using Gemini AI for analysis')}
   if(!ai?.columns||ai.columns.phone===-1)return null;
   const c=ai.columns,st={};if(ai.statuses)ai.statuses.forEach(s=>{st[s.row-1]=s});const leads=[];
   for(let ri=0;ri<rows.length;ri++){const r=rows[ri],ph=String(r[c.phone]||'').trim();if(!ph||ph.length<5)continue;
@@ -1788,7 +1831,7 @@ function App(){
     if(!cached.length)return cached;
     const fixed=validateStatuses(cached);
     const changed=fixed.filter((l,i)=>l.status!==cached[i]?.status).length;
-    if(changed>0)console.log('[AutoDial] Fixed '+changed+' stale statuses');
+    if(changed>0)DBG('[AutoDial] Fixed',changed,'stale statuses');
     // Flag if leads need re-fetch (most have empty notes = stale cache)
     const emptyNotes=fixed.filter(l=>!l.notes&&l.status==='pending').length;
     if(emptyNotes>fixed.length*0.7&&stored.cfg?.sheetId)window._needsRefetch=true;
@@ -1979,7 +2022,7 @@ function App(){
     setLearnedPatterns(p=>{const updated={...p,[key]:status};
       if(WORKER_URL){claudeLearnPattern(remark,status,p).then(patterns=>{
         if(patterns?.length){const expanded={...updated};patterns.forEach(pt=>{expanded[pt.toLowerCase().trim()]=status});
-          setLearnedPatterns(expanded);console.log('[Claude] Learned '+patterns.length+' generalized patterns')}}).catch(()=>{})}
+          setLearnedPatterns(expanded);DBG('[Claude] Learned '+patterns.length+' generalized patterns')}}).catch(()=>{})}
       return updated});
     toast('Learned: "'+remark.slice(0,30)+'…" = '+status.toUpperCase())};
   // Appointments tracking
@@ -2004,6 +2047,8 @@ function App(){
   const[pendingUsers,setPendingUsers]=useState([]);
   const[showApprovalModal,setShowApprovalModal]=useState(false);
   const[showHelp,setShowHelp]=useState(!localStorage.getItem('autodial_seen_help'));
+  const[showMoreMenu,setShowMoreMenu]=useState(false);
+  const[settingsSubtab,setSettingsSubtab]=useState('prefs');
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
   const[showPostCall,setShowPostCall]=useState(null);
@@ -2023,7 +2068,7 @@ function App(){
       var _ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');
       if(_ds.date===getTodaySGT()&&_ds.count>0){_ds.count--;localStorage.setItem('autodial_daily_sets',JSON.stringify(_ds))}
       // Delete the Google Calendar event if one was created
-      if(u.calEventId&&window.gCal){gCal.del(u.calEventId).then(ok=>{if(ok)console.log('[Undo] gCal event deleted')}).catch(()=>{})}
+      if(u.calEventId&&window.gCal){gCal.del(u.calEventId).then(ok=>{if(ok)DBG('[Undo] gCal event deleted')}).catch(()=>{})}
       // Remove the appointment
       if(u.leadIdx>=0){const lead=leadsRef.current[u.leadIdx];
         if(lead){
@@ -2058,7 +2103,7 @@ function App(){
     if(!cfg.callingScript&&!cfg.refNotes)return; // nothing to publish
     const payload={html:cfg.callingScript||'',notes:cfg.refNotes||'',ts:Date.now()};
     _SB.from('autodial_admin_config').upsert({admin_email:'shared_script',biz_name:JSON.stringify(payload)},{onConflict:'admin_email'})
-      .then(()=>console.log('[AutoDial] Published calling script to all admins'))
+      .then(()=>DBG('[AutoDial] Published calling script to all admins'))
       .catch(function(e){console.warn('[AutoDial] script publish failed',e?.message||e)});
   },[cfg.callingScript,cfg.refNotes,role]);
 
@@ -2072,7 +2117,7 @@ function App(){
     }
     if(window._needsRefetch&&cfg.sheetId&&cfg.sheetTab&&gOk){
       window._needsRefetch=false;
-      console.log('[AutoDial] Auto re-fetching stale leads...');
+      DBG('[AutoDial] Auto re-fetching stale leads...');
       setTimeout(()=>fetchLeads(),1000)
     }
   },[gOk]);
@@ -2353,7 +2398,7 @@ function App(){
               const parsed=JSON.parse(gt.data.biz_name);
               if(parsed.token){_gToken=parsed.token;localStorage.setItem('ad_gt',parsed.token);
                 if(parsed.ts)localStorage.setItem('ad_gt_ts',parsed.ts.toString());
-                console.log('[AutoDial] Using shared Google token from Main')}
+                DBG('[AutoDial] Using shared Google token from Main')}
             }
           }catch(e){}
         }
@@ -2364,7 +2409,7 @@ function App(){
             if(r.data&&r.data.biz_name){
               try{const myCfgFromMain=JSON.parse(r.data.biz_name);
               setAdminConfigs(p=>({...p,[myEmail]:Object.assign({},p[myEmail]||{},myCfgFromMain)}));
-              console.log('[AutoDial] Loaded config from Main:',Object.keys(myCfgFromMain))}catch(pe){}
+              DBG('[AutoDial] Loaded config from Main:',Object.keys(myCfgFromMain))}catch(pe){}
             }
           }catch(e){console.warn('[AdminCfg]',e.message||'no personal config')}
           try{
@@ -2372,14 +2417,14 @@ function App(){
             if(gr.data&&gr.data.biz_name){
               try{const globalCfg=JSON.parse(gr.data.biz_name);
               setCfg(p=>{const merged={...p};Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});return merged});
-              console.log('[AutoDial] Loaded global config')}catch(pe){}
+              DBG('[AutoDial] Loaded global config')}catch(pe){}
             }
           }catch(e){console.warn('[AdminCfg]',e.message||'no global config')}
           // Load shared script from Main
           try{
             const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_script').single();
             if(sr.data&&sr.data.biz_name){const s=JSON.parse(sr.data.biz_name);
-              if(s.html){setCfg(p=>({...p,callingScript:s.html,refNotes:s.notes||p.refNotes||''}));console.log('[AutoDial] Loaded shared script from Main')}}
+              if(s.html){setCfg(p=>({...p,callingScript:s.html,refNotes:s.notes||p.refNotes||''}));DBG('[AutoDial] Loaded shared script from Main')}}
           }catch(e){}
         }
         // Load shared appointments from Main
@@ -2390,22 +2435,22 @@ function App(){
                 setAppointments(prev=>{
                 const existIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
                 const newAppts=shared.filter(a=>{return!existIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds)});
-                if(newAppts.length)console.log('[AutoDial] Loaded '+newAppts.length+' shared appointments');
+                if(newAppts.length)DBG('[AutoDial] Loaded '+newAppts.length+' shared appointments');
                 return newAppts.length?_dedupAppts([...prev,...newAppts]):prev})}}}catch(e){}
           // Load session log from Supabase
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
-              if(sl.length&&!sessionLog.length){setSessionLog(sl);console.log('[AutoDial] Loaded '+sl.length+' sessions from Supabase')}}}catch(e){}
+              if(sl.length&&!sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Loaded '+sl.length+' sessions from Supabase')}}}catch(e){}
           // Load totalSets from Supabase
           try{const tr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','ts_'+myEmail).single();
             if(tr.data&&tr.data.biz_name){const td=JSON.parse(tr.data.biz_name);
-              if(td.ts>totalSets){setTotalSets(td.ts);console.log('[AutoDial] Loaded totalSets='+td.ts+' from Supabase')}}}catch(e){}
+              if(td.ts>totalSets){setTotalSets(td.ts);DBG('[AutoDial] Loaded totalSets='+td.ts+' from Supabase')}}}catch(e){}
         }
         // Cross-device cfg sync from Supabase
         if(_SB){
           try{const uc=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','usercfg_'+myEmail).single();
             if(uc.data&&uc.data.biz_name){const sc=JSON.parse(uc.data.biz_name);
-              if(sc._lastSync&&sc.sheetId){setCfg(p=>({...p,sheetId:sc.sheetId||p.sheetId,sheetTab:sc.sheetTab||p.sheetTab}));console.log('[AutoDial] Cross-device cfg loaded')}}}catch(e){}
+              if(sc._lastSync&&sc.sheetId){setCfg(p=>({...p,sheetId:sc.sheetId||p.sheetId,sheetTab:sc.sheetTab||p.sheetTab}));DBG('[AutoDial] Cross-device cfg loaded')}}}catch(e){}
           // Cross-device gamification
           try{const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gamify_'+myEmail).single();
             if(gr.data&&gr.data.biz_name){const gd=JSON.parse(gr.data.biz_name);
@@ -2418,10 +2463,10 @@ function App(){
             if(ar.data&&ar.data.biz_name){const myA=JSON.parse(ar.data.biz_name);
               if(myA.length){const delIds=_getDelIds();
                 const filtered=myA.filter(a=>!isApptDeleted(a,delIds));
-                if(filtered.length>appointments.length){setAppointments(_dedupAppts(filtered));console.log('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
+                if(filtered.length>appointments.length){setAppointments(_dedupAppts(filtered));DBG('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
-              if(sl.length>sessionLog.length){setSessionLog(sl);console.log('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}}catch(e){}
+              if(sl.length>sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}}catch(e){}
         }
         // Auto-set sheet ID and tab from synced admin config
         if(adminConfigs[myEmail]){
@@ -2429,7 +2474,7 @@ function App(){
           if(ac.timesheetId)setCfg(p=>({...p,sheetId:ac.timesheetId,sheetTab:ac.sheetTab||p.sheetTab||''}));
         }
         if(Object.keys(cloud).length>0){
-          console.log('[CloudSync] Loaded '+Object.keys(cloud).length+' buckets from cloud');
+          DBG('[CloudSync] Loaded '+Object.keys(cloud).length+' buckets from cloud');
           // Merge cloud data with localStorage (cloud wins for empty local)
           if(cloud.leads?.leads?.length&&!leads.length){
             const cl=cloud.leads.leads||[];
@@ -2527,7 +2572,7 @@ function App(){
         try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sess_'+myEmail).single();
           if(sr.data&&sr.data.biz_name){const sd=JSON.parse(sr.data.biz_name);
             if(sd.ended&&sd.endTime&&sd.endTime>session.startTime){
-              console.log('[AutoDial] Session was ended on another device');
+              DBG('[AutoDial] Session was ended on another device');
               setSession(null);setRunning(false);setPhase('idle');save('activeSession',null);
               toast('Session ended on another device','info')}}}catch(e){}}
       // Auto-refresh Google via Worker (silent, no popup)
@@ -2537,7 +2582,7 @@ function App(){
       cloudReady.current=true;window._cloudReady=true;
     // Restore daily sets from cloud
     if(_SB&&_user){_SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dsets_'+_user.email.toLowerCase()).single().then(function(r){
-      if(r.data){try{var ds=JSON.parse(r.data.biz_name);if(ds.date===getTodaySGT()&&ds.count>getDailySets()){setDailySetsCount(ds.count);console.log('[CloudSync] Restored daily sets:',ds.count)}}catch(e){}}}).catch(function(){})}; // Safe to write to Supabase now
+      if(r.data){try{var ds=JSON.parse(r.data.biz_name);if(ds.date===getTodaySGT()&&ds.count>getDailySets()){setDailySetsCount(ds.count);DBG('[CloudSync] Restored daily sets:',ds.count)}}catch(e){}}}).catch(function(){})}; // Safe to write to Supabase now
       // If Google was previously connected but token is missing/stale, auto-recover
 
     })();
@@ -2546,7 +2591,7 @@ function App(){
     if(isCreator(myEmail)&&_SB){
       _SB.from('profiles').select('*').then(r=>{
         if(r.data){const pending=r.data.filter(u=>!u.approved&&!isCreator(u.email));setPendingUsers(pending);setUsersList(r.data);
-          console.log('[AutoDial] Loaded',r.data.length,'profiles,',pending.length,'pending')}
+          DBG('[AutoDial] Loaded',r.data.length,'profiles,',pending.length,'pending')}
       }).catch(e=>console.warn('[Profiles]',e));
     }
 
@@ -2691,7 +2736,7 @@ function App(){
           });
           const filtered=applyCalFilters(weekSlice);
           setWeekEvents(filtered);
-          console.log('[Cal] '+filtered.length+' events from shared cache (no fetch)');
+          DBG('[Cal]',filtered.length,'events from shared cache');
           setCalRefreshing(false);
           return;
         }
@@ -2712,7 +2757,7 @@ function App(){
         // Apply filters via the shared helper (DRY)
         all=applyCalFilters(all);
         setWeekEvents(all);
-        console.log('[Cal] '+all.length+' events fetched directly (outside cache range)');
+        DBG('[Cal]',all.length,'events fetched directly');
       }catch(e){console.warn('[WeekEvents]',e?.message||e)}
       finally{setCalRefreshing(false)}
     };
@@ -2841,7 +2886,7 @@ function App(){
   const unpaidEarnings=sessionLog.filter(s=>!s.paid).reduce((a,s)=>a+(s.pay||0),0)+incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const unpaidIncentiveTotal=incentives.filter(x=>!x.paid).reduce((a,x)=>a+(x.amount||0),0);
   const isCreatorUser=isCreator(myEmail);
-  useEffect(()=>{console.log('[AutoDial] Creator check:',{myEmail,isCreatorUser,userEmail:window._user?.email,profEmail:window._prof?.email,CREATOR:window.CREATOR||'undefined'})},[]);
+  useEffect(()=>{DBG('[AutoDial] Creator check:',{myEmail,isCreatorUser,userEmail:window._user?.email,profEmail:window._prof?.email,CREATOR:window.CREATOR||'undefined'})},[]);
   // Achievement checker
   const checkAchievement=useCallback((id,label,emoji)=>{
     if(achievements.includes(id))return;
@@ -3203,7 +3248,9 @@ function App(){
   const _baseTabs=[['dial','📞 Dial'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const cbDue=cbQueue.filter(cb=>cb.status!=='called').length;
   const callTabs=[['dial','📞 Dial'+(cbDue?' 🔔'+cbDue:'')],['rank','📊 Rank'],['cal','🗓 Cal'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
-  const manageTabs=[['home','🏠 Home'],['live','⚡ Live'],['leads','📋 Leads'],['cal','🗓 Cal'],['appts','📅 Appts'],['cb','🔔 CB'],['timesheet','💰 Pay'],['tracking','📊 Track'],['settings','⚙️ Set']];
+  const manageTabs=[['home','🏠 Home'],['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['more','⋯ More']];
+  const moreTabKeys=['timesheet','tracking','settings'];
+  const apptsSubtabKeys=['appts','cal','cb'];
   const isCallMode=role==='admin'||(role==='main'&&mainMode==='call');
   const isManageMode=role==='main'&&mainMode==='manage';
   const tabs=isCallMode?callTabs:manageTabs;
@@ -3259,7 +3306,14 @@ function App(){
 
     {/* ═══ TABS ═══ */}
     <div className="app-tabs">
-      {tabs.map(([k,v])=><button key={k} className={tab===k?'active':''} onClick={()=>setTab(k)}>{v}</button>)}
+      {tabs.map(([k,v])=>{
+        const _isActive=k==='appts'&&isManageMode?apptsSubtabKeys.includes(tab):k==='more'?moreTabKeys.includes(tab):tab===k;
+        return<button key={k} className={_isActive?'active':''} onClick={()=>{
+          if(k==='more'){setShowMoreMenu(true);return}
+          if(k==='appts'&&isManageMode&&!apptsSubtabKeys.includes(tab)){setTab('appts');return}
+          setTab(k)
+        }}>{v}</button>
+      })}
     </div>
 
     {/* Content area - simplified for space */}
@@ -3818,6 +3872,9 @@ function App(){
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {/* ═══ CALENDAR TAB — week view of availability ═══ */}
     {tab==='cal'&&<div className='content-pad'>
+      {isManageMode&&<div style={{display:'flex',gap:4,marginBottom:12,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)'}}>
+        {[['appts','📋 List'],['cal','🗓 Cal'],['cb','🔔 CB']].map(([_k,_lbl])=><button key={_k} onClick={()=>setTab(_k)} style={{flex:1,padding:'8px 6px',borderRadius:8,background:tab===_k?'var(--adim)':'transparent',color:tab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none'}}>{_lbl}</button>)}
+      </div>}
       {!gOk?<div className="card" style={{textAlign:'center',padding:32}}>
         <p style={{fontSize:40,margin:'0 0 10px'}}>🗓</p>
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:'0 0 4px'}}>Connect Google Calendar</h3>
@@ -3864,7 +3921,7 @@ function App(){
               <button onClick={()=>setCalWeekOffset(p=>p-1)} style={{padding:'8px 12px',borderRadius:10,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,flexShrink:0}}>◀</button>
               <div style={{flex:1,textAlign:'center'}}>
                 <p style={{margin:0,fontSize:14,fontWeight:800,color:'#f1f5f9'}}>🗓 {weekLabel}</p>
-                <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{weekStart.toLocaleDateString('en-SG',{day:'numeric',month:'short'})} – {new Date(weekStart.getTime()+6*86400000).toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p>
+                <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{fmtDayMonth(weekStart)} – {fmtDayMonth(new Date(weekStart.getTime()+6*86400000))}</p>
               </div>
               <button onClick={()=>setCalWeekOffset(p=>p+1)} style={{padding:'8px 12px',borderRadius:10,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,flexShrink:0}}>▶</button>
             </div>
@@ -3955,7 +4012,7 @@ function App(){
                 {days.map(d=>{
                   const isToday=d.key===todayKey;
                   return<div key={'h-'+d.key} style={{padding:'4px 2px',textAlign:'center',borderBottom:'1px solid var(--border)'}}>
-                    <p style={{margin:0,fontSize:9,color:isToday?'var(--accent2)':'var(--text3)',fontWeight:700,textTransform:'uppercase'}}>{d.date.toLocaleDateString('en-SG',{weekday:'short'})}</p>
+                    <p style={{margin:0,fontSize:9,color:isToday?'var(--accent2)':'var(--text3)',fontWeight:700,textTransform:'uppercase'}}>{fmtWkdShort(d.date)}</p>
                     <p style={{margin:'2px 0 0',fontSize:15,fontWeight:800,color:isToday?'var(--accent2)':'#f1f5f9'}}>{d.date.getDate()}</p>
                   </div>
                 })}
@@ -3992,7 +4049,7 @@ function App(){
           {days.map(d=>{
             const isToday=d.key===todayKey;
             const isPast=d.key<todayKey;
-            const dayLabel=d.date.toLocaleDateString('en-SG',{weekday:'long',day:'numeric',month:'short'});
+            const dayLabel=fmtLongDay(d.date);
             // Compute free slots for this day (only for today and future days)
             const _evWithTimes=d.events.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
             const freeSlots=isPast?[]:findFreeSlots(d.date,_evWithTimes,BIZ_START,BIZ_END);
@@ -4059,6 +4116,9 @@ function App(){
 
     {/* ═══ APPOINTMENTS TAB ═══ */}
     {tab==='appts'&&<div className='content-pad'>
+      {isManageMode&&<div style={{display:'flex',gap:4,marginBottom:12,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)'}}>
+        {[['appts','📋 List'],['cal','🗓 Cal'],['cb','🔔 CB']].map(([_k,_lbl])=><button key={_k} onClick={()=>setTab(_k)} style={{flex:1,padding:'8px 6px',borderRadius:8,background:tab===_k?'var(--adim)':'transparent',color:tab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none'}}>{_lbl}</button>)}
+      </div>}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
@@ -4194,7 +4254,7 @@ function App(){
                       const cleaned=list.filter(x=>x.phone!==a.phone);
                       if(cleaned.length!==list.length){
                         await _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+a.admin.toLowerCase(),biz_name:JSON.stringify(cleaned)},{onConflict:'admin_email'});
-                        console.log('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from '+a.admin);
+                        DBG('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from '+a.admin);
                       }
                     }
                   }catch(e){console.warn('[AutoDial] shared_appts scrub failed',e?.message||e)}})();
@@ -4375,7 +4435,7 @@ function App(){
           const adminIncentiveCount=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email).length;
           const totalOwed=unpaid+adminIncentiveUnpaid;
           const dates=sessions.map(s=>new Date(s.startTime)).sort((a,b)=>a-b);
-          const periodFrom=dates[0]?dates[0].toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
+          const periodFrom=dates[0]?fmtDayMonth(dates[0]):'';
           const periodTo=dates.length>1?dates[dates.length-1].toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
           
           return<div key={email} className="card glow-border" style={{marginBottom:10,background:'linear-gradient(135deg,var(--bg2),rgba(99,102,241,.02))'}}>
@@ -4419,9 +4479,9 @@ function App(){
                     const base=hc*(s.hourlyRate||0);baseTotal+=base;if(s.bonus)bonusTotal+=s.pay-base;
                     // Insert promotion marker row BEFORE the session where it happened
                     if(s.promoted){
-                      rows.push([d.toLocaleDateString('en-SG',{day:'numeric',month:'short'}),'>>> PROMOTED TO '+(s.promotedTo||'')+' ('+(s.promotedFrom||'')+' -> '+(s.promotedTo||'')+')','','$'+(s.promotedFromRate||0)+' -> $'+(s.promotedToRate||0),'+$'+((s.promotedToRate||0)-(s.promotedFromRate||0))+'/hr'])
+                      rows.push([fmtDayMonth(d),'>>> PROMOTED TO '+(s.promotedTo||'')+' ('+(s.promotedFrom||'')+' -> '+(s.promotedTo||'')+')','','$'+(s.promotedFromRate||0)+' -> $'+(s.promotedToRate||0),'+$'+((s.promotedToRate||0)-(s.promotedFromRate||0))+'/hr'])
                     }
-                    rows.push([d.toLocaleDateString('en-SG',{day:'numeric',month:'short'}),s.tier+' · '+(s.sets||0)+' appts',hc.toFixed(1)+' hrs','$'+(s.hourlyRate||0),
+                    rows.push([fmtDayMonth(d),s.tier+' · '+(s.sets||0)+' appts',hc.toFixed(1)+' hrs','$'+(s.hourlyRate||0),
                       '$'+base.toFixed(2)])});
                   if(bonusTotal>0)rows.push(['','Bonus (performance)','','','$'+bonusTotal.toFixed(2)]);
                   // Include unpaid incentives for this admin
@@ -4488,7 +4548,7 @@ function App(){
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:4}}>
               <div style={{flex:1,minWidth:0}}>
                 <p style={{margin:0,fontSize:12,fontWeight:800,color:'#f1f5f9'}}>Cycle {c.cycleNum} · {_nm}</p>
-                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Closed {_d?_d.toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'}):''}{_from?' · Period: '+_from+' — '+(_to||_from):''}</p>
+                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Closed {_d?fmtFullDate(_d):''}{_from?' · Period: '+_from+' — '+(_to||_from):''}</p>
               </div>
               <div style={{textAlign:'right'}}>
                 <p className="mono" style={{margin:0,fontSize:16,fontWeight:900,color:c.paid?'var(--green)':'var(--amber)'}}>${Number(c.amount||0).toFixed(2)}</p>
@@ -4609,7 +4669,7 @@ function App(){
             <span className="mono" style={{fontSize:10,color:'var(--gold)',fontWeight:800}}>+${((s.promotedToRate||0)-(s.promotedFromRate||0)).toFixed(0)}/hr</span>
           </div>}
           <div style={{display:'flex',justifyContent:'space-between'}}>
-            <div><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p>
+            <div><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{fmtDayMonth(d)}</p>
               <p className="mono" style={{margin:0,fontSize:10,color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</p></div>
             <p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:s.paid?'var(--text3)':s.bonus?'var(--gold)':'var(--text)'}}>{s.paid?'PAID':'$'+(s.pay||0).toFixed(2)}</p>
           </div>
@@ -4640,7 +4700,7 @@ function App(){
               <div style={{flex:1,minWidth:0}}>
                 <p style={{margin:0,fontSize:12,fontWeight:700,color:'var(--accent2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>👤 {_name}</p>
                 {_ac.bizName&&<p style={{margin:0,fontSize:9,color:'var(--text3)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{_em}</p>}
-                <p style={{margin:'3px 0 0',fontSize:11,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})} · <span className="mono" style={{color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></p>
+                <p style={{margin:'3px 0 0',fontSize:11,fontWeight:600,color:'#f1f5f9'}}>{fmtDayMonth(d)} · <span className="mono" style={{color:'var(--text3)'}}>{d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></p>
               </div>
               <p className="mono" style={{margin:0,fontSize:16,fontWeight:800,color:s.paid?'var(--text3)':s.bonus?'var(--gold)':'var(--text)'}}>{s.paid?'PAID':'$'+(s.pay||0).toFixed(2)}</p>
             </div>
@@ -4910,7 +4970,7 @@ function App(){
         <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',margin:'0 0 8px'}}>Sessions</h3>
         {sessionLog.slice(0,15).map((s,i)=>{const d=new Date(s.startTime);
           return<div key={i} className="card" style={{marginBottom:12,padding:'10px 12px'}}>
-            <div style={{display:'flex',justifyContent:'space-between'}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{d.toLocaleDateString('en-SG',{day:'numeric',month:'short'})}</p><span style={{fontSize:11,color:rank.color}}>{s.rank||s.tier||''}</span></div>
+            <div style={{display:'flex',justifyContent:'space-between'}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{fmtDayMonth(d)}</p><span style={{fontSize:11,color:rank.color}}>{s.rank||s.tier||''}</span></div>
             <div style={{display:'flex',gap:5,fontSize:10,color:'var(--text3)',marginTop:4}}>
               <span>D:{s.dialed}</span><span style={{color:'var(--green)'}}>S:{s.sets}</span><span>NP:{s.np}</span>
               {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Replay</button>}
@@ -4962,6 +5022,9 @@ function App(){
 
     {/* ═══ CALLBACK QUEUE (both roles) ═══ */}
     {tab==='cb'&&<div className='content-pad'>
+      {isManageMode&&<div style={{display:'flex',gap:4,marginBottom:12,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)'}}>
+        {[['appts','📋 List'],['cal','🗓 Cal'],['cb','🔔 CB']].map(([_k,_lbl])=><button key={_k} onClick={()=>setTab(_k)} style={{flex:1,padding:'8px 6px',borderRadius:8,background:tab===_k?'var(--adim)':'transparent',color:tab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none'}}>{_lbl}</button>)}
+      </div>}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <h3 style={{fontSize:16,fontWeight:800,color:'#f1f5f9'}}>🔔 Callback Queue</h3>
         <button onClick={()=>DB.getCBQueue(isCallMode?myEmail:null).then(setCbQueue)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Refresh</button>
@@ -5022,12 +5085,15 @@ function App(){
     </div>}
 
     {tab==='settings'&&<div className='content-pad'>
-      {/* Creator user management */}
-      {isManageMode&&<div style={{display:'flex',alignItems:'center',gap:6,margin:'4px 0 10px'}}>
-        <div style={{height:1,flex:1,background:'var(--border)'}}/>
-        <span style={{fontSize:10,fontWeight:700,color:'var(--accent2)',letterSpacing:1}}>👥 TEAM MANAGEMENT</span>
-        <div style={{height:1,flex:1,background:'var(--border)'}}/>
-      </div>}
+      {/* ═══ Settings subtabs: Prefs / Integrations / Team ═══ */}
+      <div style={{display:'flex',gap:4,marginBottom:14,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)'}}>
+        {[
+          ['prefs','⚙️','Prefs'],
+          ['integr','🔗','Integrations'],
+          ...(isManageMode?[['team','👥','Team']]:[])
+        ].map(([_k,_ic,_lbl])=><button key={_k} onClick={()=>setSettingsSubtab(_k)} style={{flex:1,padding:'9px 6px',borderRadius:8,background:settingsSubtab===_k?'var(--adim)':'transparent',color:settingsSubtab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}><span style={{fontSize:13}}>{_ic}</span>{_lbl}</button>)}
+      </div>
+      {settingsSubtab==='team'&&isManageMode&&<>
       {isCreatorUser&&isManageMode&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
           <h3 style={{fontSize:14,fontWeight:700,color:'var(--accent2)'}}>👥 Users</h3>
@@ -5297,8 +5363,9 @@ function App(){
         </div>)}
         {!Object.keys(adminConfigs).length&&<p style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:8}}>No custom configs. All admins use defaults.</p>}
       </div>}
+      </>}
 
-      <div className="card" style={{marginBottom:12}}>
+      {(isManageMode?settingsSubtab==='team':settingsSubtab==='prefs')&&<div className="card" style={{marginBottom:12}}>
         {isManageMode?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>☁️ Sync All</button></div>:<>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>Call Rules</h3>
         {adminConfigs[myEmail]&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
@@ -5418,9 +5485,9 @@ function App(){
             <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
           </div>
         </div>
-      </div>
+      </div>}
 
-      {role==='admin'&&<div className="card" style={{marginBottom:12}}>
+      {settingsSubtab==='prefs'&&role==='admin'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>💳 Payment Details</h3>
         {myCfg.bizName&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 6px'}}>✓ Set by manager: <b>{myCfg.bizName}</b></p>}
         <div style={{marginBottom:8}}><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:3}}>Name (for invoice)</label>
@@ -5432,11 +5499,7 @@ function App(){
         <p style={{fontSize:10,color:'var(--text3)',margin:'6px 0 0'}}>Payment details are managed by your team lead</p>
       </div>}
 
-      <div style={{display:'flex',alignItems:'center',gap:6,margin:'16px 0 10px'}}>
-        <div style={{height:1,flex:1,background:'var(--border)'}}/>
-        <span style={{fontSize:10,fontWeight:700,color:'var(--text3)',letterSpacing:1}}>🔗 INTEGRATIONS</span>
-        <div style={{height:1,flex:1,background:'var(--border)'}}/>
-      </div>
+      {settingsSubtab==='integr'&&<>
       {role!=='admin'?<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
@@ -5526,8 +5589,9 @@ function App(){
           <button onClick={()=>window.open('https://calendar.google.com/calendar/r?cid='+encodeURIComponent(s.calendar_id),'_blank')} style={{marginLeft:'auto',padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Open</button>
         </div>)}
       </div>}
+      </>}
 
-      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>
+      {settingsSubtab==='prefs'&&<button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>}
     </div>}
 
     {/* ═══ ACHIEVEMENT POPUP ═══ */}
@@ -5537,6 +5601,27 @@ function App(){
         <p style={{margin:'4px 0 0',fontSize:14,fontWeight:800,color:'var(--gold)'}}>{showAchievement.label}</p>
       </div>
     </div>}
+
+    {/* ═══ MORE DRAWER (Management mode overflow menu) ═══ */}
+    <Modal show={showMoreMenu} onClose={()=>setShowMoreMenu(false)} align="bottom" bg=".75" padding={0}>
+      <div style={{width:'100%',maxWidth:500,background:'var(--bg2)',borderRadius:'20px 20px 0 0',padding:'20px 18px 28px',border:'1px solid var(--border2)',borderBottom:'none'}}>
+        <div style={{width:36,height:4,background:'var(--border2)',borderRadius:2,margin:'0 auto 16px'}}/>
+        <h3 style={{margin:'0 0 14px',fontSize:15,fontWeight:800,color:'#f1f5f9',textAlign:'center'}}>More</h3>
+        {[
+          ['timesheet','💰','Pay','Sessions & payouts'],
+          ['tracking','📊','Tracking','Team performance analytics'],
+          ['settings','⚙️','Settings','Preferences, integrations, team'],
+        ].map(([_k,_ic,_lbl,_desc])=><button key={_k} onClick={()=>{setTab(_k);setShowMoreMenu(false)}} style={{display:'flex',alignItems:'center',gap:14,width:'100%',padding:'14px 14px',borderRadius:14,background:tab===_k?'var(--adim)':'var(--bg3)',border:'1px solid '+(tab===_k?'rgba(99,102,241,.3)':'var(--border)'),marginBottom:8,textAlign:'left'}}>
+          <span style={{fontSize:22}}>{_ic}</span>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:14,fontWeight:700,color:tab===_k?'var(--accent2)':'#f1f5f9'}}>{_lbl}</p>
+            <p style={{margin:0,fontSize:11,color:'var(--text3)'}}>{_desc}</p>
+          </div>
+          <span style={{color:'var(--text3)',fontSize:16}}>›</span>
+        </button>)}
+        <button onClick={()=>setShowMoreMenu(false)} style={{width:'100%',padding:'12px',borderRadius:12,background:'transparent',border:'1px solid var(--border)',color:'var(--text3)',fontSize:13,fontWeight:600,marginTop:4}}>Cancel</button>
+      </div>
+    </Modal>
 
     {/* ═══ HELP / INSTRUCTIONS MODAL ═══ */}
     {showHelp&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:110,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}}>
@@ -5749,7 +5834,7 @@ function App(){
     </div>}
 
     {/* CB Modal — flexible scheduling with "No fixed date/time" + quick picks */}
-    {showCb&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowCb(false)}>
+    {showCb&&<div style={MODAL_OVERLAY} onClick={()=>setShowCb(false)}>
       <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:520,maxHeight:'88vh',overflowY:'auto',borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
         <h3 style={{margin:'0 0 4px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>📞 Schedule Callback</h3>
         <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)'}}>Pick an exact time, a quick option, or mark as "no fixed date/time"</p>
@@ -5809,7 +5894,7 @@ function App(){
               }} style={{padding:'10px 8px',borderRadius:10,background:clash?'linear-gradient(135deg,rgba(248,81,73,.12),var(--bg3))':'var(--bg3)',color:'#f1f5f9',fontSize:11,fontWeight:700,border:'1px solid '+(clash?'rgba(248,81,73,.45)':'var(--border)'),textAlign:'left',position:'relative'}}>
                 {clash&&<span style={{position:'absolute',top:4,right:6,fontSize:10,color:'var(--red)',fontWeight:800}}>⚠</span>}
                 <div style={{fontSize:11,fontWeight:800}}>{label}</div>
-                <div style={{fontSize:9,color:'var(--text3)',marginTop:2,fontWeight:600}}>{new Date(p.date+'T'+p.time).toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'})} · {p.time}{sub?' · '+sub:''}</div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:2,fontWeight:600}}>{fmtWkdDayMonth(p.date+'T'+p.time)} · {p.time}{sub?' · '+sub:''}</div>
                 {clash&&<div style={{fontSize:8,color:'var(--red)',marginTop:3,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>Clashes: {clash.name}</div>}
               </button>
             });
@@ -5857,7 +5942,7 @@ function App(){
           <span style={{fontSize:18}}>✓</span>
           <div style={{flex:1,minWidth:0}}>
             <p style={{margin:0,fontSize:12,fontWeight:800,color:'#22c55e'}}>Slot locked</p>
-            <p style={{margin:'2px 0 0',fontSize:11,color:'#86efac'}}>{(()=>{try{return new Date(apptDate+'T'+apptTime).toLocaleDateString('en-SG',{weekday:'long',day:'numeric',month:'short'})+' · '+apptTime+' · '+(apptDuration||60)+' min'}catch(e){return apptDate+' '+apptTime}})()}</p>
+            <p style={{margin:'2px 0 0',fontSize:11,color:'#86efac'}}>{(()=>{try{return fmtLongDay(apptDate+'T'+apptTime)+' · '+apptTime+' · '+(apptDuration||60)+' min'}catch(e){return apptDate+' '+apptTime}})()}</p>
           </div>
           <button onClick={()=>{setApptDate('');setApptTime('')}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flexShrink:0}}>Change</button>
         </div>}
@@ -5876,7 +5961,7 @@ function App(){
           }
           const weekStartDate=visibleDays[0]?.date;
           const weekEndDate=visibleDays[6]?.date;
-          const weekLabel=weekStartDate?weekStartDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'})+' – '+weekEndDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
+          const weekLabel=weekStartDate?fmtDayMonth(weekStartDate)+' – '+fmtDayMonth(weekEndDate):'';
           // Group gCal events by day
           const byDay={};
           (pickerEvents||[]).forEach(ev=>{
@@ -5939,7 +6024,7 @@ function App(){
                   const dur=sa.duration||90;
                   return{start:sh,end:new Date(sh.getTime()+dur*60000),hours:dur/60,name:sa.name,shaky:true}
                 });
-                const dayLabel=d.date.toLocaleDateString('en-SG',{weekday:'short'});
+                const dayLabel=fmtWkdShort(d.date);
                 const dayNum=d.date.getDate();
                 const monLabel=d.date.toLocaleDateString('en-SG',{month:'short'});
                 const selectedOnDay=apptDate===d.key;
@@ -6150,7 +6235,7 @@ function App(){
     })()}
 
     {/* ═══ WhatsApp Template Modal ═══ */}    {/* ═══ WhatsApp Template Modal ═══ */}
-    {showWA&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowWA(null)}>
+    {showWA&&<div style={MODAL_OVERLAY} onClick={()=>setShowWA(null)}>
       <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
         <h3 style={{margin:'0 0 8px',fontSize:17,fontWeight:800,color:'#25d366'}}>💬 Send WhatsApp</h3>
         <p style={{margin:'0 0 14px',fontSize:12,color:'var(--text3)'}}>To: {showWA.name} ({showWA.phone})</p>
