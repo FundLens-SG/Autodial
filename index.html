@@ -311,10 +311,7 @@ async function authSignup(){authClear();var n=document.getElementById('auth-snam
       if(cr||firstUser||_inviteFrom){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role,invited_by:_inviteFrom||null};authGrant();return}}
     authMsg('Created! Awaiting approval.','i');setTimeout(function(){authShow('pending')},1500)}catch(err){authMsg(err.message)}}
 
-async function authLogout(){
-  try{if(typeof window._preLogoutCleanup==='function')await window._preLogoutCleanup()}catch(e){console.warn('[Logout cleanup]',e?.message||e)}
-  try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');localStorage.removeItem('autodial_claude_key');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')
-}
+async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');localStorage.removeItem('autodial_claude_key');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
 
 function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';
@@ -397,28 +394,21 @@ function _saveGToken(token){
   if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:token,ts:Date.now()})},{onConflict:'admin_email'})}catch(e){}}}
 
 // ═══ WORKER REFRESH — silent, no popup, lasts forever ═══
-// BUG FIX: admin side now supports impersonating main by passing an override email.
-// This is how admin's browser gets a fresh Google token without main being online.
+// HARD FIX: accepts optional override email so admin can impersonate main against the Worker.
 window._workerRefresh=async function(overrideEmail){
   if(!WORKER_URL)return false;
-  // Resolution order: explicit arg → admin-side cached main email → current user
   var email=overrideEmail||window._mainEmailForWorker||window._user?.email||window._prof?.email;
   if(!email)return false;
   try{
     var r=await fetch(WORKER_URL+'/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})});
     if(!r.ok){DBG('[Google Worker] refresh failed status='+r.status+' for '+email);return false}
     var d=await r.json();if(d.access_token){_saveGToken(d.access_token);DBG('[Google] Token refreshed via Worker as '+email);return true}
-    DBG('[Google Worker] no access_token in response for '+email);
   }catch(e){console.warn('[Google Worker]',e.message)}return false};
 
-// ═══ ADMIN ENSURE GOOGLE — resolves main's email, then refreshes token directly via Worker ═══
-// This bypasses the fragile shared_gtoken cache. The Worker has main's refresh_token on file and
-// will hand out a fresh access_token to any caller who knows main's email. The admin's browser
-// then uses that token directly. Call this on admin mount, on Pull Latest, and periodically.
+// ═══ ADMIN ENSURE GOOGLE — resolves main's email, refreshes token directly via Worker (bypasses stale shared_gtoken cache) ═══
 window._adminEnsureGoogle=async function(verbose){
   if(!_SB||!WORKER_URL)return{ok:false,reason:'no-worker'};
   try{
-    // Step 1: find main's email (cached globally after first lookup)
     var mainEmail=window._mainEmailForWorker;
     if(!mainEmail){
       try{
@@ -427,54 +417,38 @@ window._adminEnsureGoogle=async function(verbose){
           var parsed=JSON.parse(idRow.data.biz_name);
           if(parsed.email){mainEmail=parsed.email;window._mainEmailForWorker=mainEmail;DBG('[AdminGoogle] Resolved main email: '+mainEmail)}
         }
-      }catch(e){DBG('[AdminGoogle] shared_main_identity lookup failed: '+(e.message||e))}
+      }catch(e){}
     }
-    // Step 1b: FALLBACK — use CREATOR[0] (hardcoded in the app config) if Supabase lookup returned nothing.
-    // This means the app works out of the box the first time even if main hasn't yet written shared_main_identity.
+    // Fallback: hardcoded CREATOR[0] (chungakwanc@gmail.com)
     if(!mainEmail&&typeof CREATOR!=='undefined'&&CREATOR.length&&CREATOR[0]){
       mainEmail=CREATOR[0];window._mainEmailForWorker=mainEmail;
-      DBG('[AdminGoogle] Falling back to CREATOR[0]: '+mainEmail);
+      DBG('[AdminGoogle] Using CREATOR[0] fallback: '+mainEmail);
     }
-    // Step 2: fall back to cached shared_gtoken if no main email found
     if(!mainEmail){
-      try{
-        var gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
-        if(gt.data&&gt.data.biz_name){
-          var p=JSON.parse(gt.data.biz_name);
-          if(p.token&&p.ts&&(Date.now()-p.ts)<3300000){
-            _gToken=p.token;localStorage.setItem('ad_gt',p.token);localStorage.setItem('ad_gt_ts',p.ts.toString());localStorage.setItem('ad_g_ever','1');window._gOkCb&&window._gOkCb(true);
-            DBG('[AdminGoogle] Using cached shared_gtoken (no mainEmail resolved)');
-            return{ok:true,reason:'cached-gtoken'};
-          }
-        }
-      }catch(e){}
-      if(verbose)toast('⚠ No manager identity on file — ask manager to log in once in Mgmt mode','err');
+      if(verbose)toast('⚠ No manager identity — ask manager to log in once','err');
       return{ok:false,reason:'no-main-email'};
     }
-    // Step 3: ask Worker for a fresh token using main's email
     var refreshed=await window._workerRefresh(mainEmail);
     if(refreshed){
       DBG('[AdminGoogle] Fresh token obtained via Worker as '+mainEmail);
       return{ok:true,reason:'worker-refresh',mainEmail:mainEmail};
     }
-    // Step 4: Worker refresh failed (refresh_token may be revoked) — fall through to cached row
+    // Fallback: try cached shared_gtoken
     try{
       var gt2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
       if(gt2.data&&gt2.data.biz_name){
         var p2=JSON.parse(gt2.data.biz_name);
         if(p2.token&&p2.ts&&(Date.now()-p2.ts)<3300000){
           _gToken=p2.token;localStorage.setItem('ad_gt',p2.token);localStorage.setItem('ad_gt_ts',p2.ts.toString());localStorage.setItem('ad_g_ever','1');window._gOkCb&&window._gOkCb(true);
-          DBG('[AdminGoogle] Worker refresh failed, using cached shared_gtoken instead');
           return{ok:true,reason:'cached-fallback'};
         }
       }
     }catch(e){}
-    if(verbose)toast('⚠ Manager needs to reconnect Google — refresh token may have been revoked','err');
+    if(verbose)toast('⚠ Manager must reconnect Google — refresh token may be revoked','err');
     return{ok:false,reason:'worker-failed-cache-stale'};
   }catch(e){
-    console.warn('[AdminGoogle] unexpected error',e);
     if(verbose)toast('Google sync error: '+(e.message||e),'err');
-    return{ok:false,reason:'exception',error:e.message};
+    return{ok:false,reason:'exception'};
   }
 };
 
@@ -520,23 +494,14 @@ window.gF=async function(url,opts){
   // If Worker available and token is stale, refresh before calling
   if(WORKER_URL){
     var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-    if(Date.now()-ts>2400000){
-      // Try _workerRefresh first (handles main + admin-with-cached-mainEmail). Fall back to _adminEnsureGoogle for admin who hasn't resolved main yet.
-      var refreshed=await window._workerRefresh();
-      if(!refreshed&&window._adminEnsureGoogle)await window._adminEnsureGoogle(false);
-    }
-  }
+    if(Date.now()-ts>2400000)await window._workerRefresh()}
   var t=_gToken||localStorage.getItem('ad_gt');
   if(!t)throw new Error('Connect Google first');
   var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});
   if(r.status===401){
-    // Try Worker refresh before giving up — then fall back to full admin resolution
+    // Try Worker refresh before giving up
     if(WORKER_URL){
       var ok=await window._workerRefresh();
-      if(!ok&&window._adminEnsureGoogle){
-        var adminResult=await window._adminEnsureGoogle(false);
-        ok=!!(adminResult&&adminResult.ok);
-      }
       if(ok){var t2=_gToken||localStorage.getItem('ad_gt');
         var r2=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t2,'Content-Type':'application/json'}});
         if(r2.ok||r2.status!==401)return r2}}
@@ -2132,26 +2097,6 @@ function App(){
   const[claudeKeyVal,setClaudeKeyVal]=useState(localStorage.getItem('autodial_claude_key')||(role==='admin'&&cfg.sharedClaudeKey?cfg.sharedClaudeKey:''));
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
-  // ═══ HARD FIX: Admin periodic Google token refresh every 40 min ═══
-  // Calls _adminEnsureGoogle which impersonates main via Worker refresh, so admin never depends on a stale shared_gtoken cache.
-  useEffect(()=>{
-    if(role!=='admin'||!_SB||!WORKER_URL)return;
-    const refresh=async()=>{
-      try{
-        const ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-        // Only refresh if >40min old (buffer before 60min expiry)
-        if(Date.now()-ts<2400000)return;
-        const result=await window._adminEnsureGoogle(false);
-        if(result&&result.ok){setGOk(true);DBG('[AdminGoogle] Periodic refresh OK via '+result.reason)}
-        else DBG('[AdminGoogle] Periodic refresh failed: '+(result?.reason||'unknown'))
-      }catch(e){console.warn('[AdminGoogle] periodic',e.message||e)}
-    };
-    // First check: 5 seconds after mount (don't hammer right at boot — hardsync already ran)
-    const first=setTimeout(refresh,5000);
-    // Then every 10 minutes (cheap check; the function itself is a no-op if token is fresh)
-    const interval=setInterval(refresh,10*60*1000);
-    return()=>{clearTimeout(first);clearInterval(interval)};
-  },[role]);
   useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})
     if(role==='main'&&mainMode==='manage'&&_SB&&window._cloudReady){
@@ -2169,6 +2114,21 @@ function App(){
           return next})}
     }
   },[claudeKeyVal]);
+  // ═══ HARD FIX: Admin periodic Google token refresh — keeps calendar alive even when main is offline ═══
+  useEffect(()=>{
+    if(role!=='admin'||!_SB||!WORKER_URL)return;
+    const refresh=async()=>{
+      try{
+        const ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+        if(Date.now()-ts<2400000)return; // Only if >40 min old
+        const result=await window._adminEnsureGoogle(false);
+        if(result&&result.ok){setGOk(true);DBG('[AdminGoogle] Periodic refresh OK via '+result.reason)}
+      }catch(e){}
+    };
+    const first=setTimeout(refresh,5000);
+    const interval=setInterval(refresh,10*60*1000);
+    return()=>{clearTimeout(first);clearInterval(interval)};
+  },[role]);
 
   // ═══ DESKTOP SCRIPT PANEL ═══
   const[scriptOpen,setScriptOpen]=useState(load('scriptOpen')??true);
@@ -2244,7 +2204,6 @@ function App(){
       if(u.leadIdx>=0){const lead=leadsRef.current[u.leadIdx];
         if(lead){
           setAppointments(p=>p.filter(a=>!(a.phone===lead.phone&&(!a.followUp||a.followUp==='pending'))));
-          // Also delete from Supabase autodial_appointments (if DB.saveAppt was called)
           if(_SB&&lead.phone){try{_SB.from('autodial_appointments').delete().eq('phone',lead.phone).eq('admin',myEmail).is('follow_up','pending').then(()=>{},()=>{})}catch(e){}
             if(u.calEventId)try{_SB.from('autodial_appointments').delete().eq('calendar_event_id',u.calEventId).then(()=>{},()=>{})}catch(e){}}
         }}
@@ -2563,26 +2522,16 @@ function App(){
       try{
         setSyncing(true);
         const cloud=await CloudSync.loadAll();
-        // ═══ ADMIN GOOGLE — robust multi-path resolution (hard fix) ═══
-        // Uses _adminEnsureGoogle(): resolves main's email from shared_main_identity, asks Worker for fresh token directly.
-        // Fallback chain: local cache → shared_gtoken row → Worker refresh as main → shared_gtoken as last resort.
+        // ═══ ADMIN GOOGLE — robust multi-path resolution (impersonates main via Worker, bypasses stale cache) ═══
         if(role==='admin'&&_SB){
           const _localTs=parseInt(localStorage.getItem('ad_gt_ts')||'0');
           const _localFresh=localStorage.getItem('ad_gt')&&(Date.now()-_localTs)<2700000;
           if(!_localFresh){
             try{
               const result=await window._adminEnsureGoogle(false);
-              if(result&&result.ok){
-                setGOk(true);
-                DBG('[AutoDial] Admin Google ready via '+result.reason+(result.mainEmail?' (as '+result.mainEmail+')':''));
-              }else{
-                DBG('[AutoDial] Admin Google resolution failed: '+(result?.reason||'unknown'));
-              }
+              if(result&&result.ok){setGOk(true);DBG('[AutoDial] Admin Google ready via '+result.reason)}
             }catch(e){console.warn('[AdminGoogle]',e.message||e)}
-          }else{
-            setGOk(true);
-            DBG('[AutoDial] Admin Google using fresh local cache (age: '+Math.round((Date.now()-_localTs)/60000)+'min)');
-          }
+          }else{setGOk(true)}
         }
         // Admin: load own config published by Main
         if(role==='admin'&&_SB){
@@ -2598,7 +2547,7 @@ function App(){
             const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
             if(gr.data&&gr.data.biz_name){
               try{const globalCfg=JSON.parse(gr.data.biz_name);
-              // ═══ FIX: manager-owned keys must ALWAYS overwrite on admin side. Previous "only fill empty" logic meant stale values stuck around forever. ═══
+              // ═══ FIX: manager-owned keys ALWAYS overwrite (previous "only fill empty" logic meant stale values stuck around) ═══
               const GLOBAL_OVERWRITE=['sharedGeminiKey','sharedClaudeKey','payRates','tierMins','sessionDur','mThresh','nThresh','bonusMult','metIncentive','starThresholds','npMax','cpl','delay','callingScript','refNotes'];
               setCfg(p=>{const merged={...p};
                 Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});
@@ -2725,10 +2674,10 @@ function App(){
             const localDel=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
             const merged=[...new Set([...localDel,...cloudDel])].slice(-500);
             localStorage.setItem('_deletedApptIds',JSON.stringify(merged))}}catch(e){}
-        // Google token — restore from cloud. Widened window: 55 min (was 45 min leaving a dead zone)
-        if(!localStorage.getItem('ad_gt')||(Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0'))>2700000){
+        // Google token — restore from cloud
+        if(!localStorage.getItem('ad_gt')){
           await _hs('shared_gtoken',d=>{
-            if(d.token&&d.ts&&(Date.now()-d.ts)<3300000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());localStorage.setItem('ad_g_ever','1');setGOk(true)}})
+            if(d.token&&d.ts&&(Date.now()-d.ts)<2700000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());setGOk(true)}})
         }
 
         if(!load('totalStars'))
@@ -2765,15 +2714,7 @@ function App(){
               toast('Session ended on another device','info')}}}catch(e){}}
       // Auto-refresh Google via Worker (silent, no popup)
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
-        try{
-          if(role==='admin'){
-            const result=await window._adminEnsureGoogle(false);
-            if(result&&result.ok)setGOk(true);
-          }else{
-            const ok=await window._autoRefreshGoogle();
-            if(ok)setGOk(true);
-          }
-        }catch(e){}}
+        try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
       setSyncing(false);
       cloudReady.current=true;window._cloudReady=true;
     // Restore daily sets from cloud
@@ -2793,9 +2734,8 @@ function App(){
 
     // ═══ AUTO-PICKUP INVITED ADMINS (Main only) — init adminConfigs with defaults ═══
     if(role==='main'&&_SB&&myEmail){
-      // ═══ HARD-FIX: publish main's identity so admins can resolve who to impersonate for Google refresh ═══
+      // ═══ HARD-FIX: publish main's identity so admins resolve who to impersonate for Google refresh ═══
       try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_main_identity',biz_name:JSON.stringify({email:myEmail,ts:Date.now()})},{onConflict:'admin_email'}).then(()=>{DBG('[AutoDial] Published shared_main_identity: '+myEmail)},()=>{})}catch(e){}
-      // Make main's own session also aware (used by _workerRefresh fallback chain)
       window._mainEmailForWorker=myEmail;
       _SB.from('autodial_admin_config').select('admin_email,biz_name').like('admin_email','invite_'+myEmail+'_%').then(r=>{
         if(!r.data||!r.data.length)return;
@@ -2899,12 +2839,14 @@ function App(){
 
   // ═══ In-app calendar view: auto-load this week's events ═══
   // Main: their primary calendar + any shared calendars they own
-  // Admin: calendars the manager shared with them. FALLBACK: if sharedCals metadata is empty but admin has the shared token, fetch ALL of main's calendars directly.
+  // Admin: the calendars their manager has shared with them (via adminConfigs[myEmail].sharedCals)
   useEffect(()=>{
-    // Keep calList fresh for main (sharing UI) AND admin (so we can fall back to main's calendars when metadata sync hasn't arrived)
-    if(gOk&&(!calList.length||calRefreshTrigger>0))gCalShare.listCalendars().then(setCalList).catch(()=>{});
+    // Also keep calList fresh whenever Google connects or user hits Refresh — needed for per-admin sharing UI AND for Main's Cal tab fetch
+    if(gOk&&role==='main'&&(!calList.length||calRefreshTrigger>0))gCalShare.listCalendars().then(setCalList).catch(()=>{});
     if(!gOk||!window.gCal)return;
     // ═══ Build calendar fetch list ═══
+    // Main: ALL owned/subscribed/shared calendars the user can read (respecting Google's "selected" visibility flag)
+    // Admin: calendars their manager shared with them + their own primary (for events where they're an invitee)
     let calFetchList=[{id:'primary',summary:'Primary',backgroundColor:'#1a73e8'}];
     if(role==='main'&&calList&&calList.length){
       const visible=calList.filter(c=>c.selected!==false&&c.accessRole&&c.accessRole!=='freeBusyReader');
@@ -2914,14 +2856,6 @@ function App(){
       const legacyShares=(calShares||[]).map(c=>({id:c.calendar_id,summary:c.name||c.calendar_id,backgroundColor:'#6366f1'})).filter(c=>c.id);
       // Always include primary for admin so events they're invited to appear
       calFetchList=[{id:'primary',summary:'My Primary',backgroundColor:'#1a73e8'},...myShares,...legacyShares];
-      // ═══ FALLBACK: if manager hasn't published sharedCals metadata yet (or publishAdminConfigs hasn't run on admin side), use the shared token to fetch ALL of main's readable calendars directly. Since admin is using main's access token, gCalShare.listCalendars() returns main's full list. ═══
-      if(myShares.length===0&&legacyShares.length===0&&calList&&calList.length){
-        const autoFallback=calList.filter(c=>c.accessRole&&c.accessRole!=='freeBusyReader'&&c.selected!==false).map(c=>({id:c.id,summary:c.summary||c.id,backgroundColor:c.backgroundColor||'#6366f1'}));
-        if(autoFallback.length){
-          DBG('[Cal] Admin fallback: using '+autoFallback.length+' calendars from shared main token');
-          calFetchList=[...calFetchList,...autoFallback];
-        }
-      }
     }
     // Dedupe by calendar id
     {const seen=new Set();calFetchList=calFetchList.filter(c=>{if(seen.has(c.id))return false;seen.add(c.id);return true})}
@@ -3214,60 +3148,6 @@ function App(){
       if(tsId){gSheets.ensureTabs(tsId,['Timesheet','Appointments Set','Pay'])}
       gTimesheet.append(s,userName,myCfg,tsId||undefined)}};
 
-  // ═══ LOGOUT CLEANUP + SESSION RESUME (within 15 min glitch recovery) ═══
-  const sessionRef=useRef(session);useEffect(()=>{sessionRef.current=session},[session]);
-  const endSessionRef=useRef(endSession);useEffect(()=>{endSessionRef.current=endSession});
-  useEffect(()=>{
-    window._preLogoutCleanup=async function(){
-      const _s=sessionRef.current;
-      if(_s&&!_s.ended){
-        DBG('[Logout] Finalizing active session as resumable');
-        const markerTs=Date.now();
-        try{
-          endSessionRef.current&&endSessionRef.current();
-          setSessionLog(p=>{if(!p.length)return p;const[first,...rest]=p;return[{...first,resumable:true,logoutTime:markerTs},...rest]});
-          try{localStorage.setItem('ad3_resumableSession_'+(window._user?.id||''),JSON.stringify({sessionStartTime:_s.startTime,logoutTime:markerTs}))}catch(e){}
-          await new Promise(r=>setTimeout(r,250));
-        }catch(e){console.warn('[Logout cleanup]',e?.message||e)}
-      }
-    };
-    return()=>{window._preLogoutCleanup=null};
-  },[]);
-  // On mount — check if last session was a recent resumable logout (<15 min). If so, restore it.
-  const _resumeCheckedRef=useRef(false);
-  useEffect(()=>{
-    if(_resumeCheckedRef.current)return;
-    if(!sessionLog||!sessionLog.length)return;
-    if(session&&!session.ended)return;
-    const top=sessionLog[0];
-    if(!top)return;
-    let isResumable=!!(top.resumable&&top.logoutTime);
-    let logoutTime=top.logoutTime;
-    if(!isResumable){
-      try{const _raw=localStorage.getItem('ad3_resumableSession_'+(window._user?.id||''));
-        if(_raw){const _m=JSON.parse(_raw);
-          if(_m&&_m.logoutTime&&_m.sessionStartTime===top.startTime){isResumable=true;logoutTime=_m.logoutTime}}
-      }catch(e){}
-    }
-    if(!isResumable)return;
-    const gapMs=Date.now()-logoutTime;
-    if(gapMs>15*60*1000){
-      setSessionLog(p=>p.map((s,i)=>i===0?{...s,resumable:false}:s));
-      try{localStorage.removeItem('ad3_resumableSession_'+(window._user?.id||''))}catch(e){}
-      _resumeCheckedRef.current=true;
-      return;
-    }
-    _resumeCheckedRef.current=true;
-    const priorElapsed=top.elapsed||Math.max(0,Math.floor(((top.endTime||logoutTime)-top.startTime)/1000));
-    const restored={...top,ended:false,endTime:undefined,elapsed:priorElapsed,resumable:false,logoutTime:undefined,
-      startTime:Date.now()-priorElapsed*1000,
-      originalStartTime:top.originalStartTime||top.startTime,
-      wasResumed:true,priorSegments:[...(top.priorSegments||[]),{startTime:top.originalStartTime||top.startTime,endTime:top.endTime||logoutTime,elapsed:priorElapsed}]};
-    setSession(restored);setRunning(true);
-    setSessionLog(p=>p.slice(1));
-    try{localStorage.removeItem('ad3_resumableSession_'+(window._user?.id||''))}catch(e){}
-    toast('⏯ Session resumed — welcome back! ('+Math.round(gapMs/60000)+' min gap merged)','info');
-  },[sessionLog,session]);
 
   // ═══ FEATURE 4: Live Leaderboard — broadcast stats ═══
   const broadcastStats=useCallback(()=>{
@@ -3513,7 +3393,7 @@ function App(){
   const _showRank=true;
   const _baseTabs=[['dial','📞 Dial'],['appts','📅 Appts'],['leads','📋 Leads'],['settings','⚙️ Set']];
   const cbDue=cbQueue.filter(cb=>cb.status!=='called').length;
-  const callTabs=[['dial','📞 Dial'+(cbDue?' 🔔'+cbDue:'')],['rank','📊 Rank'],['cal','🗓 Cal'],['appts','📅 Appts'],['leads','📋 Leads'],['timesheet','💰 Pay'],['settings','⚙️ Set']];
+  const callTabs=[['dial','📞 Dial'+(cbDue?' 🔔'+cbDue:'')],['rank','📊 Rank'],['cal','🗓 Cal'],['appts','📅 Appts'],['leads','📋 Leads'],...(role==='admin'?[['timesheet','💰 Pay']]:[]),['settings','⚙️ Set']];
   const manageTabs=[['home','🏠 Home'],['live','⚡ Live'],['leads','📋 Leads'],['appts','📅 Appts'],['more','⋯ More']];
   const moreTabKeys=['timesheet','tracking','settings'];
   const apptsSubtabKeys=['appts','cal','cb'];
@@ -4144,15 +4024,13 @@ function App(){
       {!gOk?<div className="card" style={{textAlign:'center',padding:32}}>
         <p style={{fontSize:40,margin:'0 0 10px'}}>🗓</p>
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:'0 0 4px'}}>Connect Google Calendar</h3>
-        <p style={{fontSize:12,color:'var(--text3)',margin:0}}>{role==='admin'?'Waiting for manager to share Google access — pull down to refresh or try Settings → Pull Latest.':'Connect your Google account in Settings to see your schedule here.'}</p>
+        <p style={{fontSize:12,color:'var(--text3)',margin:0}}>{role==='admin'?'Your manager needs to share a calendar with you, then connect Google in Settings.':'Connect your Google account in Settings to see your schedule here.'}</p>
       </div>:(()=>{
         // Same IDs logic the loader uses — so admin with no shares sees the right empty state
         let hasCals=true;
         if(role==='admin'){
           const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
-          // Also check calList fallback — if admin has the shared main token, they can see ALL main calendars even without sharedCals metadata
-          const fallbackCals=(calList||[]).filter(c=>c.accessRole&&c.accessRole!=='freeBusyReader');
-          if(!myShares.length&&!calShares.length&&!fallbackCals.length)hasCals=false;
+          if(!myShares.length&&!calShares.length)hasCals=false;
         }
         if(!hasCals)return<div className="card" style={{textAlign:'center',padding:32}}>
           <p style={{fontSize:40,margin:'0 0 10px'}}>📅</p>
@@ -4613,9 +4491,13 @@ function App(){
     </div>}
 
     {tab==='timesheet'&&(()=>{
+      // ═══ HARD FIX: Only admins see "My Earnings" — main never tracks personal pay (main PAYS admins, doesn't earn) ═══
+      const _showMyEarnings=role==='admin';
       // ═══ Manage-mode aggregates (exclude Main's own sessions/incentives) ═══
       // Filter out sessions/incentives that are already locked in a closed billing cycle (cycleId set)
-      const _adminEntries=Object.entries(adminSessions||{}).filter(([em])=>(em||'').toLowerCase()!==myEmail.toLowerCase())
+      // ═══ HARD FIX: filter out non-email keys (orphans from previous name-keyed Google Sheet imports) ═══
+      const _adminEntries=Object.entries(adminSessions||{})
+        .filter(([em])=>em&&em.includes('@')&&(em||'').toLowerCase()!==myEmail.toLowerCase())
         .map(([em,ss])=>[em,(ss||[]).filter(s=>!s.cycleId)]);
       const _allAdminSessions=_adminEntries.flatMap(([em,ss])=>(ss||[]).map(s=>({...s,_email:em})));
       const _unpaidAdminSessions=_allAdminSessions.filter(s=>!s.paid);
@@ -4627,18 +4509,61 @@ function App(){
       const _adminTotalHrs=_allAdminSessions.reduce((a,s)=>{const hc=s.fullSession?myCfg.sessionDur:((s.elapsed||0)/3600);return a+hc},0);
       // Next cycle number
       const _cycleNum=(billingCycles||[]).length?Math.max(...billingCycles.map(c=>c.cycleNum||0))+1:1;
+      // ═══ Main in CALL mode → no pay view at all (practice mode) ═══
+      if(role==='main'&&mainMode==='call')return<div className='content-pad'>
+        <div className="card" style={{textAlign:'center',padding:32,background:'linear-gradient(135deg,rgba(99,102,241,.06),transparent)',borderColor:'rgba(99,102,241,.2)'}}>
+          <p style={{fontSize:40,margin:'0 0 10px'}}>🎯</p>
+          <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:'0 0 6px'}}>Practice Mode</h3>
+          <p style={{fontSize:12,color:'var(--text3)',margin:'0 0 12px',lineHeight:1.5}}>You're the owner, not a paid admin — no earnings are tracked in call mode.<br/>Switch to Mgmt mode to view and manage admin payroll.</p>
+          <button onClick={()=>{setMainMode('manage');setTab('timesheet')}} style={{padding:'10px 20px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700,border:'1px solid rgba(99,102,241,.3)'}}>Switch to Mgmt Mode</button>
+        </div>
+      </div>;
       return <div className='content-pad'>
       <div className="card" style={{marginBottom:12,textAlign:'center',background:'linear-gradient(135deg,rgba(240,180,41,.06),rgba(210,153,34,.03))',borderColor:'rgba(240,180,41,.2)'}}>
-        <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em'}}>{isCallMode?'My Earnings':'Admin Payroll'}</p>
-        <p className="mono" style={{margin:'6px 0 2px',fontSize:36,fontWeight:900,color:(isCallMode?unpaidEarnings:_adminGrandUnpaid)>0?'var(--gold)':'var(--green)'}}>${isCallMode?totalEarnings.toFixed(2):_adminGrandUnpaid.toFixed(2)}</p>
-        {isCallMode
+        <p style={{margin:0,fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em'}}>{_showMyEarnings?'My Earnings':'Admin Payroll'}</p>
+        <p className="mono" style={{margin:'6px 0 2px',fontSize:36,fontWeight:900,color:(_showMyEarnings?unpaidEarnings:_adminGrandUnpaid)>0?'var(--gold)':'var(--green)'}}>${_showMyEarnings?totalEarnings.toFixed(2):_adminGrandUnpaid.toFixed(2)}</p>
+        {_showMyEarnings
           ?<p style={{margin:0,fontSize:11,color:'var(--text3)'}}>{sessionLog.length} sessions · {tier.emoji+' '+tier.label} · ${hourlyRate}/hr</p>
           :<p style={{margin:0,fontSize:11,color:'var(--text3)'}}>{_adminCount} admin{_adminCount===1?'':'s'} · {_allAdminSessions.length} session{_allAdminSessions.length===1?'':'s'} · {_adminTotalHrs.toFixed(1)}h · {_adminIncentives.filter(x=>!x.paid).length} unpaid incentive{_adminIncentives.filter(x=>!x.paid).length===1?'':'s'}</p>}
       </div>
 
       {/* Main: Aggregate admin view (Management Mode only) */}
       {isManageMode&&<>
-        <div style={{display:'flex',gap:6,marginBottom:10}}>
+        <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+          {/* ═══ PRIMARY: Pull latest sessions directly from each admin's Supabase slog row ═══ */}
+          {/* This is the SOURCE OF TRUTH — admins write to slog_<their_email> on every session end. */}
+          {/* Previously the Google Sheet import was primary, but it keyed by admin NAME which never matches adminConfigs keyed by email → names displayed as raw "user" and amounts were wrong. */}
+          <button onClick={async()=>{
+            if(!_SB){toast('Not connected to cloud','err');return}
+            const emails=Object.keys(adminConfigs||{}).filter(e=>e.includes('@')&&e.toLowerCase()!==myEmail.toLowerCase());
+            if(!emails.length){toast('No admins configured','err');return}
+            toast('↻ Pulling '+emails.length+' admin session logs…','info');
+            try{
+              const results=await Promise.all(emails.map(async em=>{
+                try{
+                  const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+em.toLowerCase()).single();
+                  if(r.data?.biz_name){const slog=JSON.parse(r.data.biz_name);return[em,Array.isArray(slog)?slog:[]]}
+                }catch(e){}
+                return[em,[]];
+              }));
+              const byEmail={};let totalSessions=0;
+              results.forEach(([em,sessions])=>{if(sessions.length){byEmail[em.toLowerCase()]=sessions;totalSessions+=sessions.length}});
+              if(totalSessions===0){toast('⚠ No sessions found in cloud. Admins must end a session first.','err');return}
+              // Merge with existing adminSessions (don't replace)
+              setAdminSessions(prev=>{
+                const next={...prev};
+                Object.entries(byEmail).forEach(([em,sessions])=>{
+                  const existing=next[em]||[];
+                  const existingKeys=new Set(existing.map(s=>s.startTime));
+                  const newOnes=sessions.filter(s=>!existingKeys.has(s.startTime));
+                  next[em]=[...existing,...newOnes].sort((a,b)=>(b.startTime||0)-(a.startTime||0));
+                });
+                return next;
+              });
+              toast('✅ Loaded '+totalSessions+' sessions from '+Object.keys(byEmail).length+' admins');
+            }catch(e){toast('Pull failed: '+(e.message||e),'err')}
+          }} style={{flex:1,minWidth:'48%',padding:'12px',borderRadius:10,background:'linear-gradient(135deg,rgba(34,197,94,.2),rgba(16,185,129,.15))',color:'#86efac',fontSize:12,fontWeight:800,border:'1px solid rgba(34,197,94,.35)'}}>☁️ Pull from Cloud (primary)</button>
+          {/* ═══ FALLBACK: Google Sheet import — now matches sheet admin names to adminConfigs bizName to resolve to email keys ═══ */}
           <button onClick={async()=>{
             if(!gOk){toast('Connect Google first','err');return}
             toast('Loading timesheet…','info');
@@ -4648,18 +4573,41 @@ function App(){
               try{vals=await gSheets.vals(id,'Timesheet!A:P')}catch(e){vals=await gSheets.vals(id,'Sheet1!A:P')}
               if(!vals||vals.length<2){toast('Empty timesheet','err');return}
               // Cols: 0=Date,1=Day,2=Admin,3=Start,4=End,5=Hours,6=Dialed,7=NP,8=CB,9=NI,10=Sets,11=Tier,12=$/hr,13=Bonus,14=Pay,15=Status
-              const grouped={};vals.slice(1).forEach(r=>{const admin=(r[2]||'').trim();if(!admin)return;
-                // Use admin name as key (timesheet stores name, not email)
-                const key=admin.toLowerCase();
-                if(!grouped[key])grouped[key]=[];
-                grouped[key].push({startTime:new Date(r[0]+' '+r[3]).getTime(),endTime:new Date(r[0]+' '+r[4]).getTime(),
+              // Build a name→email lookup from adminConfigs so sheet rows (keyed by admin NAME) resolve to correct email keys.
+              const nameToEmail={};
+              Object.entries(adminConfigs||{}).forEach(([em,ac])=>{
+                if(!em.includes('@'))return;
+                if(ac.bizName)nameToEmail[ac.bizName.toLowerCase().trim()]=em.toLowerCase();
+                // Also map email local part (e.g. "benjaminneo1997" ← benjaminneo1997@gmail.com)
+                nameToEmail[em.split('@')[0].toLowerCase()]=em.toLowerCase();
+              });
+              const grouped={};let _unmatched=0;
+              vals.slice(1).forEach(r=>{const admin=(r[2]||'').trim();if(!admin)return;
+                const nameLower=admin.toLowerCase();
+                // Resolve to an email key if possible; otherwise skip row (avoid polluting with "user" keys that don't match any admin)
+                const emailKey=nameToEmail[nameLower];
+                if(!emailKey){_unmatched++;return}
+                if(!grouped[emailKey])grouped[emailKey]=[];
+                grouped[emailKey].push({startTime:new Date(r[0]+' '+r[3]).getTime(),endTime:new Date(r[0]+' '+r[4]).getTime(),
                   elapsed:parseFloat(r[5]||0)*3600,dialed:+r[6]||0,np:+r[7]||0,cb:+r[8]||0,ni:+r[9]||0,sets:+r[10]||0,
                   tier:r[11]||'',hourlyRate:+r[12]||0,
                   fullSession:parseFloat(r[5]||0)>=myCfg.sessionDur,bonus:(r[13]||'').includes('1'),
-                  pay:parseFloat((r[14]||'0').replace('$',''))||0,paid:(r[15]||'').toLowerCase()==='paid'})});
-              setAdminSessions(grouped);toast('Loaded '+Object.keys(grouped).length+' admins')}
+                  pay:parseFloat((r[14]||'0').replace('$','').replace(',',''))||0,paid:(r[15]||'').toLowerCase()==='paid'})});
+              // Merge with existing (don't replace) so cloud + sheet data combine
+              setAdminSessions(prev=>{
+                const next={...prev};
+                Object.entries(grouped).forEach(([em,sessions])=>{
+                  const existing=next[em]||[];
+                  const existingKeys=new Set(existing.map(s=>s.startTime));
+                  const newOnes=sessions.filter(s=>!existingKeys.has(s.startTime));
+                  next[em]=[...existing,...newOnes].sort((a,b)=>(b.startTime||0)-(a.startTime||0));
+                });
+                return next;
+              });
+              const _matched=Object.keys(grouped).length;
+              toast(_matched?('Loaded '+_matched+' admins'+(_unmatched?' ('+_unmatched+' rows skipped — name not in Admin Pay list)':'')):'⚠ No rows matched your admins — check admin bizName field')}
             catch(e){toast(e.message,'err')}
-          }} style={{flex:1,padding:'10px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:11,fontWeight:700}}>📊 Load from Google Sheet</button>
+          }} style={{flex:1,minWidth:'48%',padding:'10px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:11,fontWeight:600,border:'1px solid var(--border)'}}>📊 Load from Sheet (fallback)</button>
         </div>
 
         {_adminEntries.length>0&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,gap:6,flexWrap:'wrap'}}>
@@ -4948,7 +4896,7 @@ function App(){
             {s.callLog?.length>0&&<button onClick={()=>setShowReplay({log:s.callLog})} style={{marginLeft:'auto',padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>📹 Replay</button>}
           </div>
           {role==='main'&&!s.paid&&<button onClick={()=>setSessionLog(p=>p.map((x,j)=>j===i?{...x,paid:true,paidDate:new Date().toISOString()}:x))} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
-          {role==='main'&&<button onClick={()=>{if(!confirm('Delete this session?'))return;setSessionLog(p=>p.filter((_,j)=>j!==i))}} style={{marginTop:4,width:'100%',padding:'4px',borderRadius:8,background:'var(--bg3)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.15)'}}>🗑 Delete</button>}
+          <button onClick={()=>{if(!confirm('Delete this session?'))return;setSessionLog(p=>p.filter((_,j)=>j!==i))}} style={{marginTop:4,width:'100%',padding:'4px',borderRadius:8,background:'var(--bg3)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.15)'}}>🗑 Delete</button>
         </div>})}
       {/* Manage-mode session list (aggregated across admins, self excluded, with admin name badge) */}
       {isManageMode&&_allAdminSessions
@@ -4979,19 +4927,6 @@ function App(){
               {s.fullSession&&<span style={{color:'var(--green)'}}>{(_ac.sessionDur||myCfg.sessionDur).toFixed(1)}h</span>}
               {!s.fullSession&&s.elapsed&&<span>{(s.elapsed/3600).toFixed(1)}h</span>}
             </div>
-            <button onClick={()=>{
-              const _curH=s.creditHours||((s.elapsed||0)/3600)||0;
-              const input=prompt('Edit session hours for '+_name+'\n\nCurrent: '+_curH.toFixed(2)+'h · $'+(s.pay||0).toFixed(2)+'\n\nEnter new hours (e.g., 5 or 5.5):',_curH.toFixed(2));
-              if(input===null)return;
-              const newH=parseFloat(input);
-              if(isNaN(newH)||newH<0||newH>24){toast('Invalid hours (must be 0-24)','err');return}
-              const _rate=s.hourlyRate||0;
-              const _bonusMult=s.bonus?(s.bonusMult||1.5):1;
-              const newPay=newH*_rate*_bonusMult;
-              if(!confirm('Update '+_name+' session?\n\n'+_curH.toFixed(2)+'h → '+newH.toFixed(2)+'h\n$'+(s.pay||0).toFixed(2)+' → $'+newPay.toFixed(2)))return;
-              setAdminSessions(p=>({...p,[_em]:(p[_em]||[]).map(x=>x.startTime===s.startTime?{...x,creditHours:newH,elapsed:Math.round(newH*3600),pay:newPay,editedByMain:true,editedAt:new Date().toISOString(),editedFrom:{creditHours:_curH,pay:s.pay||0}}:x)}));
-              toast('✏️ Updated → '+newH.toFixed(2)+'h · $'+newPay.toFixed(2))
-            }} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,border:'1px solid rgba(99,102,241,.2)'}}>✏️ Edit Hours{s.editedByMain?' (edited)':''}</button>
             {!s.paid&&<button onClick={()=>{setAdminSessions(p=>({...p,[_em]:(p[_em]||[]).map(x=>x.startTime===s.startTime?{...x,paid:true,paidDate:new Date().toISOString()}:x)}));toast('Session marked paid')}} style={{marginTop:6,width:'100%',padding:'6px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:600}}>✓ Mark Paid</button>}
             <button onClick={()=>{if(!confirm('Delete this session for '+_name+'?'))return;setAdminSessions(p=>({...p,[_em]:(p[_em]||[]).filter(x=>x.startTime!==s.startTime)}));toast('Session deleted')}} style={{marginTop:4,width:'100%',padding:'4px',borderRadius:8,background:'var(--bg3)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.15)'}}>🗑 Delete</button>
           </div>})}
@@ -5781,46 +5716,6 @@ function App(){
       </div>}
 
       {settingsSubtab==='integr'&&<>
-      {/* ═══ HARD SAVE ALL (main mgmt) — force-persist every config to cloud + broadcast to admins ═══ */}
-      {isManageMode&&<button onClick={async()=>{
-        if(!_SB){toast('Not connected to cloud','err');return}
-        try{
-          toast('💾 Saving all settings…','info');
-          save('cfg',cfg);try{cloudSave('cfg',cfg)}catch(e){}
-          await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});
-          save('acfg',adminConfigs);try{cloudSave('acfg',adminConfigs)}catch(e){}
-          publishAdminConfigs(adminConfigs);
-          if(geminiKeyVal&&_user)await _SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'});
-          if(claudeKeyVal&&_user)await _SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'});
-          if(waTemplates&&waTemplates.length){try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'})}catch(e){}}
-          toast('✅ All settings saved & synced to admins');
-        }catch(e){toast('Save failed: '+(e.message||e),'err')}
-      }} style={{width:'100%',padding:'14px',borderRadius:12,background:'linear-gradient(135deg,rgba(99,102,241,.25),rgba(139,92,246,.2))',color:'#c7d2fe',fontSize:13,fontWeight:800,border:'1px solid rgba(99,102,241,.4)',marginBottom:12,boxShadow:'0 2px 8px rgba(99,102,241,.15)'}}>💾 HARD SAVE ALL SETTINGS</button>}
-      {/* ═══ PULL LATEST (admin) — re-fetch shared config + calendars from manager on demand ═══ */}
-      {role==='admin'&&<button onClick={async()=>{
-        if(!_SB){toast('Not connected','err');return}
-        try{
-          toast('↻ Pulling latest from manager…','info');
-          const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
-          if(gr.data?.biz_name){const globalCfg=JSON.parse(gr.data.biz_name);setCfg(p=>({...p,...globalCfg}));if(globalCfg.sharedClaudeKey)window._sharedClaudeKey=globalCfg.sharedClaudeKey}
-          const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
-          if(r.data?.biz_name){const myShared=JSON.parse(r.data.biz_name);setAdminConfigs(p=>({...p,[myEmail]:{...(p[myEmail]||{}),...myShared}}))}
-          // ═══ HARD FIX: use robust _adminEnsureGoogle which impersonates main via Worker refresh ═══
-          const googleResult=await window._adminEnsureGoogle(true);
-          if(googleResult&&googleResult.ok){
-            setGOk(true);
-            const _via=googleResult.reason==='worker-refresh'?'Worker refresh':googleResult.reason==='cached-gtoken'?'cache':googleResult.reason==='cached-fallback'?'cache (worker failed)':googleResult.reason;
-            DBG('[PullLatest] Google ready via '+_via);
-          }else{
-            const _why=googleResult?.reason==='no-main-email'?'Manager has not logged in yet (no identity on file)':googleResult?.reason==='worker-failed-cache-stale'?'Worker refresh failed AND cache is stale — manager must reconnect Google':googleResult?.reason==='no-worker'?'Cloudflare Worker not configured':'Unknown: '+(googleResult?.reason||'—');
-            toast('❌ Google: '+_why,'err');
-          }
-          DB.getSharedCalendars(myEmail).then(setCalShares);
-          if(window._gToken||localStorage.getItem('ad_gt'))gCalShare.listCalendars().then(setCalList).catch(()=>{});
-          setCalRefreshTrigger(t=>t+1);
-          toast('✅ Latest settings & calendars pulled'+(googleResult?.ok?'':' (Google unavailable — see error above)'));
-        }catch(e){toast('Pull failed: '+(e.message||e),'err')}
-      }} style={{width:'100%',padding:'12px',borderRadius:12,background:'linear-gradient(135deg,rgba(34,197,94,.2),rgba(16,185,129,.15))',color:'#86efac',fontSize:12,fontWeight:700,border:'1px solid rgba(34,197,94,.35)',marginBottom:12}}>↻ Pull Latest from Manager (settings + calendars)</button>}
       {role!=='admin'?<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
@@ -5840,26 +5735,20 @@ function App(){
         {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Reset to manager connection');setTimeout(()=>location.reload(),500)}} style={{marginTop:8,padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,border:'1px solid var(--border)'}}>Reset Google connection</button>}
       </div>}
 
-      {/* Gemini AI — admin sees greyed-out masked version (key is main's, auto-applied) */}
       <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI {role==='admin'&&<span style={{fontSize:9,fontWeight:500,color:'var(--text3)'}}>(auto-applied by manager)</span>}</h3>
-        {role==='admin'?<>
-          <input value={(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))?'••••••••••••••••••••••••••••••••••':''} disabled placeholder="Waiting for manager to share key…" className="mono" style={{fontSize:12,marginBottom:4,opacity:.55,cursor:'not-allowed',color:'var(--text3)'}}/>
-          <p style={{margin:'0 0 8px',fontSize:10,color:(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))?'var(--green)':'var(--text3)'}}>{(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))?'✓ Applied automatically · Analyzing your leads with manager\'s key':'⏳ No key shared yet — ask manager to add one in Mgmt mode'}</p>
-          {(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))&&leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600}}>🧠 Re-analyze Leads</button>}
-        </>:<>
-          <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
-          {isManageMode&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');if(_SB){setCfg(s=>{const next={...s,sharedGeminiKey:geminiKeyVal};try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{})}catch(e){}return next})}toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
+        <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
+          {isManageMode&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
+          {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
             else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
+              // Re-fetch and analyze
               toast('Re-fetching leads with AI…','info');fetchLeads()}
           }} disabled={aiAnalyzing} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{aiAnalyzing?'Analyzing…':'Save & Analyze'}</button>
           {leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginLeft:6}}>🧠 Re-analyze Leads</button>}
-        </>}
       </div>
 
-      {/* ═══ Claude AI — now shows for admin too (greyed-out / masked, key is main's) ═══ */}
       {WORKER_URL&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:10,fontWeight:400,color:'var(--text3)'}}>{role==='admin'?'(auto-applied by manager)':'(smarter sheet analysis)'}</span></h3>
         {role==='admin'?<>
@@ -5868,20 +5757,8 @@ function App(){
         </>:<>
         <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
         <input value={claudeKeyVal} onChange={e=>setClaudeKeyVal(e.target.value.trim())} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
-        <p style={{margin:'0 0 8px',fontSize:10,color:claudeKeyVal?'var(--green)':'var(--text3)'}}>{claudeKeyVal?'✓ Key saved — synced to your account · Claude will analyze your leads':'No key — using Gemini only'}</p>
-          <button onClick={async()=>{
-            if(!claudeKeyVal)return toast('Enter key first','err');
-            try{
-              localStorage.setItem('autodial_claude_key',claudeKeyVal);
-              if(_SB&&_user){
-                await _SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'});
-                if(isManageMode){setCfg(s=>{const next={...s,sharedClaudeKey:claudeKeyVal};
-                  _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{});
-                  return next});}
-              }
-              toast('Claude key saved'+(isManageMode?' & shared ✓':' ✓'));
-            }catch(e){toast('Save failed: '+e.message,'err')}
-          }} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700,border:'1px solid rgba(99,102,241,.3)'}}>💾 Save Claude Key</button>
+        <p style={{margin:0,fontSize:10,color:claudeKeyVal?'var(--green)':'var(--text3)'}}>{claudeKeyVal?'✓ Key saved — synced to your account · Claude will analyze your leads':'No key — using Gemini only'}</p>
+          {isManageMode&&<button onClick={()=>{if(!claudeKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:claudeKeyVal}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
           {role==='admin'&&cfg.sharedClaudeKey&&!claudeKeyVal&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
         </>}
       </div>}
