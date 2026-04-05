@@ -514,7 +514,7 @@ window.gSheets={
       {method:'POST',body:JSON.stringify({values:[row]})});return true}catch(e){return false}
   },
   async meta(id){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json()).sheets?.map(function(s){return{id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}})||[]},async vals(id,range){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range))).json()).values||[]},async put(id,range,val){await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range)+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
-window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
+window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all},async del(eventId){if(!eventId)return false;try{await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events/'+encodeURIComponent(eventId)+'?sendUpdates=all',{method:'DELETE'});return true}catch(e){console.warn('[gCal.del]',e?.message||e);return false}},async loadRange(calIds,minD,maxD){var all=[];var list=(calIds||['primary']);for(var i=0;i<list.length;i++){var cid=list[i];try{var evs=cid==='primary'?await this.events(minD.toISOString(),maxD.toISOString()):await this.eventsFromCal(cid,minD.toISOString(),maxD.toISOString());evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}catch(e){}}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
 window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spreadsheet'";if(q)fq+=" and name contains '"+q.replace(/'/g,"\\'")+"'";return(await(await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(fq)+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20')).json()).files||[]}};
 
 // ══════ AI PROMPTS — centralized ══════
@@ -1815,6 +1815,8 @@ function App(){
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);const[cbDate,setCbDate]=useState('');const[cbTime,setCbTime]=useState('');
   const[showAppt,setShowAppt]=useState(false);const[setDone,setSetDone]=useState(false);
+  // Ref to the 3s auto-advance timer so doUndo can cancel it
+  const autoAdvanceTimerRef=useRef(null);
   // Auto-advance 3s after appointment modal closes (Set flow)
   useEffect(()=>{if(!showAppt&&setDone&&running){
     setSetDone(false);
@@ -1822,16 +1824,28 @@ function App(){
     const li=showPostCall?.leadIdx??curIdx;
     window._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now()};
     setUndoInfo({leadIdx:li,name:leads[li]?.name||'',status:'set',ts:Date.now()});
-    // Auto-advance after 3 seconds
+    // Auto-advance after 3 seconds — timer stored in ref so doUndo can cancel it
     const nextIdx=nextLeadRef.current;
     const timer=setTimeout(()=>{
+      autoAdvanceTimerRef.current=null;
       setShowPostCall(null);
       if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
       else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},400)}
     },3000);
-    return()=>clearTimeout(timer)}},[showAppt,setDone,running]);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
+    autoAdvanceTimerRef.current=timer;
+    return()=>{clearTimeout(timer);if(autoAdvanceTimerRef.current===timer)autoAdvanceTimerRef.current=null}}},[showAppt,setDone,running]);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
   const[apptLocation,setApptLocation]=useState('');const[apptObs,setApptObs]=useState('');
   const[savedInvitees,setSavedInvitees]=useState(load('invitees')||[]);
+  // ═══ Appointment Date Picker (shows multi-week free slots before form) ═══
+  const[apptPickerOpen,setApptPickerOpen]=useState(false);
+  const[pickerEvents,setPickerEvents]=useState([]);
+  const[pickerLoading,setPickerLoading]=useState(false);
+  const[pickerWeekIdx,setPickerWeekIdx]=useState(0); // 0 = current week, 1 = next, etc.
+  const[apptShaky,setApptShaky]=useState(false); // Shaky flag on new appointment
+  const[calViewMode,setCalViewMode]=useState(()=>load('calvm')||'list'); // 'list' | 'grid' for Cal tab
+  // Shaky flags stored per-appointment-id in localStorage (since schema doesn't have column)
+  const[shakyMap,setShakyMap]=useState(()=>{try{return JSON.parse(localStorage.getItem('shakyAppts')||'{}')}catch(e){return{}}});
+  const setShaky=(apptId,val)=>{setShakyMap(p=>{const n={...p};if(val)n[apptId]=true;else delete n[apptId];localStorage.setItem('shakyAppts',JSON.stringify(n));return n})};
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);const[newF,setNewF]=useState({name:'',phone:''});
   const[showFilters,setShowFilters]=useState(false);
@@ -1987,8 +2001,10 @@ function App(){
   // Auto-clear undo after 10 seconds
   useEffect(()=>{if(!undoInfo)return;const t=setTimeout(()=>setUndoInfo(null),10000);return()=>clearTimeout(t)},[undoInfo]);
   const doUndo=()=>{if(!undoInfo)return;const u=window._lastUndo;if(!u)return;
+    // ═══ CANCEL any pending auto-advance timer FIRST so we don't advance mid-undo ═══
+    if(autoAdvanceTimerRef.current){clearTimeout(autoAdvanceTimerRef.current);autoAdvanceTimerRef.current=null}
     setLeads(p=>p.map((l,i)=>i===u.leadIdx?{...l,status:u.prevStatus,npCount:u.prevNpCount}:l));
-    // If undoing a Set, reverse appointment count everywhere
+    // If undoing a Set, reverse appointment count everywhere + delete the Google Calendar event
     if(u.status==='set'){
       setSession(p=>p?{...p,sets:Math.max(0,(p.sets||1)-1)}:p);
       setTotalSets(p=>Math.max(0,p-1));
@@ -1996,11 +2012,22 @@ function App(){
       // Decrement daily sets counter
       var _ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');
       if(_ds.date===getTodaySGT()&&_ds.count>0){_ds.count--;localStorage.setItem('autodial_daily_sets',JSON.stringify(_ds))}
+      // Delete the Google Calendar event if one was created
+      if(u.calEventId&&window.gCal){gCal.del(u.calEventId).then(ok=>{if(ok)console.log('[Undo] gCal event deleted')}).catch(()=>{})}
       // Remove the appointment
       if(u.leadIdx>=0){const lead=leadsRef.current[u.leadIdx];
-        if(lead)setAppointments(p=>p.filter(a=>a.phone!==lead.phone||a.status!=='pending'))}
-      toast('↩️ Set undone — appointment reversed for '+undoInfo.name);
+        if(lead){
+          setAppointments(p=>p.filter(a=>a.phone!==lead.phone||a.status!=='pending'));
+          // Also clear shaky flag if set
+          if(u.apptId){setShaky(u.apptId,false)}
+        }}
+      toast('↩️ Set undone — pick a status for this lead');
     }else{toast('↩️ Undone — back to '+undoInfo.name)}
+    // ═══ Clear post-call card + next-preview so ALL status buttons re-enable and next lead does NOT advance ═══
+    setShowPostCall(null);
+    setShowNextPreview(false);
+    setNextPreviewIdx(-1);
+    // Return user to the current lead, calling phase, with all buttons available
     setCurIdx(u.leadIdx);setPhase('calling');setRunning(true);
     setUndoInfo(null);window._lastUndo=null};
   const[postCallNote,setPostCallNote]=useState('');
@@ -2203,6 +2230,34 @@ function App(){
 
   useEffect(()=>{save('apptDur',apptDuration);cloudSave('apptDur',apptDuration);
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'apptdur_'+_user.email.toLowerCase(),biz_name:JSON.stringify({dur:apptDuration,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})},[apptDuration]);
+  // Persist Cal tab view mode
+  useEffect(()=>{save('calvm',calViewMode)},[calViewMode]);
+  // ═══ Load picker events (4 weeks forward from today) when picker opens ═══
+  useEffect(()=>{if(!apptPickerOpen||!gOk)return;
+    let cancelled=false;
+    (async()=>{
+      setPickerLoading(true);
+      try{
+        // Same cal selection as the Cal tab loader
+        let calFetchList=['primary'];
+        if(role==='main'&&calList&&calList.length){
+          const visible=calList.filter(c=>c.selected!==false&&c.accessRole&&c.accessRole!=='freeBusyReader');
+          calFetchList=visible.map(c=>c.id);
+          if(!calFetchList.includes('primary'))calFetchList.unshift('primary');
+        }else if(role==='admin'){
+          const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
+          calFetchList=['primary',...myShares];
+        }
+        // Load from start of today through 4 weeks (28 days)
+        const now=new Date();
+        const minD=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+        const maxD=new Date(minD.getTime()+28*86400000);
+        const evs=await gCal.loadRange(calFetchList,minD,maxD);
+        if(!cancelled){setPickerEvents(evs);setPickerLoading(false)}
+      }catch(e){if(!cancelled){setPickerEvents([]);setPickerLoading(false)}}
+    })();
+    return()=>{cancelled=true};
+  },[apptPickerOpen,gOk,role,calList,adminConfigs,myEmail]);
 
   // Hard sync WA templates (shared + own key for cross-device)
   useEffect(()=>{
@@ -2858,7 +2913,7 @@ function App(){
   const applyOutcome=useCallback((status,extra={})=>{const idx=curIdx;
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
       if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=n(myCfg.npMax,5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
-      else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';syncSheet(u,'cb')}
+      else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';u.cbFlexible=!!extra.cbFlexible;syncSheet(u,'cb')}
       else if(status==='set'){u.status='set';syncSheet(u,'set');
         // Auto-create appointment entry — but dedup: don't create if an open (pending) appt already exists for this lead
         setAppointments(p=>{
@@ -2954,7 +3009,7 @@ function App(){
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
         if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,3)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
-      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setShowAppt(true);setSetDone(true)}
+      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setApptShaky(false);setPickerWeekIdx(0);if(gOk){setApptPickerOpen(true)}else{setShowAppt(true)}setSetDone(true)}
     else{applyOutcome(status,extra)}
     // ═══ PRE-COMPUTE next lead by simulating status change ═══
     const simulated=leads.map((l,i)=>{
@@ -3449,7 +3504,7 @@ function App(){
                 <button onClick={()=>handleOutcome('np')} style={{padding:'14px 0',borderRadius:14,background:'linear-gradient(135deg,rgba(245,158,11,.15),rgba(245,158,11,.08))',color:'var(--amber)',fontSize:14,fontWeight:700,minHeight:48,border:'1px solid rgba(245,158,11,.2)'}}>NP</button>
                 <button onClick={()=>{setShowCb(true);setCbDate('');setCbTime('')}} style={{padding:'14px 0',background:'linear-gradient(135deg,rgba(56,132,244,.15),rgba(56,132,244,.08))',color:'var(--blue)',fontSize:14,fontWeight:700,borderRadius:14,minHeight:48,border:'1px solid rgba(56,132,244,.2)'}}>CB</button>
                 <button onClick={()=>handleOutcome('ni')} style={{padding:'14px 0',borderRadius:14,background:'linear-gradient(135deg,rgba(248,81,73,.15),rgba(248,81,73,.08))',color:'var(--red)',fontSize:14,fontWeight:700,minHeight:48,border:'1px solid rgba(248,81,73,.2)'}}>NI</button>
-                <button onClick={()=>handleOutcome('set')} disabled={setDone||showPostCall?.status==='set'} style={{padding:'12px 0',background:setDone?'var(--bg3)':'linear-gradient(135deg,rgba(63,185,80,.15),rgba(63,185,80,.08))',color:setDone?'var(--text3)':'var(--green)',fontSize:14,fontWeight:700,borderRadius:14,minHeight:48,border:'1px solid '+(setDone?'var(--border)':'rgba(63,185,80,.2)'),opacity:setDone?.5:1}}>{setDone?'✓ Set':'Set'}</button>
+                <button onClick={()=>handleOutcome('set')} disabled={setDone||showPostCall?.status==='set'} style={{padding:'12px 0',background:setDone?'var(--bg3)':'linear-gradient(135deg,rgba(63,185,80,.15),rgba(63,185,80,.08))',color:setDone?'var(--text3)':'var(--green)',fontSize:13,fontWeight:700,borderRadius:14,minHeight:48,border:'1px solid '+(setDone?'var(--border)':'rgba(63,185,80,.2)'),opacity:setDone?.5:1,lineHeight:1.1}}>{setDone?'✓ Set':'Set (check dates)'}</button>
                 <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip → (don't mark)</button>
               </div>
               {/* Adjustable delay timer ±1s */}
@@ -3749,8 +3804,13 @@ function App(){
               <button onClick={()=>setCalWeekOffset(p=>p+1)} style={{padding:'8px 12px',borderRadius:10,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,flexShrink:0}}>▶</button>
             </div>
             <div style={{display:'flex',gap:6,marginTop:10,alignItems:'center'}}>
-              {calWeekOffset!==0&&<button onClick={()=>setCalWeekOffset(0)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:700,flex:1}}>⊙ Jump to Today</button>}
-              <button onClick={()=>{setCalRefreshing(true);setCalRefreshTrigger(p=>p+1);toast('Refreshing calendar…','info')}} style={{padding:'6px 12px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flex:calWeekOffset!==0?0:1,flexShrink:0}}>{calRefreshing?'⟳ Refreshing…':'⟳ Refresh'}</button>
+              {calWeekOffset!==0&&<button onClick={()=>setCalWeekOffset(0)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:700,flex:1}}>⊙ Today</button>}
+              {/* View mode toggle: List ↔ Grid (Google-Calendar-style week grid) */}
+              <div style={{display:'inline-flex',gap:2,padding:2,borderRadius:8,background:'var(--bg3)',border:'1px solid var(--border)',flexShrink:0}}>
+                <button onClick={()=>setCalViewMode('list')} style={{padding:'5px 10px',borderRadius:6,background:calViewMode==='list'?'var(--adim)':'transparent',color:calViewMode==='list'?'var(--accent2)':'var(--text3)',fontSize:10,fontWeight:700,border:'none'}}>📋 List</button>
+                <button onClick={()=>setCalViewMode('grid')} style={{padding:'5px 10px',borderRadius:6,background:calViewMode==='grid'?'var(--adim)':'transparent',color:calViewMode==='grid'?'var(--accent2)':'var(--text3)',fontSize:10,fontWeight:700,border:'none'}}>🗓 Grid</button>
+              </div>
+              <button onClick={()=>{setCalRefreshing(true);setCalRefreshTrigger(p=>p+1);toast('Refreshing calendar…','info')}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flexShrink:0}}>{calRefreshing?'⟳…':'⟳'}</button>
               <button onClick={()=>setCalFilterOpen(p=>!p)} style={{padding:'6px 12px',borderRadius:8,background:calFilterOpen?'var(--adim)':'var(--bg3)',color:calFilterOpen?'var(--accent2)':'var(--text2)',fontSize:10,fontWeight:700,border:calFilterOpen?'1px solid rgba(99,102,241,.3)':'none',flexShrink:0}}>{(()=>{const hidden=Object.values(calVisibility).filter(v=>v===false).length;const extras=[];if(hidden)extras.push(hidden+' hidden');if(!showInvited)extras.push('invites off');if(showDeclined)extras.push('+declined');return '⚙ Filter'+(extras.length?' · '+extras.join(' · '):'')})()}</button>
             </div>
             <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,margin:'8px 0 0',fontSize:9,color:'var(--text3)'}}>
@@ -3817,6 +3877,52 @@ function App(){
               <p style={{margin:'10px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>Settings sync across your devices automatically</p>
             </div>
           })()}
+          {/* ═══ GRID VIEW: Google-Calendar-style week grid (7 cols × hour rows) ═══ */}
+          {calViewMode==='grid'&&(()=>{
+            const HR_START=7,HR_END=22; // 7am–10pm
+            const HOUR_PX=44;
+            const hours=[];for(let h=HR_START;h<HR_END;h++)hours.push(h);
+            // For each day, map events into positioned pills
+            return<div className="card" style={{padding:'10px 6px',overflowX:'auto'}}>
+              <div style={{display:'grid',gridTemplateColumns:'42px repeat(7,minmax(92px,1fr))',gap:1,minWidth:720}}>
+                {/* Header row: day names */}
+                <div/>
+                {days.map(d=>{
+                  const isToday=d.key===todayKey;
+                  return<div key={'h-'+d.key} style={{padding:'4px 2px',textAlign:'center',borderBottom:'1px solid var(--border)'}}>
+                    <p style={{margin:0,fontSize:9,color:isToday?'var(--accent2)':'var(--text3)',fontWeight:700,textTransform:'uppercase'}}>{d.date.toLocaleDateString('en-SG',{weekday:'short'})}</p>
+                    <p style={{margin:'2px 0 0',fontSize:15,fontWeight:800,color:isToday?'var(--accent2)':'#f1f5f9'}}>{d.date.getDate()}</p>
+                  </div>
+                })}
+                {/* Body: hour gutter + 7 day columns, each absolutely-positioning its events */}
+                <div style={{position:'relative',borderRight:'1px solid var(--border)'}}>
+                  {hours.map(h=><div key={'hr-'+h} style={{height:HOUR_PX,fontSize:9,color:'var(--text3)',textAlign:'right',paddingRight:4,paddingTop:2,borderTop:'1px solid var(--border)'}}>{h>12?h-12:h}{h>=12?'p':'a'}</div>)}
+                </div>
+                {days.map(d=>{
+                  const _evT=d.events.filter(ev=>ev.start?.dateTime).map(ev=>({ev,start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
+                  const isToday=d.key===todayKey;
+                  return<div key={'col-'+d.key} style={{position:'relative',borderRight:'1px solid var(--border)',background:isToday?'rgba(99,102,241,.04)':'transparent'}}>
+                    {hours.map(h=><div key={'hb-'+h} style={{height:HOUR_PX,borderTop:'1px solid var(--border)'}}/>)}
+                    {_evT.map(({ev,start,end},ei)=>{
+                      const startH=start.getHours()+start.getMinutes()/60;
+                      const endH=end.getHours()+end.getMinutes()/60;
+                      if(endH<=HR_START||startH>=HR_END)return null;
+                      const top=Math.max(0,(startH-HR_START)*HOUR_PX);
+                      const height=Math.max(18,(Math.min(endH,HR_END)-Math.max(startH,HR_START))*HOUR_PX-2);
+                      const isShaky=(appointments||[]).some(a=>a.calEventId===ev.id&&(a.shaky||(shakyMap&&shakyMap[a.phone])));
+                      return<div key={'e-'+ei} title={ev.summary} style={{position:'absolute',left:2,right:2,top:top+2,height,borderRadius:5,padding:'2px 4px',fontSize:9,fontWeight:700,overflow:'hidden',background:isShaky?'linear-gradient(135deg,rgba(251,146,60,.35),rgba(234,88,12,.2))':'linear-gradient(135deg,rgba(99,102,241,.35),rgba(79,70,229,.2))',border:'1px solid '+(isShaky?'rgba(251,146,60,.6)':'rgba(99,102,241,.5)'),color:isShaky?'#fb923c':'#a5b4fc',boxShadow:isShaky?'0 0 8px rgba(251,146,60,.3)':'none',cursor:'default'}}>
+                        <div style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{isShaky?'🟠 ':''}{ev.summary||'Busy'}</div>
+                        <div style={{fontSize:8,opacity:.8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{String(start.getHours()).padStart(2,'0')}:{String(start.getMinutes()).padStart(2,'0')}</div>
+                      </div>
+                    })}
+                  </div>
+                })}
+              </div>
+              <p style={{margin:'10px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>Grid view · 7am–10pm · Scroll horizontally on mobile for full week</p>
+            </div>;
+          })()}
+          {/* ═══ LIST VIEW (default) ═══ */}
+          {calViewMode==='list'&&<>
           {/* Day list */}
           {days.map(d=>{
             const isToday=d.key===todayKey;
@@ -3845,11 +3951,13 @@ function App(){
                     const ev=item.ev;const es=new Date(ev.start?.dateTime||ev.start?.date||0);const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
                     const allDay=!ev.start?.dateTime;
                     const timeStr=allDay?'All day':es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
-                    return<div key={'e'+i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
-                      <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:ev._calColor||'var(--accent)',flexShrink:0,minHeight:28}}/>
+                    // Shaky? Cross-ref appointments by calEventId or by phone in shakyMap
+                    const _isShaky=(appointments||[]).some(a=>(a.calEventId&&a.calEventId===ev.id)&&((a.shaky)||(shakyMap&&shakyMap[a.phone])));
+                    return<div key={'e'+i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:_isShaky?'linear-gradient(135deg,rgba(251,146,60,.08),rgba(234,88,12,.04))':'var(--bg)',border:'1px solid '+(_isShaky?'rgba(251,146,60,.45)':'var(--border)'),boxShadow:_isShaky?'0 0 10px rgba(251,146,60,.2)':'none'}}>
+                      <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:_isShaky?'linear-gradient(180deg,#fb923c,#ea580c)':(ev._calColor||'var(--accent)'),flexShrink:0,minHeight:28,boxShadow:_isShaky?'0 0 6px rgba(251,146,60,.6)':'none'}}/>
                       <div style={{flex:1,minWidth:0}}>
-                        <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:ev._calColor||'var(--accent2)'}}>{timeStr}</p>
-                        <p style={{margin:'2px 0 0',fontSize:12,fontWeight:600,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</p>
+                        <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:_isShaky?'#fb923c':(ev._calColor||'var(--accent2)')}}>{timeStr}{_isShaky?' · 🟠 SHAKY (also available)':''}</p>
+                        <p style={{margin:'2px 0 0',fontSize:12,fontWeight:600,color:_isShaky?'#fdba74':'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</p>
                         {ev.location&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📍 {ev.location}</p>}
                         {ev._calName&&ev._calId!=='primary'&&<p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📁 {ev._calName}</p>}
                       </div>
@@ -3879,6 +3987,7 @@ function App(){
               {d.events.length===0&&freeSlots.length===0&&<p style={{margin:0,fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>{isPast?'No events':'No events · Outside business hours'}</p>}
             </div>;
           })}
+          </>}
         </>;
       })()}
     </div>}
@@ -4031,6 +4140,14 @@ function App(){
           </div>
           
           {a.apptDate&&<p style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>📅 {a.apptDate} {a.apptTime} {a.location?'· 📍'+a.location:''}</p>}
+          {/* Shaky tickbox — tap to toggle whether this slot reappears as an "available (shaky)" slot in future pickers */}
+          {a.apptDate&&(()=>{
+            const isShaky=!!(shakyMap&&shakyMap[a.phone])||!!a.shaky;
+            return<div onClick={e=>{e.stopPropagation();const next=!isShaky;setShaky(a.phone,next);setAppointments(p=>p.map(x=>x.id===a.id?{...x,shaky:next}:x));toast(next?'🟠 Marked as shaky':'Shaky removed','info')}} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'3px 8px',marginBottom:6,borderRadius:8,background:isShaky?'linear-gradient(135deg,rgba(251,146,60,.15),rgba(234,88,12,.08))':'var(--bg3)',border:'1px solid '+(isShaky?'rgba(251,146,60,.5)':'var(--border)'),cursor:'pointer',fontSize:9,fontWeight:700,color:isShaky?'#fb923c':'var(--text3)',boxShadow:isShaky?'0 0 6px rgba(251,146,60,.25)':'none'}}>
+              <span style={{width:12,height:12,borderRadius:3,background:isShaky?'linear-gradient(135deg,#fb923c,#ea580c)':'var(--bg)',border:'1px solid '+(isShaky?'#fb923c':'var(--border2)'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:9,fontWeight:800}}>{isShaky?'✓':''}</span>
+              🟠 Shaky
+            </div>
+          })()}
           {a.industry&&<p style={{fontSize:10,color:'var(--text3)',marginBottom:4}}>🏢 {a.industry}</p>}
           {a.remarks&&<p style={{fontSize:10,color:'var(--text3)',marginBottom:6,fontStyle:'italic'}}>{a.remarks}</p>}
           
@@ -5563,17 +5680,227 @@ function App(){
       </div>
     </div>}
 
-    {/* CB Modal */}
+    {/* CB Modal — flexible scheduling with "No fixed date/time" + quick picks */}
     {showCb&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowCb(false)}>
-      <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
-        <h3 style={{margin:'0 0 14px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>Schedule Callback</h3>
-        <input type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)} style={{marginBottom:10,colorScheme:'dark'}}/>
-        <input type="time" value={cbTime} onChange={e=>setCbTime(e.target.value)} style={{marginBottom:16,colorScheme:'dark'}}/>
-        <button onClick={()=>{if(!cbDate||!cbTime)return;handleOutcome('cb',{cbDate,cbTime});setShowCb(false)}} style={{width:'100%',padding:'14px',background:'linear-gradient(135deg,var(--blue),#2563eb)',color:'#fff',fontSize:14,fontWeight:700}}>📅 Set CB</button>
+      <div onClick={e=>e.stopPropagation()} className="glass" style={{width:'100%',maxWidth:520,maxHeight:'88vh',overflowY:'auto',borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
+        <h3 style={{margin:'0 0 4px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>📞 Schedule Callback</h3>
+        <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)'}}>Pick an exact time, a quick option, or mark as "no fixed date/time"</p>
+        {/* ═══ PRIMARY: No fixed date/time ═══ */}
+        <button onClick={()=>{
+          // Default soft reminder = 3 days from now at 10am. Marked cbFlexible so UI shows it differently.
+          const d=new Date();d.setDate(d.getDate()+3);
+          const df=d.toISOString().slice(0,10);
+          handleOutcome('cb',{cbDate:df,cbTime:'10:00',cbFlexible:true});
+          setShowCb(false);setCbDate('');setCbTime('');
+        }} style={{width:'100%',padding:'16px 14px',marginBottom:14,borderRadius:14,background:'linear-gradient(135deg,rgba(99,102,241,.18),rgba(79,70,229,.1))',color:'var(--accent2)',fontSize:14,fontWeight:800,border:'1px solid rgba(99,102,241,.4)',boxShadow:'0 0 16px rgba(99,102,241,.15)',textAlign:'left',display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:22}}>⏰</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:14,fontWeight:800}}>No fixed date/time</div>
+            <div style={{fontSize:10,fontWeight:600,opacity:.75,marginTop:2}}>Soft 3-day reminder · use when the lead says "call me sometime"</div>
+          </div>
+        </button>
+        {/* ═══ QUICK PICKS ═══ */}
+        <p style={{margin:'0 0 8px',fontSize:10,fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em'}}>Quick picks</p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:14}}>
+          {(()=>{
+            const now=new Date();
+            const mkDate=(days,h,m)=>{const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+days,h||10,m||0);return{date:d.toISOString().slice(0,10),time:String(h||10).padStart(2,'0')+':'+String(m||0).padStart(2,'0')}};
+            const picks=[
+              ['Later today',mkDate(0,Math.min(now.getHours()+2,20),0),'in ~2h'],
+              ['Tomorrow 10am',mkDate(1,10,0),''],
+              ['Tomorrow 2pm',mkDate(1,14,0),''],
+              ['In 3 days',mkDate(3,10,0),''],
+              ['Next week Mon',(()=>{const d=new Date(now);const daysUntilMon=(8-d.getDay())%7||7;d.setDate(d.getDate()+daysUntilMon);return{date:d.toISOString().slice(0,10),time:'10:00'}})(),''],
+              ['In 2 weeks',mkDate(14,10,0),'']
+            ];
+            return picks.map(([label,p,sub],i)=>
+              <button key={i} onClick={()=>{
+                setCbDate(p.date);setCbTime(p.time);
+                handleOutcome('cb',{cbDate:p.date,cbTime:p.time});
+                setShowCb(false);setCbDate('');setCbTime('');
+              }} style={{padding:'10px 8px',borderRadius:10,background:'var(--bg3)',color:'#f1f5f9',fontSize:11,fontWeight:700,border:'1px solid var(--border)',textAlign:'left'}}>
+                <div style={{fontSize:11,fontWeight:800}}>{label}</div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:2,fontWeight:600}}>{new Date(p.date+'T'+p.time).toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'})} · {p.time}{sub?' · '+sub:''}</div>
+              </button>
+            );
+          })()}
+        </div>
+        {/* ═══ MANUAL DATE/TIME ═══ */}
+        <p style={{margin:'0 0 8px',fontSize:10,fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em'}}>Or pick exact date & time</p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+          <input type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)} style={{colorScheme:'dark'}}/>
+          <input type="time" value={cbTime} onChange={e=>setCbTime(e.target.value)} style={{colorScheme:'dark'}}/>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>{setShowCb(false);setCbDate('');setCbTime('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:700,borderRadius:12}}>Cancel</button>
+          <button onClick={()=>{if(!cbDate||!cbTime)return toast('Pick date & time','err');handleOutcome('cb',{cbDate,cbTime});setShowCb(false);setCbDate('');setCbTime('')}} style={{flex:1,padding:'14px',background:'linear-gradient(135deg,var(--blue),#2563eb)',color:'#fff',fontSize:14,fontWeight:800,borderRadius:12}}>📅 Set CB</button>
+        </div>
       </div>
     </div>}
 
     {/* Appt Modal */}
+    {/* ═══ APPOINTMENT DATE PICKER MODAL ═══
+       Multi-week free-slot view. User taps a green slot → auto-fill date/time & open the form.
+       Shaky appointments render as shiny orange "also available" chips. */}
+    {apptPickerOpen&&(()=>{
+      const now=new Date();
+      const todayMid=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+      const todayKey=localDateKey(todayMid);
+      // Build 4 weeks of days starting from the current week's Sunday
+      const weekStart0=startOfWeek(todayMid);
+      const TOTAL_WEEKS=4;
+      const allDays=[];
+      for(let w=0;w<TOTAL_WEEKS;w++){
+        for(let i=0;i<7;i++){
+          const d=new Date(weekStart0.getTime()+(w*7+i)*86400000);
+          const dLocal=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+          allDays.push({week:w,idx:i,key:localDateKey(dLocal),date:dLocal})
+        }
+      }
+      // Group picker events by day
+      const byDay={};
+      (pickerEvents||[]).forEach(ev=>{
+        const dt=new Date(ev.start?.dateTime||ev.start?.date||0);
+        const k=localDateKey(dt);
+        if(!byDay[k])byDay[k]=[];
+        byDay[k].push(ev);
+      });
+      // Build shaky overlay: map of phone → appt object for shaky appts
+      const shakyAppts=(appointments||[]).filter(a=>(shakyMap&&shakyMap[a.phone])||a.shaky).map(a=>({...a,_shaky:true}));
+      const shakyByDay={};
+      shakyAppts.forEach(a=>{if(a.apptDate){if(!shakyByDay[a.apptDate])shakyByDay[a.apptDate]=[];shakyByDay[a.apptDate].push(a)}});
+      const BIZ_START=9,BIZ_END=21,MIN_HRS=1.5;
+      // Visible week days
+      const visibleDays=allDays.filter(d=>d.week===pickerWeekIdx);
+      const weekStartDate=visibleDays[0]?.date;
+      const weekEndDate=visibleDays[6]?.date;
+      const weekLabel=weekStartDate?weekStartDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'})+' – '+weekEndDate.toLocaleDateString('en-SG',{day:'numeric',month:'short'}):'';
+      return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.92)',zIndex:110,display:'flex',alignItems:'stretch',justifyContent:'center'}} onClick={()=>{setApptPickerOpen(false)}}>
+        <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:980,maxHeight:'100vh',overflowY:'auto',borderRadius:0,padding:'16px 14px 24px',display:'flex',flexDirection:'column'}}>
+          {/* Header */}
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:8}}>
+            <div style={{flex:1,minWidth:0}}>
+              <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>📅 Pick a Slot</h3>
+              <p style={{margin:'2px 0 0',fontSize:11,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>For <b style={{color:'#f1f5f9'}}>{apptLead?.name||'lead'}</b>{apptLead?.phone?' · '+apptLead.phone:''} — tap a green slot to lock it in</p>
+            </div>
+            <button onClick={()=>{setApptPickerOpen(false);setShowAppt(true)}} style={{padding:'8px 12px',borderRadius:10,background:'var(--bg3)',color:'var(--text2)',fontSize:11,fontWeight:700,flexShrink:0,border:'1px solid var(--border)'}}>Manual ▸</button>
+            <button onClick={()=>setApptPickerOpen(false)} style={{padding:'8px 12px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:14,fontWeight:800,flexShrink:0,minWidth:40}}>×</button>
+          </div>
+          {/* Week navigation */}
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10,padding:'8px 10px',borderRadius:12,background:'var(--bg3)',border:'1px solid var(--border)'}}>
+            <button onClick={()=>setPickerWeekIdx(p=>Math.max(0,p-1))} disabled={pickerWeekIdx===0} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx===0?'var(--bg)':'var(--adim)',color:pickerWeekIdx===0?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx===0?.4:1}}>◀</button>
+            <div style={{flex:1,textAlign:'center'}}>
+              <p style={{margin:0,fontSize:13,fontWeight:800,color:'#f1f5f9'}}>{pickerWeekIdx===0?'This Week':pickerWeekIdx===1?'Next Week':'In '+pickerWeekIdx+' Weeks'}</p>
+              <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>{weekLabel}</p>
+            </div>
+            <button onClick={()=>setPickerWeekIdx(p=>Math.min(TOTAL_WEEKS-1,p+1))} disabled={pickerWeekIdx>=TOTAL_WEEKS-1} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--bg)':'var(--adim)',color:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx>=TOTAL_WEEKS-1?.4:1}}>▶</button>
+          </div>
+          {/* Legend */}
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,fontSize:9,color:'var(--text3)',flexWrap:'wrap',justifyContent:'center'}}>
+            <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:10,height:10,borderRadius:3,background:'linear-gradient(135deg,#22c55e,#10b981)',boxShadow:'0 0 6px rgba(34,197,94,.5)'}}/>{MIN_HRS}h+ free</span>
+            <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:10,height:10,borderRadius:3,background:'linear-gradient(135deg,#fb923c,#ea580c)',boxShadow:'0 0 8px rgba(251,146,60,.6)'}}/>Shaky slot (may free up)</span>
+            <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:10,height:10,borderRadius:3,background:'rgba(148,163,184,.3)'}}/>Busy</span>
+          </div>
+          {pickerLoading?<div style={{textAlign:'center',padding:40,color:'var(--text3)',fontSize:12}}>⟳ Loading calendar…</div>:
+          /* Responsive day grid: 1 col on mobile, 7 cols on desktop */
+          <div className="picker-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:8,flex:1}}>
+            {visibleDays.map(d=>{
+              const isToday=d.key===todayKey;
+              const isPast=d.key<todayKey;
+              const dayEvents=(byDay[d.key]||[]).slice().sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
+              const _evWithTimes=dayEvents.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
+              // Subtract shaky appointments from the "busy" list so their slots read as shaky-free
+              const shakyOnDay=shakyByDay[d.key]||[];
+              const nonShakyBusy=_evWithTimes.filter(bt=>{
+                // If any shaky appt on this day overlaps this event's start time, mark it as shaky (excluded)
+                return !shakyOnDay.some(sa=>{
+                  if(!sa.apptTime)return false;
+                  const sh=new Date(d.key+'T'+sa.apptTime);
+                  const diff=Math.abs(sh.getTime()-bt.start.getTime());
+                  return diff<5*60000; // within 5 minutes
+                })
+              });
+              const freeSlots=isPast?[]:findFreeSlots(d.date,nonShakyBusy,BIZ_START,BIZ_END);
+              const bigSlots=freeSlots.filter(s=>s.hours>=MIN_HRS);
+              // Shaky slots on this day, rendered as orange
+              const shakySlots=shakyOnDay.filter(sa=>sa.apptTime).map(sa=>{
+                const sh=new Date(d.key+'T'+sa.apptTime);
+                const dur=sa.duration||90;
+                const en=new Date(sh.getTime()+dur*60000);
+                return{start:sh,end:en,hours:dur/60,name:sa.name,shaky:true}
+              });
+              const dayLabel=d.date.toLocaleDateString('en-SG',{weekday:'short'});
+              const dayNum=d.date.getDate();
+              const monLabel=d.date.toLocaleDateString('en-SG',{month:'short'});
+              return<div key={d.key} style={{padding:'10px 8px',borderRadius:12,background:isToday?'linear-gradient(135deg,rgba(99,102,241,.1),var(--bg2))':'var(--bg3)',border:'1px solid '+(isToday?'rgba(99,102,241,.4)':'var(--border)'),opacity:isPast?.4:1,display:'flex',flexDirection:'column',minHeight:180}}>
+                <div style={{textAlign:'center',marginBottom:8,paddingBottom:6,borderBottom:'1px solid var(--border)'}}>
+                  <p style={{margin:0,fontSize:10,fontWeight:700,color:isToday?'var(--accent2)':'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em'}}>{dayLabel}{isToday?' · Today':''}</p>
+                  <p style={{margin:'2px 0 0',fontSize:18,fontWeight:800,color:'#f1f5f9'}}>{dayNum}</p>
+                  <p style={{margin:0,fontSize:9,color:'var(--text3)'}}>{monLabel}</p>
+                </div>
+                {/* Free slots (green, tappable) */}
+                <div style={{display:'flex',flexDirection:'column',gap:4,flex:1}}>
+                  {bigSlots.length===0&&shakySlots.length===0&&!isPast&&<p style={{margin:0,fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic',paddingTop:8}}>No free slots</p>}
+                  {isPast&&<p style={{margin:0,fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic',paddingTop:8}}>Past</p>}
+                  {bigSlots.map((s,si)=>{
+                    const hh=String(s.start.getHours()).padStart(2,'0');
+                    const mm=String(s.start.getMinutes()).padStart(2,'0');
+                    const eh=String(s.end.getHours()).padStart(2,'0');
+                    const em=String(s.end.getMinutes()).padStart(2,'0');
+                    return<button key={'f'+si} onClick={()=>{
+                      // Lock in the slot: fill date, start time, duration = 90 min (fits 1.5h minimum)
+                      setApptDate(d.key);
+                      setApptTime(hh+':'+mm);
+                      const slotMins=Math.round(s.hours*60);
+                      setApptDuration(Math.min(slotMins,90));
+                      setApptPickerOpen(false);
+                      setShowAppt(true);
+                      toast('Slot locked: '+d.date.toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'})+' '+hh+':'+mm,'info');
+                    }} style={{padding:'6px 6px',borderRadius:8,background:'linear-gradient(135deg,rgba(34,197,94,.25),rgba(16,185,129,.15))',border:'1px solid rgba(34,197,94,.5)',color:'#22c55e',fontSize:9,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:'0 0 6px rgba(34,197,94,.2)'}}>
+                      {hh}:{mm}–{eh}:{em}
+                      <div style={{fontSize:8,fontWeight:600,opacity:.8,marginTop:1}}>{s.hours.toFixed(1)}h free</div>
+                    </button>
+                  })}
+                  {/* Shaky slots (orange, tappable, shiny) */}
+                  {shakySlots.map((s,si)=>{
+                    const hh=String(s.start.getHours()).padStart(2,'0');
+                    const mm=String(s.start.getMinutes()).padStart(2,'0');
+                    const eh=String(s.end.getHours()).padStart(2,'0');
+                    const em=String(s.end.getMinutes()).padStart(2,'0');
+                    return<button key={'s'+si} onClick={()=>{
+                      if(!confirm('This slot is "shaky" — '+s.name+' may still show up at '+hh+':'+mm+'. Double-book it anyway?'))return;
+                      setApptDate(d.key);
+                      setApptTime(hh+':'+mm);
+                      setApptDuration(90);
+                      setApptPickerOpen(false);
+                      setShowAppt(true);
+                      toast('Shaky slot locked','info');
+                    }} style={{padding:'6px 6px',borderRadius:8,background:'linear-gradient(135deg,rgba(251,146,60,.3),rgba(234,88,12,.18))',border:'1px solid rgba(251,146,60,.6)',color:'#fb923c',fontSize:9,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:'0 0 10px rgba(251,146,60,.35),inset 0 0 8px rgba(251,146,60,.1)'}}>
+                      🟠 {hh}:{mm}
+                      <div style={{fontSize:7,fontWeight:600,opacity:.85,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name||'shaky'}</div>
+                    </button>
+                  })}
+                  {/* Busy events (non-tappable, dimmed) */}
+                  {dayEvents.length>0&&<div style={{marginTop:6,paddingTop:6,borderTop:'1px dashed var(--border)'}}>
+                    {dayEvents.slice(0,3).map((ev,ei)=>{
+                      const es=new Date(ev.start?.dateTime||ev.start?.date||0);
+                      const hh=String(es.getHours()).padStart(2,'0');
+                      const mm=String(es.getMinutes()).padStart(2,'0');
+                      return<div key={'b'+ei} style={{padding:'3px 4px',marginBottom:2,borderRadius:4,background:'rgba(148,163,184,.08)',fontSize:8,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                        <span className="mono" style={{color:'var(--text3)'}}>{hh}:{mm}</span> {ev.summary||'Busy'}
+                      </div>
+                    })}
+                    {dayEvents.length>3&&<p style={{margin:0,fontSize:8,color:'var(--text3)',textAlign:'center'}}>+{dayEvents.length-3} more</p>}
+                  </div>}
+                </div>
+              </div>;
+            })}
+          </div>}
+          <p style={{margin:'12px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>Minimum slot: {MIN_HRS}h · Business hours: {BIZ_START}:00–{BIZ_END}:00</p>
+        </div>
+      </div>;
+    })()}
+
     {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
       <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:480,maxHeight:'85vh',overflowY:'auto',borderRadius:'20px 20px 0 0',padding:'24px 20px 32px'}}>
         <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'var(--green)'}}>✓ Appointment Set!</h3>
@@ -5613,7 +5940,7 @@ function App(){
           }
           return<div style={{marginBottom:10,padding:'10px',borderRadius:12,background:'rgba(66,133,244,.05)',border:'1px solid rgba(66,133,244,.2)',maxHeight:220,overflowY:'auto'}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
-              <p style={{margin:0,fontSize:11,fontWeight:800,color:'#4285f4',textTransform:'uppercase',letterSpacing:'.1em'}}>📅 This week's schedule</p>
+              <p style={{margin:0,fontSize:11,fontWeight:800,color:'#4285f4',textTransform:'uppercase',letterSpacing:'.1em'}}>📅 {calWeekOffset===0?"This Week":calWeekOffset===1?"Next Week":calWeekOffset>1?("In "+calWeekOffset+" Weeks"):(Math.abs(calWeekOffset)+" Weeks Ago")} · Schedule</p>
               <span style={{fontSize:9,color:'var(--text3)'}}>{weekEvents.length} events</span>
             </div>
             {clashEvent&&<div style={{padding:'6px 8px',borderRadius:8,background:'rgba(248,81,73,.12)',border:'1px solid rgba(248,81,73,.3)',marginBottom:6,fontSize:10,color:'var(--red)',fontWeight:700}}>
@@ -5661,6 +5988,14 @@ function App(){
           <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700}}>Duration (mins)</label>
             <input type="number" value={apptDuration} onChange={ev=>setApptDuration(ev.target.value===''?'':+ev.target.value)} style={{fontSize:12,textAlign:'center',padding:'8px'}}/></div>
         </div>
+        {/* ═══ Shaky appointment tickbox ═══ */}
+        <label onClick={()=>setApptShaky(p=>!p)} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'10px 12px',marginBottom:10,borderRadius:12,background:apptShaky?'linear-gradient(135deg,rgba(251,146,60,.12),rgba(234,88,12,.06))':'var(--bg3)',border:'1px solid '+(apptShaky?'rgba(251,146,60,.4)':'var(--border)'),cursor:'pointer',boxShadow:apptShaky?'0 0 12px rgba(251,146,60,.15)':'none',transition:'all .2s'}}>
+          <div style={{width:20,height:20,borderRadius:5,background:apptShaky?'linear-gradient(135deg,#fb923c,#ea580c)':'var(--bg)',border:'1px solid '+(apptShaky?'#fb923c':'var(--border2)'),color:'#fff',fontSize:12,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,boxShadow:apptShaky?'0 0 8px rgba(251,146,60,.5)':'none'}}>{apptShaky?'✓':''}</div>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:12,fontWeight:700,color:apptShaky?'#fb923c':'var(--text2)'}}>🟠 Shaky appointment</p>
+            <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.35}}>Lead may cancel or reschedule. Slot will still show as available (orange) in future calendar views.</p>
+          </div>
+        </label>
         <div style={{display:'flex',gap:8}}>
           <button onClick={async()=>{if(!apptDate||!apptTime)return toast('Set date & time','err');
             const dur=apptDuration||60;const lead=apptLead;
@@ -5673,7 +6008,11 @@ function App(){
               if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
               DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation},_user?.id);
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
-              if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs}:a));
+              // Wire undo: attach calEventId so doUndo can delete the gCal event
+              if(window._lastUndo&&window._lastUndo.status==='set'){window._lastUndo.calEventId=evt?.id||'';window._lastUndo.apptId=lead?.phone}
+              // Persist shaky flag if ticked
+              if(apptShaky&&lead?.phone)setShaky(lead.phone,true);
+              if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs,shaky:apptShaky}:a));
               setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
               toast('Event created!');
               // Write to Google Sheet Appointments Set tab (use admin's sheet if available)
