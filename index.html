@@ -397,14 +397,86 @@ function _saveGToken(token){
   if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_gtoken',biz_name:JSON.stringify({token:token,ts:Date.now()})},{onConflict:'admin_email'})}catch(e){}}}
 
 // ═══ WORKER REFRESH — silent, no popup, lasts forever ═══
-window._workerRefresh=async function(){
+// BUG FIX: admin side now supports impersonating main by passing an override email.
+// This is how admin's browser gets a fresh Google token without main being online.
+window._workerRefresh=async function(overrideEmail){
   if(!WORKER_URL)return false;
-  var email=window._user?.email||window._prof?.email;if(!email)return false;
+  // Resolution order: explicit arg → admin-side cached main email → current user
+  var email=overrideEmail||window._mainEmailForWorker||window._user?.email||window._prof?.email;
+  if(!email)return false;
   try{
     var r=await fetch(WORKER_URL+'/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})});
-    if(!r.ok)return false;
-    var d=await r.json();if(d.access_token){_saveGToken(d.access_token);DBG('[Google] Token refreshed via Worker');return true}
+    if(!r.ok){DBG('[Google Worker] refresh failed status='+r.status+' for '+email);return false}
+    var d=await r.json();if(d.access_token){_saveGToken(d.access_token);DBG('[Google] Token refreshed via Worker as '+email);return true}
+    DBG('[Google Worker] no access_token in response for '+email);
   }catch(e){console.warn('[Google Worker]',e.message)}return false};
+
+// ═══ ADMIN ENSURE GOOGLE — resolves main's email, then refreshes token directly via Worker ═══
+// This bypasses the fragile shared_gtoken cache. The Worker has main's refresh_token on file and
+// will hand out a fresh access_token to any caller who knows main's email. The admin's browser
+// then uses that token directly. Call this on admin mount, on Pull Latest, and periodically.
+window._adminEnsureGoogle=async function(verbose){
+  if(!_SB||!WORKER_URL)return{ok:false,reason:'no-worker'};
+  try{
+    // Step 1: find main's email (cached globally after first lookup)
+    var mainEmail=window._mainEmailForWorker;
+    if(!mainEmail){
+      try{
+        var idRow=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_main_identity').single();
+        if(idRow.data&&idRow.data.biz_name){
+          var parsed=JSON.parse(idRow.data.biz_name);
+          if(parsed.email){mainEmail=parsed.email;window._mainEmailForWorker=mainEmail;DBG('[AdminGoogle] Resolved main email: '+mainEmail)}
+        }
+      }catch(e){DBG('[AdminGoogle] shared_main_identity lookup failed: '+(e.message||e))}
+    }
+    // Step 1b: FALLBACK — use CREATOR[0] (hardcoded in the app config) if Supabase lookup returned nothing.
+    // This means the app works out of the box the first time even if main hasn't yet written shared_main_identity.
+    if(!mainEmail&&typeof CREATOR!=='undefined'&&CREATOR.length&&CREATOR[0]){
+      mainEmail=CREATOR[0];window._mainEmailForWorker=mainEmail;
+      DBG('[AdminGoogle] Falling back to CREATOR[0]: '+mainEmail);
+    }
+    // Step 2: fall back to cached shared_gtoken if no main email found
+    if(!mainEmail){
+      try{
+        var gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
+        if(gt.data&&gt.data.biz_name){
+          var p=JSON.parse(gt.data.biz_name);
+          if(p.token&&p.ts&&(Date.now()-p.ts)<3300000){
+            _gToken=p.token;localStorage.setItem('ad_gt',p.token);localStorage.setItem('ad_gt_ts',p.ts.toString());localStorage.setItem('ad_g_ever','1');window._gOkCb&&window._gOkCb(true);
+            DBG('[AdminGoogle] Using cached shared_gtoken (no mainEmail resolved)');
+            return{ok:true,reason:'cached-gtoken'};
+          }
+        }
+      }catch(e){}
+      if(verbose)toast('⚠ No manager identity on file — ask manager to log in once in Mgmt mode','err');
+      return{ok:false,reason:'no-main-email'};
+    }
+    // Step 3: ask Worker for a fresh token using main's email
+    var refreshed=await window._workerRefresh(mainEmail);
+    if(refreshed){
+      DBG('[AdminGoogle] Fresh token obtained via Worker as '+mainEmail);
+      return{ok:true,reason:'worker-refresh',mainEmail:mainEmail};
+    }
+    // Step 4: Worker refresh failed (refresh_token may be revoked) — fall through to cached row
+    try{
+      var gt2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
+      if(gt2.data&&gt2.data.biz_name){
+        var p2=JSON.parse(gt2.data.biz_name);
+        if(p2.token&&p2.ts&&(Date.now()-p2.ts)<3300000){
+          _gToken=p2.token;localStorage.setItem('ad_gt',p2.token);localStorage.setItem('ad_gt_ts',p2.ts.toString());localStorage.setItem('ad_g_ever','1');window._gOkCb&&window._gOkCb(true);
+          DBG('[AdminGoogle] Worker refresh failed, using cached shared_gtoken instead');
+          return{ok:true,reason:'cached-fallback'};
+        }
+      }
+    }catch(e){}
+    if(verbose)toast('⚠ Manager needs to reconnect Google — refresh token may have been revoked','err');
+    return{ok:false,reason:'worker-failed-cache-stale'};
+  }catch(e){
+    console.warn('[AdminGoogle] unexpected error',e);
+    if(verbose)toast('Google sync error: '+(e.message||e),'err');
+    return{ok:false,reason:'exception',error:e.message};
+  }
+};
 
 // ═══ CONNECT — popup only on explicit tap ═══
 window.gConnect=function(cb){
@@ -448,14 +520,23 @@ window.gF=async function(url,opts){
   // If Worker available and token is stale, refresh before calling
   if(WORKER_URL){
     var ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-    if(Date.now()-ts>2400000)await window._workerRefresh()}
+    if(Date.now()-ts>2400000){
+      // Try _workerRefresh first (handles main + admin-with-cached-mainEmail). Fall back to _adminEnsureGoogle for admin who hasn't resolved main yet.
+      var refreshed=await window._workerRefresh();
+      if(!refreshed&&window._adminEnsureGoogle)await window._adminEnsureGoogle(false);
+    }
+  }
   var t=_gToken||localStorage.getItem('ad_gt');
   if(!t)throw new Error('Connect Google first');
   var r=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t,'Content-Type':'application/json'}});
   if(r.status===401){
-    // Try Worker refresh before giving up
+    // Try Worker refresh before giving up — then fall back to full admin resolution
     if(WORKER_URL){
       var ok=await window._workerRefresh();
+      if(!ok&&window._adminEnsureGoogle){
+        var adminResult=await window._adminEnsureGoogle(false);
+        ok=!!(adminResult&&adminResult.ok);
+      }
       if(ok){var t2=_gToken||localStorage.getItem('ad_gt');
         var r2=await fetch(url,{...opts,headers:{...(opts?.headers||{}),Authorization:'Bearer '+t2,'Content-Type':'application/json'}});
         if(r2.ok||r2.status!==401)return r2}}
@@ -2051,6 +2132,26 @@ function App(){
   const[claudeKeyVal,setClaudeKeyVal]=useState(localStorage.getItem('autodial_claude_key')||(role==='admin'&&cfg.sharedClaudeKey?cfg.sharedClaudeKey:''));
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
+  // ═══ HARD FIX: Admin periodic Google token refresh every 40 min ═══
+  // Calls _adminEnsureGoogle which impersonates main via Worker refresh, so admin never depends on a stale shared_gtoken cache.
+  useEffect(()=>{
+    if(role!=='admin'||!_SB||!WORKER_URL)return;
+    const refresh=async()=>{
+      try{
+        const ts=parseInt(localStorage.getItem('ad_gt_ts')||'0');
+        // Only refresh if >40min old (buffer before 60min expiry)
+        if(Date.now()-ts<2400000)return;
+        const result=await window._adminEnsureGoogle(false);
+        if(result&&result.ok){setGOk(true);DBG('[AdminGoogle] Periodic refresh OK via '+result.reason)}
+        else DBG('[AdminGoogle] Periodic refresh failed: '+(result?.reason||'unknown'))
+      }catch(e){console.warn('[AdminGoogle] periodic',e.message||e)}
+    };
+    // First check: 5 seconds after mount (don't hammer right at boot — hardsync already ran)
+    const first=setTimeout(refresh,5000);
+    // Then every 10 minutes (cheap check; the function itself is a no-op if token is fresh)
+    const interval=setInterval(refresh,10*60*1000);
+    return()=>{clearTimeout(first);clearInterval(interval)};
+  },[role]);
   useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})
     if(role==='main'&&mainMode==='manage'&&_SB&&window._cloudReady){
@@ -2462,29 +2563,25 @@ function App(){
       try{
         setSyncing(true);
         const cloud=await CloudSync.loadAll();
-        // Admin: load shared Google token from Main
-        // BUG FIX: (1) previous code only set localStorage, not setGOk(true) → gOk state stayed false even after token loaded. (2) Only pulled when ad_gt was missing, so expired tokens blocked fresh pulls. (3) Freshness window was effectively unchecked here, but the other path used 45min which is too tight for 60min access tokens.
+        // ═══ ADMIN GOOGLE — robust multi-path resolution (hard fix) ═══
+        // Uses _adminEnsureGoogle(): resolves main's email from shared_main_identity, asks Worker for fresh token directly.
+        // Fallback chain: local cache → shared_gtoken row → Worker refresh as main → shared_gtoken as last resort.
         if(role==='admin'&&_SB){
           const _localTs=parseInt(localStorage.getItem('ad_gt_ts')||'0');
-          const _localStale=!localStorage.getItem('ad_gt')||(Date.now()-_localTs)>2700000;
-          if(_localStale){
+          const _localFresh=localStorage.getItem('ad_gt')&&(Date.now()-_localTs)<2700000;
+          if(!_localFresh){
             try{
-              const gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
-              if(gt.data&&gt.data.biz_name){
-                const parsed=JSON.parse(gt.data.biz_name);
-                // Accept if <55 min old (access tokens live 60 min — 5 min buffer)
-                if(parsed.token&&parsed.ts&&(Date.now()-parsed.ts)<3300000){
-                  _gToken=parsed.token;
-                  localStorage.setItem('ad_gt',parsed.token);
-                  localStorage.setItem('ad_gt_ts',parsed.ts.toString());
-                  localStorage.setItem('ad_g_ever','1');
-                  setGOk(true); // ← CRITICAL: previous code missed this, so Cal tab stayed on "Connect Google Calendar"
-                  DBG('[AutoDial] Using shared Google token from Main (age: '+Math.round((Date.now()-parsed.ts)/60000)+'min)')
-                }else if(parsed.token){
-                  DBG('[AutoDial] Shared token too old ('+Math.round((Date.now()-(parsed.ts||0))/60000)+'min) — manager needs to reconnect Google')
-                }
+              const result=await window._adminEnsureGoogle(false);
+              if(result&&result.ok){
+                setGOk(true);
+                DBG('[AutoDial] Admin Google ready via '+result.reason+(result.mainEmail?' (as '+result.mainEmail+')':''));
+              }else{
+                DBG('[AutoDial] Admin Google resolution failed: '+(result?.reason||'unknown'));
               }
-            }catch(e){console.warn('[shared_gtoken]',e.message||e)}
+            }catch(e){console.warn('[AdminGoogle]',e.message||e)}
+          }else{
+            setGOk(true);
+            DBG('[AutoDial] Admin Google using fresh local cache (age: '+Math.round((Date.now()-_localTs)/60000)+'min)');
           }
         }
         // Admin: load own config published by Main
@@ -2668,7 +2765,15 @@ function App(){
               toast('Session ended on another device','info')}}}catch(e){}}
       // Auto-refresh Google via Worker (silent, no popup)
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
-        try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
+        try{
+          if(role==='admin'){
+            const result=await window._adminEnsureGoogle(false);
+            if(result&&result.ok)setGOk(true);
+          }else{
+            const ok=await window._autoRefreshGoogle();
+            if(ok)setGOk(true);
+          }
+        }catch(e){}}
       setSyncing(false);
       cloudReady.current=true;window._cloudReady=true;
     // Restore daily sets from cloud
@@ -2688,6 +2793,10 @@ function App(){
 
     // ═══ AUTO-PICKUP INVITED ADMINS (Main only) — init adminConfigs with defaults ═══
     if(role==='main'&&_SB&&myEmail){
+      // ═══ HARD-FIX: publish main's identity so admins can resolve who to impersonate for Google refresh ═══
+      try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_main_identity',biz_name:JSON.stringify({email:myEmail,ts:Date.now()})},{onConflict:'admin_email'}).then(()=>{DBG('[AutoDial] Published shared_main_identity: '+myEmail)},()=>{})}catch(e){}
+      // Make main's own session also aware (used by _workerRefresh fallback chain)
+      window._mainEmailForWorker=myEmail;
       _SB.from('autodial_admin_config').select('admin_email,biz_name').like('admin_email','invite_'+myEmail+'_%').then(r=>{
         if(!r.data||!r.data.length)return;
         const _pickups=r.data.map(row=>{try{return JSON.parse(row.biz_name)}catch(e){return null}}).filter(Boolean);
@@ -5696,16 +5805,20 @@ function App(){
           if(gr.data?.biz_name){const globalCfg=JSON.parse(gr.data.biz_name);setCfg(p=>({...p,...globalCfg}));if(globalCfg.sharedClaudeKey)window._sharedClaudeKey=globalCfg.sharedClaudeKey}
           const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
           if(r.data?.biz_name){const myShared=JSON.parse(r.data.biz_name);setAdminConfigs(p=>({...p,[myEmail]:{...(p[myEmail]||{}),...myShared}}))}
-          // Also re-pull the shared Google token (widened 55min window)
-          const gt=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_gtoken').single();
-          if(gt.data?.biz_name){const parsed=JSON.parse(gt.data.biz_name);
-            if(parsed.token&&parsed.ts&&(Date.now()-parsed.ts)<3300000){_gToken=parsed.token;localStorage.setItem('ad_gt',parsed.token);localStorage.setItem('ad_gt_ts',parsed.ts.toString());localStorage.setItem('ad_g_ever','1');setGOk(true)}
-            else toast('⚠ Manager token too old — ask them to reconnect Google','err')
+          // ═══ HARD FIX: use robust _adminEnsureGoogle which impersonates main via Worker refresh ═══
+          const googleResult=await window._adminEnsureGoogle(true);
+          if(googleResult&&googleResult.ok){
+            setGOk(true);
+            const _via=googleResult.reason==='worker-refresh'?'Worker refresh':googleResult.reason==='cached-gtoken'?'cache':googleResult.reason==='cached-fallback'?'cache (worker failed)':googleResult.reason;
+            DBG('[PullLatest] Google ready via '+_via);
+          }else{
+            const _why=googleResult?.reason==='no-main-email'?'Manager has not logged in yet (no identity on file)':googleResult?.reason==='worker-failed-cache-stale'?'Worker refresh failed AND cache is stale — manager must reconnect Google':googleResult?.reason==='no-worker'?'Cloudflare Worker not configured':'Unknown: '+(googleResult?.reason||'—');
+            toast('❌ Google: '+_why,'err');
           }
           DB.getSharedCalendars(myEmail).then(setCalShares);
-          if(gOk)gCalShare.listCalendars().then(setCalList).catch(()=>{});
+          if(window._gToken||localStorage.getItem('ad_gt'))gCalShare.listCalendars().then(setCalList).catch(()=>{});
           setCalRefreshTrigger(t=>t+1);
-          toast('✅ Latest settings & calendars pulled');
+          toast('✅ Latest settings & calendars pulled'+(googleResult?.ok?'':' (Google unavailable — see error above)'));
         }catch(e){toast('Pull failed: '+(e.message||e),'err')}
       }} style={{width:'100%',padding:'12px',borderRadius:12,background:'linear-gradient(135deg,rgba(34,197,94,.2),rgba(16,185,129,.15))',color:'#86efac',fontSize:12,fontWeight:700,border:'1px solid rgba(34,197,94,.35)',marginBottom:12}}>↻ Pull Latest from Manager (settings + calendars)</button>}
       {role!=='admin'?<div className="card" style={{marginBottom:12}}>
