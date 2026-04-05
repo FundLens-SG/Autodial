@@ -3055,7 +3055,20 @@ function App(){
     }
   });return unsub},[role]);
 
-  useEffect(()=>{if(session&&!session.ended){timerRef.current=setInterval(()=>setElapsed(Math.floor((Date.now()-session.startTime)/1000)),1000);return()=>clearInterval(timerRef.current)}},[session]);
+  // ═══ Session timer — depends only on startTime/ended, not the whole session object.
+  // Previously the effect re-ran on every counter bump (sets/np/cb/ni), tearing down and
+  // recreating the interval, which caused visible jumps and drift. Also add a visibilitychange
+  // listener so the timer catches up instantly when the browser un-throttles a backgrounded tab.
+  useEffect(()=>{
+    const _start=session?.startTime;
+    if(!_start||session?.ended)return;
+    const tick=()=>setElapsed(Math.floor((Date.now()-_start)/1000));
+    tick(); // immediate sync so we don't wait a full second
+    timerRef.current=setInterval(tick,1000);
+    const onVis=()=>{if(document.visibilityState==='visible')tick()};
+    document.addEventListener('visibilitychange',onVis);
+    return()=>{clearInterval(timerRef.current);document.removeEventListener('visibilitychange',onVis)}
+  },[session?.startTime,session?.ended]);
 
   const pending=leads.filter(l=>l.status==='pending'||l.status==='cb');
   const cur=curIdx>=0&&curIdx<leads.length?leads[curIdx]:null;
@@ -3184,7 +3197,11 @@ function App(){
         setConfetti(true);setTimeout(()=>setConfetti(false),3000)
       }
     }
-    setSession(s);setSessionLog(p=>[{...s,callLog:[...callLog]},...p]);setRunning(false);setPhase('idle');setShowNextPreview(false);clearTimeout(cdRef.current);
+    setSession(s);setSessionLog(p=>[{...s,callLog:[...callLog]},...p]);setRunning(false);setPhase('idle');
+    // ═══ Clear every transient UI state so ending mid-preview/mid-postcall doesn't wedge the page
+    setShowNextPreview(false);setNextPreviewIdx(-1);setShowPostCall(null);setPostCallNote('');setCurIdx(-1);
+    if(autoAdvanceTimerRef.current){clearTimeout(autoAdvanceTimerRef.current);autoAdvanceTimerRef.current=null}
+    clearTimeout(cdRef.current);
     DB.saveSess(s,_user?.id,myEmail);
     DB.notify(null,'session_end','Session ended: '+myEmail,s.sets+' appts | '+rank.label,{email:myEmail,sets:s.sets,rank:rank.label});
     setCallLog([]);syncSend('end',{session:s});syncSend('adminSession',{session:s,email:myEmail});
@@ -3297,6 +3314,25 @@ function App(){
 
   const handleOutcome=useCallback((status,extra={})=>{
     const leadIdx=curIdx;
+    // ═══ SKIP ('pending') — do NOT mark, do NOT count a dial, just move straight to the next lead.
+    // Previously skip went through the post-call card + preview card, requiring two extra clicks
+    // and leaving stale showPostCall/showNextPreview state behind that caused the loopback bugs.
+    if(status==='pending'){
+      // Recompute next without touching the current lead
+      const nextIdx=getNextDialable(leads,leadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
+      nextLeadRef.current=nextIdx;
+      // Cancel any pending auto-advance timer from an earlier Set flow
+      if(autoAdvanceTimerRef.current){clearTimeout(autoAdvanceTimerRef.current);autoAdvanceTimerRef.current=null}
+      // Clear ALL lingering post-call / preview / undo state so nothing from the previous lead can leak
+      setShowPostCall(null);
+      setShowNextPreview(false);
+      setNextPreviewIdx(-1);
+      setPostCallNote('');
+      if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info');return}
+      setCurIdx(nextIdx);setPhase('calling');
+      setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},400);
+      return;
+    }
     if(status==='set'){
       setStreak(p=>{const ns=p+1;if(ns>bestStreak){setBestStreak(ns);save('bestStreak',ns);if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'gamify_'+_user.email.toLowerCase(),biz_name:JSON.stringify({bestStreak:ns,achievements})},{onConflict:'admin_email'}).catch(function(){})}}
 
@@ -4317,7 +4353,10 @@ function App(){
           <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
           {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
               // ═══ Delete Google Calendar events so they stop blocking calendar slots ═══
-              if(window.gCal){appointments.filter(a=>a.calEventId).forEach(a=>{gCal.del(a.calEventId).catch(()=>{})})}
+              const _calIds=new Set(appointments.map(a=>a.calEventId).filter(Boolean));
+              if(window.gCal){_calIds.forEach(id=>{gCal.del(id).catch(()=>{})})}
+              // Remove from local weekEvents cache so Cal tab updates without refresh
+              if(_calIds.size)setWeekEvents(prev=>prev.filter(ev=>!_calIds.has(ev.id)));
               // Track all IDs as deleted so sync never brings them back
               const allIds=[];appointments.forEach(a=>{allIds.push(String(a.id||''));allIds.push(a.phone+'_'+(a.createdAt||''));allIds.push(a.phone+'_'+(a.apptDate||''))});
               const uniq=[...new Set(allIds.filter(Boolean))].slice(-500);localStorage.setItem('_deletedApptIds',JSON.stringify(uniq));
@@ -4374,6 +4413,8 @@ function App(){
               // ═══ Delete Google Calendar events so they stop blocking calendar slots ═══
               const _toNuke=appointments.filter(a=>selectedAppts.has(a.id)&&a.calEventId);
               if(_toNuke.length&&window.gCal){_toNuke.forEach(a=>{gCal.del(a.calEventId).catch(()=>{})})}
+              // Remove from local weekEvents cache so Cal tab updates without refresh
+              if(_toNuke.length){const _ids=new Set(_toNuke.map(a=>a.calEventId));setWeekEvents(prev=>prev.filter(ev=>!_ids.has(ev.id)))}
               const _d=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
               appointments.filter(a=>selectedAppts.has(a.id)).forEach(a=>{if(a.id)_d.push(String(a.id));if(a.phone)_d.push(a.phone)});
               localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(_d)].slice(-500)));
@@ -4434,6 +4475,8 @@ function App(){
               <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?\n\nThis will block all copies of this phone number from re-appearing.')){
                 // ═══ Delete the Google Calendar event first so it stops blocking calendar slots ═══
                 if(a.calEventId&&window.gCal){gCal.del(a.calEventId).then(ok=>{DBG('[Appt delete] gCal event '+(ok?'deleted':'skipped'))}).catch(()=>{})}
+                // Remove from local weekEvents cache so Cal tab updates without refresh
+                if(a.calEventId)setWeekEvents(prev=>prev.filter(ev=>ev.id!==a.calEventId));
                 // Track deleted by PHONE (most reliable) + id + phone-alone (nuke all variants)
                 const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
                 const delKey=a.phone+'_'+(a.apptDate||a.createdAt||'');
@@ -5856,10 +5899,13 @@ function App(){
       </div>}
 
       <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI <span style={{fontSize:10,fontWeight:400,color:'var(--text3)'}}>{role==='admin'?'(auto-applied by manager)':'(free alternative)'}</span></h3>
+        {role==='admin'?<>
+          <input value={(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))?'••••••••••••••••••••••••••••••••••••••••••':''} disabled placeholder="Waiting for manager to share key…" className="mono" type="password" style={{fontSize:12,marginBottom:4,opacity:.55,cursor:'not-allowed',color:'var(--text3)'}}/>
+          <p style={{margin:0,fontSize:10,color:(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))?'var(--green)':'var(--text3)'}}>{(cfg.sharedGeminiKey||localStorage.getItem('autodial_gemini'))?'✓ Applied automatically · Gemini will analyze your leads with manager\'s key':'⏳ No key shared yet — ask manager to add one in Mgmt mode'}</p>
+        </>:<>
         <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
           {isManageMode&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
-          {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
         <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
             if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
             else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
@@ -5867,6 +5913,7 @@ function App(){
               toast('Re-fetching leads with AI…','info');fetchLeads()}
           }} disabled={aiAnalyzing} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{aiAnalyzing?'Analyzing…':'Save & Analyze'}</button>
           {leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginLeft:6}}>🧠 Re-analyze Leads</button>}
+        </>}
       </div>
 
       {WORKER_URL&&<div className="card" style={{marginBottom:12}}>
@@ -6879,8 +6926,22 @@ function App(){
           <input value={calEditForm.location} onChange={e=>setCalEditForm(s=>({...s,location:e.target.value}))} placeholder="Venue, address, or meeting link"/>
         </div>
         {calEditEvent._calId&&calEditEvent._calId!=='primary'&&<p style={{margin:'0 0 10px',fontSize:10,color:'var(--amber)',textAlign:'center',padding:'6px',borderRadius:8,background:'var(--amdim)',border:'1px solid rgba(210,153,34,.25)'}}>⚠ This event is on a non-primary calendar. Changes may not sync.</p>}
+        {(()=>{
+          // ═══ Ownership check for admins:
+          //   • Main role → can edit/delete anything
+          //   • Admin role → can edit/delete if they created the appointment (admin field matches)
+          //                  OR if the appointment has been marked shaky by the manager
+          const _row=(appointments||[]).find(a=>a.calEventId===calEditEvent.id);
+          const _isMain=role!=='admin';
+          const _isOwn=!!(_row&&(_row.admin||'').toLowerCase()===myEmail.toLowerCase());
+          const _isShaky=!!(_row&&isApptShaky(_row));
+          const _canEdit=_isMain||_isOwn||_isShaky;
+          if(!_canEdit)return<p style={{margin:'0 0 10px',fontSize:10,color:'var(--red)',textAlign:'center',padding:'8px',borderRadius:8,background:'var(--rdim)',border:'1px solid rgba(248,81,73,.3)'}}>🔒 You can only edit or delete events you created, or appointments your manager has marked as shaky. Ask the manager to change this one.</p>;
+          if(!_isMain&&!_isOwn&&_isShaky)return<p style={{margin:'0 0 10px',fontSize:10,color:'#fb923c',textAlign:'center',padding:'8px',borderRadius:8,background:'rgba(251,146,60,.08)',border:'1px solid rgba(251,146,60,.35)'}}>🟠 This is a shaky appointment from your manager — you can reschedule or delete it.</p>;
+          return null;
+        })()}
         <div style={{display:'flex',gap:6}}>
-          <button disabled={calEditSaving} onClick={async()=>{
+          <button disabled={calEditSaving||(()=>{if(role!=='admin')return false;const _r=(appointments||[]).find(a=>a.calEventId===calEditEvent.id);const _own=!!(_r&&(_r.admin||'').toLowerCase()===myEmail.toLowerCase());const _sh=!!(_r&&isApptShaky(_r));return!(_own||_sh)})()} onClick={async()=>{
             if(!calEditForm.summary.trim()){toast('Title required','err');return}
             if(!calEditForm.date||!calEditForm.time){toast('Date and time required','err');return}
             setCalEditSaving(true);
@@ -6893,21 +6954,29 @@ function App(){
               const patch={summary:calEditForm.summary.trim(),location:calEditForm.location||'',start:{dateTime:startD.toISOString(),timeZone:tz},end:{dateTime:endD.toISOString(),timeZone:tz}};
               const res=await gCal.update(calEditEvent.id,patch);
               if(!res){toast('Update failed','err');setCalEditSaving(false);return}
+              // ═══ Update local weekEvents cache so the Cal tab reflects changes without a page refresh
+              setWeekEvents(prev=>prev.map(ev=>ev.id===calEditEvent.id?{...ev,summary:patch.summary,location:patch.location,start:{...(ev.start||{}),dateTime:startD.toISOString()},end:{...(ev.end||{}),dateTime:endD.toISOString()}}:ev));
               // Update matching local appointment rows so the Appts tab reflects changes
               setAppointments(prev=>prev.map(a=>a.calEventId===calEditEvent.id?{...a,name:patch.summary,apptDate:startD.toISOString(),location:patch.location,duration:calEditForm.duration}:a));
               toast('✓ Event updated');
-              // Trigger a refetch of the week so the cal tab shows latest
-              try{window._bumpSyncVer&&window._bumpSyncVer()}catch(_){}
               setCalEditEvent(null);
             }catch(e){toast('Update failed: '+(e.message||e),'err')}
             setCalEditSaving(false);
           }} style={{flex:1,padding:'11px',borderRadius:10,background:'linear-gradient(135deg,var(--accent),#4f46e5)',color:'#fff',fontSize:12,fontWeight:800,border:'none',opacity:calEditSaving?0.6:1}}>{calEditSaving?'Saving…':'💾 Save Changes'}</button>
-          <button disabled={calEditSaving} onClick={async()=>{
+          <button disabled={calEditSaving||(()=>{if(role!=='admin')return false;const _r=(appointments||[]).find(a=>a.calEventId===calEditEvent.id);const _own=!!(_r&&(_r.admin||'').toLowerCase()===myEmail.toLowerCase());const _sh=!!(_r&&isApptShaky(_r));return!(_own||_sh)})()} onClick={async()=>{
+            if(role==='admin'){
+              const _r=(appointments||[]).find(a=>a.calEventId===calEditEvent.id);
+              const _own=!!(_r&&(_r.admin||'').toLowerCase()===myEmail.toLowerCase());
+              const _sh=!!(_r&&isApptShaky(_r));
+              if(!_own&&!_sh){toast('You can only delete events you created or shaky appointments','err');return}
+            }
             if(!confirm('Delete this event from Google Calendar? This cannot be undone.'))return;
             setCalEditSaving(true);
             try{
               const ok=await gCal.del(calEditEvent.id);
               if(!ok){toast('Delete failed','err');setCalEditSaving(false);return}
+              // ═══ Remove from local weekEvents cache so it disappears immediately (no refresh)
+              setWeekEvents(prev=>prev.filter(ev=>ev.id!==calEditEvent.id));
               // Remove matching local appointment and add phone to suppress
               const a=(appointments||[]).find(x=>x.calEventId===calEditEvent.id);
               if(a){const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
@@ -6915,7 +6984,6 @@ function App(){
                 localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(delIds)].slice(-500)));
                 setAppointments(p=>p.filter(x=>x.calEventId!==calEditEvent.id))}
               toast('Event deleted');
-              try{window._bumpSyncVer&&window._bumpSyncVer()}catch(_){}
               setCalEditEvent(null);
             }catch(e){toast('Delete failed: '+(e.message||e),'err')}
             setCalEditSaving(false);
