@@ -514,7 +514,7 @@ window.gSheets={
       {method:'POST',body:JSON.stringify({values:[row]})});return true}catch(e){return false}
   },
   async meta(id){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json()).sheets?.map(function(s){return{id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}})||[]},async vals(id,range){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range))).json()).values||[]},async put(id,range,val){await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range)+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
-window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=50')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
+window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
 window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spreadsheet'";if(q)fq+=" and name contains '"+q.replace(/'/g,"\\'")+"'";return(await(await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(fq)+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20')).json()).files||[]}};
 
 // ══════ AI PROMPTS — centralized ══════
@@ -1903,6 +1903,12 @@ function App(){
   const[weekEvents,setWeekEvents]=useState([]); // Events for the coming week across shared/own calendars
   const[calWeekOffset,setCalWeekOffset]=useState(0); // 0=this week, -1=last, +1=next
   const[calRefreshing,setCalRefreshing]=useState(false);
+  const[calRefreshTrigger,setCalRefreshTrigger]=useState(0); // bump to force calendar re-fetch
+  // ═══ Per-calendar visibility toggles + invited event filters (persisted + synced) ═══
+  const[calVisibility,setCalVisibility]=useState(load('calvis')||{}); // {calId: false} — absence means visible
+  const[showInvited,setShowInvited]=useState(load('showinv')??true); // show events I'm invited to but haven't accepted
+  const[showDeclined,setShowDeclined]=useState(load('showdecl')??false); // show events I declined
+  const[calFilterOpen,setCalFilterOpen]=useState(false);
   const[callLog,setCallLog]=useState([]);     // Current session replay
   const[apptDuration,setApptDuration]=useState(()=>{const v=load('apptDur');return(v&&v>=15&&v<=480)?v:60}); // default mins
   const[showWA,setShowWA]=useState(null);     // WhatsApp template modal
@@ -1916,10 +1922,17 @@ function App(){
   const[payConfigOpen,setPayConfigOpen]=useState(false);
   const[showSlotPicker,setShowSlotPicker]=useState(false);
   const[geminiKeyVal,setGeminiKeyVal]=useState(localStorage.getItem('autodial_gemini')||(role==='admin'&&cfg.sharedGeminiKey?cfg.sharedGeminiKey:''));
+  // Claude key mirrored as React state (was previously localStorage-only → no cloud sync, wiped on logout)
+  const[claudeKeyVal,setClaudeKeyVal]=useState(localStorage.getItem('autodial_claude_key')||(role==='admin'&&cfg.sharedClaudeKey?cfg.sharedClaudeKey:''));
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
   useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})}},[geminiKeyVal]);
+  // ═══ Claude key: persist to localStorage + sync to Supabase (same pattern as Gemini) ═══
+  useEffect(()=>{
+    if(claudeKeyVal){localStorage.setItem('autodial_claude_key',claudeKeyVal);
+      if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})}
+  },[claudeKeyVal]);
 
   // ═══ DESKTOP SCRIPT PANEL ═══
   const[scriptOpen,setScriptOpen]=useState(load('scriptOpen')??true);
@@ -2083,6 +2096,11 @@ function App(){
   // Persist billing cycles + payments received
   useEffect(()=>{save('bcyc',billingCycles);
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'bcyc_'+_user.email.toLowerCase(),biz_name:JSON.stringify(billingCycles.slice(-100))},{onConflict:'admin_email'}).catch(function(){})},[billingCycles]);
+  // ═══ Persist calendar visibility toggles ═══
+  useEffect(()=>{save('calvis',calVisibility);
+    if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'calvis_'+_user.email.toLowerCase(),biz_name:JSON.stringify(calVisibility)},{onConflict:'admin_email'}).catch(function(){})},[calVisibility]);
+  useEffect(()=>{save('showinv',showInvited);save('showdecl',showDeclined);
+    if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'calinv_'+_user.email.toLowerCase(),biz_name:JSON.stringify({showInvited,showDeclined})},{onConflict:'admin_email'}).catch(function(){})},[showInvited,showDeclined]);
   useEffect(()=>{save('prcv',paymentsReceived);
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'prcv_'+_user.email.toLowerCase(),biz_name:JSON.stringify(paymentsReceived.slice(-100))},{onConflict:'admin_email'}).catch(function(){})},[paymentsReceived]);
 
@@ -2338,6 +2356,13 @@ function App(){
         if(!localStorage.getItem('autodial_gemini'))
           await _hs('gemini_'+myEmail,d=>{if(d.key){setGeminiKeyVal(d.key);localStorage.setItem('autodial_gemini',d.key)}});
 
+        if(!localStorage.getItem('autodial_claude_key'))
+          await _hs('claude_'+myEmail,d=>{if(d.key){setClaudeKeyVal(d.key);localStorage.setItem('autodial_claude_key',d.key)}});
+
+        if(!Object.keys(calVisibility).length)
+          await _hs('calvis_'+myEmail,d=>{if(d&&typeof d==='object')setCalVisibility(d)});
+        await _hs('calinv_'+myEmail,d=>{if(d){if(typeof d.showInvited==='boolean')setShowInvited(d.showInvited);if(typeof d.showDeclined==='boolean')setShowDeclined(d.showDeclined)}});
+
         if(!waTemplates.length)
           await _hs('watpl_'+myEmail,d=>{if(d?.length)setWaTemplates(d)});
 
@@ -2504,16 +2529,24 @@ function App(){
   // Main: their primary calendar + any shared calendars they own
   // Admin: the calendars their manager has shared with them (via adminConfigs[myEmail].sharedCals)
   useEffect(()=>{
-    // Also keep calList fresh whenever Google connects — needed for per-admin sharing UI
-    if(gOk&&role==='main'&&!calList.length)gCalShare.listCalendars().then(setCalList).catch(()=>{});
+    // Also keep calList fresh whenever Google connects or user hits Refresh — needed for per-admin sharing UI AND for Main's Cal tab fetch
+    if(gOk&&role==='main'&&(!calList.length||calRefreshTrigger>0))gCalShare.listCalendars().then(setCalList).catch(()=>{});
     if(!gOk||!window.gCal)return;
-    // Build the calendar ID list based on role + sharing config
-    let calIds=['primary'];
-    if(role==='admin'){
-      const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
-      if(myShares.length)calIds=myShares;
-      else if(calShares.length)calIds=calShares.map(c=>c.calendar_id).filter(Boolean);
+    // ═══ Build calendar fetch list ═══
+    // Main: ALL owned/subscribed/shared calendars the user can read (respecting Google's "selected" visibility flag)
+    // Admin: calendars their manager shared with them + their own primary (for events where they're an invitee)
+    let calFetchList=[{id:'primary',summary:'Primary',backgroundColor:'#1a73e8'}];
+    if(role==='main'&&calList&&calList.length){
+      const visible=calList.filter(c=>c.selected!==false&&c.accessRole&&c.accessRole!=='freeBusyReader');
+      if(visible.length)calFetchList=visible.map(c=>({id:c.id,summary:c.summary||c.summaryOverride||c.id,backgroundColor:c.backgroundColor||'#6366f1',primary:!!c.primary}));
+    }else if(role==='admin'){
+      const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>({id:c.id,summary:c.name||c.id,backgroundColor:'#6366f1'})).filter(c=>c.id);
+      const legacyShares=(calShares||[]).map(c=>({id:c.calendar_id,summary:c.name||c.calendar_id,backgroundColor:'#6366f1'})).filter(c=>c.id);
+      // Always include primary for admin so events they're invited to appear
+      calFetchList=[{id:'primary',summary:'My Primary',backgroundColor:'#1a73e8'},...myShares,...legacyShares];
     }
+    // Dedupe by calendar id
+    {const seen=new Set();calFetchList=calFetchList.filter(c=>{if(seen.has(c.id))return false;seen.add(c.id);return true})}
     // Compute date range based on offset (0=this week, -1=last, +1=next)
     const loadWeekEvents=async()=>{
       const now=new Date();
@@ -2522,21 +2555,44 @@ function App(){
       const end=new Date(start.getTime()+7*86400000);
       setCalRefreshing(true);
       try{
-        let all=[];
-        for(const cid of calIds){
-          const evs=cid==='primary'
-            ?await gCal.events(start.toISOString(),end.toISOString())
-            :await gCal.eventsFromCal(cid,start.toISOString(),end.toISOString());
-          evs.forEach(e=>{e._calId=cid});
-          all=all.concat(evs);
-        }
+        // Parallel fetch from every calendar the user can read
+        const results=await Promise.all(calFetchList.map(async c=>{
+          try{
+            const evs=c.id==='primary'
+              ?await gCal.events(start.toISOString(),end.toISOString())
+              :await gCal.eventsFromCal(c.id,start.toISOString(),end.toISOString());
+            return evs.map(e=>({...e,_calId:c.id,_calName:c.summary,_calColor:c.backgroundColor}))
+          }catch(_){return[]}
+        }));
+        // Flatten + dedupe by event id (same event can appear on multiple calendars when organizer + attendees overlap)
+        const seen=new Map();
+        results.flat().forEach(e=>{const k=e.id||(e.iCalUID||'')+'_'+(e.start?.dateTime||e.start?.date||'');
+          // Prefer the copy from the primary calendar (user-owned) so the "on their calendar" context is correct
+          if(!seen.has(k)||e._calId==='primary')seen.set(k,e)});
+        let all=Array.from(seen.values());
         all.sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
+        // ═══ USER FILTERS: per-calendar visibility + invited-event RSVP status ═══
+        all=all.filter(ev=>{
+          // Calendar visibility: absent/true = visible, false = hidden
+          if(calVisibility[ev._calId]===false)return false;
+          // Invited events filter: if user is not the organizer and is listed as an attendee, respect their choice
+          const isOrganizer=ev.organizer?.self===true;
+          if(isOrganizer)return true;
+          const me=(ev.attendees||[]).find(a=>a.self);
+          if(!me)return true; // Not an invite (e.g. subscribed calendar, no attendees)
+          const status=me.responseStatus;
+          if(status==='accepted')return true;
+          if(status==='declined')return !!showDeclined;
+          // needsAction or tentative
+          return !!showInvited;
+        });
         // For admin with hideDetails flag, strip event titles/descriptions so only time blocks show
         if(role==='admin'){
           const hideMap={};(adminConfigs[myEmail]?.sharedCals||[]).forEach(c=>{if(c.hideDetails)hideMap[c.id]=true});
           all=all.map(e=>hideMap[e._calId]?{...e,summary:'Busy',description:'',location:''}:e);
         }
         setWeekEvents(all);
+        console.log('[Cal] Loaded',all.length,'events from',calFetchList.length,'calendars (after filters)');
       }catch(e){console.warn('[WeekEvents]',e?.message||e)}
       finally{setCalRefreshing(false)}
     };
@@ -2545,7 +2601,7 @@ function App(){
     let pollId=null;
     if(tab==='cal')pollId=setInterval(loadWeekEvents,60000);
     return()=>{if(pollId)clearInterval(pollId)};
-  },[gOk,role,adminConfigs,calShares,myEmail,showAppt,calWeekOffset,tab]);
+  },[gOk,role,adminConfigs,calShares,calList,myEmail,showAppt,calWeekOffset,tab,calRefreshTrigger,calVisibility,showInvited,showDeclined]);
 
   // ═══ LIVE SYNC — keep multiple devices in sync in real-time ═══
   useEffect(()=>{
@@ -2576,6 +2632,7 @@ function App(){
         const p=(key)=>{try{return map[key+me]?JSON.parse(map[key+me]):null}catch{return null}};
 
         const gk=p('gemini_');if(gk?.key){const cur=localStorage.getItem('autodial_gemini');if(gk.key!==cur){setGeminiKeyVal(gk.key);localStorage.setItem('autodial_gemini',gk.key)}}
+        const ck=p('claude_');if(ck?.key){const cur=localStorage.getItem('autodial_claude_key');if(ck.key!==cur){setClaudeKeyVal(ck.key);localStorage.setItem('autodial_claude_key',ck.key)}}
         const wt=p('watpl_');if(wt?.length)setWaTemplates(prev=>JSON.stringify(wt)!==JSON.stringify(prev)?wt:prev);
         const ac=p('acfg_');if(ac&&Object.keys(ac).length)setAdminConfigs(prev=>JSON.stringify(ac)!==JSON.stringify(prev)?ac:prev);
         const ad=p('apptdur_');if(ad?.dur)setApptDuration(prev=>ad.dur!==prev?ad.dur:prev);
@@ -3693,38 +3750,73 @@ function App(){
             </div>
             <div style={{display:'flex',gap:6,marginTop:10,alignItems:'center'}}>
               {calWeekOffset!==0&&<button onClick={()=>setCalWeekOffset(0)} style={{padding:'6px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:700,flex:1}}>⊙ Jump to Today</button>}
-              <button onClick={()=>{
-                setCalRefreshing(true);
-                const _now2=new Date();const _start2=startOfWeek(_now2);_start2.setDate(_start2.getDate()+(calWeekOffset*7));const _end2=new Date(_start2.getTime()+7*86400000);
-                let calIds=['primary'];
-                if(role==='admin'){
-                  const myShares=(adminConfigs[myEmail]?.sharedCals||[]).map(c=>c.id).filter(Boolean);
-                  if(myShares.length)calIds=myShares;
-                  else if(calShares.length)calIds=calShares.map(c=>c.calendar_id).filter(Boolean);
-                }
-                (async()=>{try{
-                  let all=[];
-                  for(const cid of calIds){
-                    const evs=cid==='primary'?await gCal.events(_start2.toISOString(),_end2.toISOString()):await gCal.eventsFromCal(cid,_start2.toISOString(),_end2.toISOString());
-                    evs.forEach(e=>{e._calId=cid});all=all.concat(evs);
-                  }
-                  all.sort((a,b)=>new Date(a.start?.dateTime||a.start?.date||0)-new Date(b.start?.dateTime||b.start?.date||0));
-                  if(role==='admin'){
-                    const hideMap={};(adminConfigs[myEmail]?.sharedCals||[]).forEach(c=>{if(c.hideDetails)hideMap[c.id]=true});
-                    all=all.map(e=>hideMap[e._calId]?{...e,summary:'Busy',description:'',location:''}:e);
-                  }
-                  setWeekEvents(all);toast('Calendar refreshed');
-                }catch(e){toast('Refresh failed','err')}finally{setCalRefreshing(false)}})();
-              }} style={{padding:'6px 12px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flex:calWeekOffset!==0?0:1,flexShrink:0}}>{calRefreshing?'⟳ Refreshing…':'⟳ Refresh'}</button>
+              <button onClick={()=>{setCalRefreshing(true);setCalRefreshTrigger(p=>p+1);toast('Refreshing calendar…','info')}} style={{padding:'6px 12px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flex:calWeekOffset!==0?0:1,flexShrink:0}}>{calRefreshing?'⟳ Refreshing…':'⟳ Refresh'}</button>
+              <button onClick={()=>setCalFilterOpen(p=>!p)} style={{padding:'6px 12px',borderRadius:8,background:calFilterOpen?'var(--adim)':'var(--bg3)',color:calFilterOpen?'var(--accent2)':'var(--text2)',fontSize:10,fontWeight:700,border:calFilterOpen?'1px solid rgba(99,102,241,.3)':'none',flexShrink:0}}>{(()=>{const hidden=Object.values(calVisibility).filter(v=>v===false).length;const extras=[];if(hidden)extras.push(hidden+' hidden');if(!showInvited)extras.push('invites off');if(showDeclined)extras.push('+declined');return '⚙ Filter'+(extras.length?' · '+extras.join(' · '):'')})()}</button>
             </div>
             <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,margin:'8px 0 0',fontSize:9,color:'var(--text3)'}}>
-              <span>{weekEvents.length} events</span>
+              <span>{weekEvents.length} events{(()=>{const cals=new Set(weekEvents.map(e=>e._calId).filter(Boolean));return cals.size>1?' · '+cals.size+' calendars':''})()}</span>
               <span>·</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:8,height:8,borderRadius:2,background:'linear-gradient(135deg,rgba(34,197,94,.6),rgba(16,185,129,.4))',boxShadow:'0 0 6px rgba(34,197,94,.4)'}}/>= 1.5h+ free slot</span>
               <span>·</span>
               <span>{BIZ_START}am–{BIZ_END-12}pm</span>
             </div>
           </div>
+          {/* ═══ FILTER PANEL: per-calendar visibility + invited-event RSVP status ═══ */}
+          {calFilterOpen&&(()=>{
+            // Build the list of calendars this user can see:
+            // Main → calList (all user's calendars). Admin → primary + shared calendars.
+            const uniq=new Map();
+            if(role==='main'){
+              (calList||[]).forEach(c=>{if(c.selected!==false&&c.accessRole&&c.accessRole!=='freeBusyReader')uniq.set(c.id,{id:c.id,summary:c.summary||c.summaryOverride||c.id,backgroundColor:c.backgroundColor||'#6366f1',primary:!!c.primary})})
+            }else{
+              uniq.set('primary',{id:'primary',summary:'My Primary (invited events)',backgroundColor:'#1a73e8',primary:true});
+              ((adminConfigs[myEmail]||{}).sharedCals||[]).forEach(c=>{if(c.id)uniq.set(c.id,{id:c.id,summary:c.name||c.id,backgroundColor:'#6366f1'})});
+              (calShares||[]).forEach(c=>{if(c.calendar_id)uniq.set(c.calendar_id,{id:c.calendar_id,summary:c.name||c.calendar_id,backgroundColor:'#6366f1'})});
+            }
+            const cals=Array.from(uniq.values()).sort((a,b)=>a.primary?-1:b.primary?1:(a.summary||'').localeCompare(b.summary||''));
+            return<div className="card" style={{marginBottom:12,padding:'12px 14px',borderColor:'rgba(99,102,241,.25)',background:'linear-gradient(135deg,rgba(99,102,241,.03),var(--bg2))'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                <p style={{margin:0,fontSize:11,fontWeight:800,color:'var(--accent2)',textTransform:'uppercase',letterSpacing:'.08em'}}>📁 Calendars ({cals.length})</p>
+                <div style={{display:'flex',gap:4}}>
+                  <button onClick={()=>{const n={};cals.forEach(c=>{n[c.id]=true});setCalVisibility(p=>({...p,...Object.fromEntries(cals.map(c=>[c.id,false]))}))}} style={{padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,fontWeight:700}}>Hide all</button>
+                  <button onClick={()=>{setCalVisibility(p=>{const n={...p};cals.forEach(c=>{delete n[c.id]});return n})}} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:700}}>Show all</button>
+                </div>
+              </div>
+              {cals.length===0&&<p style={{margin:'4px 0',fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>No calendars detected. Connect Google Calendar in Settings first.</p>}
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                {cals.map(c=>{const vis=calVisibility[c.id]!==false;
+                  return<label key={c.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',borderRadius:8,background:vis?'var(--bg)':'var(--bg3)',border:'1px solid '+(vis?'var(--border)':'transparent'),cursor:'pointer',opacity:vis?1:.55}}>
+                    <button onClick={e=>{e.preventDefault();setCalVisibility(p=>({...p,[c.id]:vis?false:true}))}} style={{width:36,height:20,borderRadius:10,background:vis?'#22c55e':'var(--bg3)',border:'1px solid '+(vis?'#16a34a':'var(--border)'),position:'relative',padding:0,flexShrink:0,cursor:'pointer',transition:'background .2s'}}>
+                      <div style={{width:14,height:14,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:vis?18:2,transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.3)'}}/>
+                    </button>
+                    <div style={{width:10,height:10,borderRadius:3,background:c.backgroundColor||'#6366f1',flexShrink:0,boxShadow:'0 0 4px '+(c.backgroundColor||'#6366f1')+'40'}}/>
+                    <span style={{flex:1,minWidth:0,fontSize:11,fontWeight:600,color:vis?'#f1f5f9':'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.summary||c.id}{c.primary?' · Primary':''}</span>
+                  </label>
+                })}
+              </div>
+              {/* Invited events toggles */}
+              <p style={{margin:'14px 0 8px',fontSize:11,fontWeight:800,color:'var(--accent2)',textTransform:'uppercase',letterSpacing:'.08em'}}>✉️ Events invited by others</p>
+              <label style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)',cursor:'pointer',marginBottom:4}}>
+                <button onClick={e=>{e.preventDefault();setShowInvited(p=>!p)}} style={{width:36,height:20,borderRadius:10,background:showInvited?'#22c55e':'var(--bg3)',border:'1px solid '+(showInvited?'#16a34a':'var(--border)'),position:'relative',padding:0,flexShrink:0,cursor:'pointer'}}>
+                  <div style={{width:14,height:14,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:showInvited?18:2,transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.3)'}}/>
+                </button>
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{margin:0,fontSize:11,fontWeight:700,color:'#f1f5f9'}}>Show invites I haven't accepted yet</p>
+                  <p style={{margin:'1px 0 0',fontSize:9,color:'var(--text3)'}}>Includes "maybe" and "needs response"</p>
+                </div>
+              </label>
+              <label style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)',cursor:'pointer'}}>
+                <button onClick={e=>{e.preventDefault();setShowDeclined(p=>!p)}} style={{width:36,height:20,borderRadius:10,background:showDeclined?'#22c55e':'var(--bg3)',border:'1px solid '+(showDeclined?'#16a34a':'var(--border)'),position:'relative',padding:0,flexShrink:0,cursor:'pointer'}}>
+                  <div style={{width:14,height:14,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:showDeclined?18:2,transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.3)'}}/>
+                </button>
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{margin:0,fontSize:11,fontWeight:700,color:'#f1f5f9'}}>Include invites I declined</p>
+                  <p style={{margin:'1px 0 0',fontSize:9,color:'var(--text3)'}}>Off by default — you already said no</p>
+                </div>
+              </label>
+              <p style={{margin:'10px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>Settings sync across your devices automatically</p>
+            </div>
+          })()}
           {/* Day list */}
           {days.map(d=>{
             const isToday=d.key===todayKey;
@@ -3754,11 +3846,12 @@ function App(){
                     const allDay=!ev.start?.dateTime;
                     const timeStr=allDay?'All day':es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
                     return<div key={'e'+i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)'}}>
-                      <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:'var(--accent)',flexShrink:0,minHeight:28}}/>
+                      <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:ev._calColor||'var(--accent)',flexShrink:0,minHeight:28}}/>
                       <div style={{flex:1,minWidth:0}}>
-                        <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:'var(--accent2)'}}>{timeStr}</p>
+                        <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:ev._calColor||'var(--accent2)'}}>{timeStr}</p>
                         <p style={{margin:'2px 0 0',fontSize:12,fontWeight:600,color:'#f1f5f9',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.summary||'Busy'}</p>
                         {ev.location&&<p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📍 {ev.location}</p>}
+                        {ev._calName&&ev._calId!=='primary'&&<p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📁 {ev._calName}</p>}
                       </div>
                     </div>;
                   }
@@ -5195,10 +5288,10 @@ function App(){
       {WORKER_URL&&role!=='admin'&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:10,fontWeight:400,color:'var(--text3)'}}>(smarter sheet analysis)</span></h3>
         <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
-        <input value={localStorage.getItem('autodial_claude_key')||''} onChange={e=>{localStorage.setItem('autodial_claude_key',e.target.value.trim());e.target.parentElement.querySelector('.ck-status').textContent=e.target.value.trim()?'✓ Key saved':'No key'}} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
-        <p className="ck-status" style={{margin:0,fontSize:10,color:localStorage.getItem('autodial_claude_key')?'var(--green)':'var(--text3)'}}>{localStorage.getItem('autodial_claude_key')?'✓ Key saved — Claude will analyze your leads':'No key — using Gemini only'}</p>
-          {isManageMode&&<button onClick={()=>{const k=localStorage.getItem('autodial_claude_key');if(!k)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:k}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
-          {role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
+        <input value={claudeKeyVal} onChange={e=>setClaudeKeyVal(e.target.value.trim())} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
+        <p style={{margin:0,fontSize:10,color:claudeKeyVal?'var(--green)':'var(--text3)'}}>{claudeKeyVal?'✓ Key saved — synced to your account · Claude will analyze your leads':'No key — using Gemini only'}</p>
+          {isManageMode&&<button onClick={()=>{if(!claudeKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:claudeKeyVal}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
+          {role==='admin'&&cfg.sharedClaudeKey&&!claudeKeyVal&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
       </div>}
 
       {/* Calendar defaults — sharing moved into Admin Pay (Per-Person) */}
