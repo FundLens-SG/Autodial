@@ -1120,6 +1120,39 @@ const{useState,useEffect,useRef,useCallback}=React;
 const isMob=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const LS=k=>'ad3_'+k+'_'+(window._user?.id||'l');
 const load=k=>{try{return JSON.parse(localStorage.getItem(LS(k)))}catch{return null}};
+// ══════════════════════════════════════════════════════
+// save(k,v) vs localStorage.setItem(name,value) — TWO DISTINCT PATTERNS
+// ══════════════════════════════════════════════════════
+// Both write to localStorage but serve different purposes. Do NOT merge them.
+//
+// save(k,v) / load(k)  ← USER-SCOPED APP STATE
+//   • Auto-prefixed via LS(k) → 'ad3_<k>_<userId>' so different users on the
+//     same device get independent data (leads, sessions, cfg, acfg, slog, etc.).
+//   • Value is JSON-serialized automatically.
+//   • Cleared on sign-out (per-user keys become orphaned, not read back).
+//   • Use for ANY state that belongs to a specific logged-in user: leads,
+//     appointments, session log, sTabs, gamify state, learned patterns, etc.
+//   • If the key appears in SYNC_MAP, also pair with cloudSave(k,v) below.
+//
+// localStorage.setItem(name,value)  ← GLOBAL / AUTH / CROSS-USER FLAGS
+//   • No prefix — key is shared across all users on the device.
+//   • Value is a raw string (callers serialize manually if needed).
+//   • Survives sign-out because it's global (intentional for auth tokens).
+//   • Use ONLY for:
+//       - Auth & session bootstrap: 'ad_gt' (Google token), 'ad_gt_ts',
+//         'autodial_claude_key', 'autodial_gemini', 'autodial_role',
+//         'autodial_last_user', 'autodial_creator', 'autodial_invite_from'
+//       - One-shot UI flags: 'autodial_seen_help', 'ad_g_ever'
+//       - Cross-session counters that must survive sign-out:
+//         '_lastStarReset', '_deletedApptIds', 'autodial_daily_sets'
+//       - Admin/business config that is global to the device regardless of
+//         which user is signed in: 'ad_bizname', 'ad_paynow', 'ad_ts_id',
+//         'ad_drive_folder'
+//
+// Rule of thumb: if the value is meaningful only while THIS user is logged in,
+// use save()/load(). If it must persist across sign-outs OR is consumed by
+// code that runs before the user object exists (auth bootstrap, head scripts),
+// use localStorage.setItem/getItem directly.
 const save=(k,v)=>{try{localStorage.setItem(LS(k),JSON.stringify(v))}catch{}};
 // Cloud sync bucket mapping: localStorage key → cloud bucket
 const SYNC_MAP={data:'leads',cfg:'cfg',acfg:'adminConfigs',slog:'sessions',appts:'appointments',incv:'incentives',payh:'payments',
@@ -1152,7 +1185,6 @@ const cloudSave=(k,v)=>{if(!window._cloudReady)return;
 // ══════════════════════════════════════════════════════
 // Uses a single version counter in Supabase. On any save, version bumps.
 // Other devices detect the bump via broadcast or visibility check, then pull latest.
-window._syncVer=0;window._lastPull=0;window._pullDebounce=null;
 // Status config
 const ST={pending:{c:'var(--text3)',l:'Pending',bg:'rgba(72,79,88,.1)'},np:{c:'var(--amber)',l:'NP',bg:'var(--amdim)'},cb:{c:'var(--blue)',l:'CB',bg:'var(--bdim)'},ni:{c:'var(--red)',l:'NI',bg:'var(--rdim)'},set:{c:'var(--green)',l:'Set',bg:'var(--gdim)'}};
 const Badge=({s,np,cbh})=>{const m=ST[s]||ST.pending;let l=m.l;if(s==='np'&&np>0)l=cbh?.length?'CB→NP×'+np:'NP×'+np;if(s==='ni'&&np>=5)l='NI(auto)';return<span className="pill"style={{background:m.bg,color:m.c}}>{l}</span>};
@@ -1238,10 +1270,12 @@ function Modal({show,onClose,children,align='center',bg='.85',zIndex=100,padding
 // ═══ Btn — reusable button with variants ═══
 // Variants: 'primary' (accent), 'danger' (red), 'ghost' (bg3 neutral, default), 'success' (green), 'gold'
 // Sizes: 'sm' (padding 4/10, fs 10), 'md' (6/12, fs 11, default), 'lg' (10/16, fs 13)
-function Btn({variant='ghost',size='md',onClick,children,style,disabled,type}){
+// Overrides: radius (default 8), weight (default 700), border (default 'none'),
+//            full (=true sets width:100%), title (tooltip). Further tweaks via `style`.
+function Btn({variant='ghost',size='md',onClick,children,style,disabled,type,radius,weight,border,full,title}){
   const _var={primary:['var(--adim)','var(--accent2)'],danger:['var(--rdim)','var(--red)'],ghost:['var(--bg3)','var(--text2)'],success:['var(--gdim)','var(--green)'],gold:['rgba(240,180,41,.15)','var(--gold)']}[variant]||['var(--bg3)','var(--text2)'];
   const _sz={sm:['4px 10px',10],md:['6px 12px',11],lg:['10px 16px',13]}[size]||['6px 12px',11];
-  return<button type={type||'button'} disabled={disabled} onClick={onClick} style={{padding:_sz[0],borderRadius:8,background:_var[0],color:_var[1],fontSize:_sz[1],fontWeight:700,border:'none',opacity:disabled?.5:1,cursor:disabled?'not-allowed':'pointer',...(style||{})}}>{children}</button>
+  return<button type={type||'button'} title={title} disabled={disabled} onClick={onClick} style={{padding:_sz[0],borderRadius:radius??8,background:_var[0],color:_var[1],fontSize:_sz[1],fontWeight:weight??700,border:border||'none',opacity:disabled?.5:1,cursor:disabled?'not-allowed':'pointer',...(full?{width:'100%'}:{}),...(style||{})}}>{children}</button>
 }
 // Given a list of events on a specific day and business hours (defaults 9 AM - 9 PM local), return free slot gaps.
 // events: [{start:Date, end:Date}] already for THIS day, sorted by start
@@ -1813,18 +1847,25 @@ window.validateStatuses=validateStatuses;
 const Confetti=({show})=>{if(!show)return null;const cols=['#f0b429','#3fb950','#6366f1','#f85149','#58a6ff'];
   return<div style={{position:'fixed',inset:0,pointerEvents:'none',zIndex:9999}}>{Array.from({length:30}).map((_,i)=><div key={i} style={{position:'absolute',left:Math.random()*100+'%',top:'50%',width:6+Math.random()*6,height:6+Math.random()*6,background:cols[i%5],borderRadius:Math.random()>.5?'50%':'2px',animation:`confetti ${1+Math.random()*2}s ease-out forwards`,animationDelay:Math.random()*.5+'s'}}/>)}</div>};
 const MilestonePopup=({show,title,sub,emoji,onClose})=>{if(!show)return null;
-  return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:20}} onClick={onClose}>
-    <div onClick={e=>e.stopPropagation()} style={{background:'var(--bg2)',border:'2px solid var(--gold)',borderRadius:24,padding:'40px 28px',textAlign:'center',maxWidth:360,width:'100%',animation:'celebrate .5s ease-out',boxShadow:'0 0 80px rgba(240,180,41,.15)'}}>
+  return<Modal show={true} onClose={onClose} align="center" bg=".85" zIndex={10000} padding={20}>
+    <div style={{background:'var(--bg2)',border:'2px solid var(--gold)',borderRadius:24,padding:'40px 28px',textAlign:'center',maxWidth:360,width:'100%',animation:'celebrate .5s ease-out',boxShadow:'0 0 80px rgba(240,180,41,.15)'}}>
       <div style={{fontSize:64,marginBottom:14}}>{emoji}</div>
       <h2 style={{fontSize:22,fontWeight:900,color:'var(--gold)',marginBottom:8,animation:'firePulse 2s infinite'}}>{title}</h2>
       <p style={{fontSize:14,color:'var(--text2)',lineHeight:1.5,marginBottom:20,whiteSpace:'pre-line'}}>{sub}</p>
       <button style={{padding:'14px 36px',borderRadius:14,background:'linear-gradient(135deg,var(--gold),#d29922)',color:'#07080d',fontSize:16,fontWeight:800}} onClick={onClose}>LET'S GO! 🔥</button>
-    </div></div>};
+    </div>
+  </Modal>};
 
 // ══════ MAIN APP ══════
 function App(){
   const role=window._role||'admin';
   const stored=load('data')||{};
+  // Single ref bag for React-internal non-reactive state that used to live on window._*.
+  // Only for state that is set AND read exclusively from inside this component — any global
+  // that crosses the component boundary (head scripts, auth flow, module-level helpers like
+  // `save`/`cloudSave`/`parseSheet`) still lives on window (_user, _prof, _role, _mounted,
+  // _setupCreator, _bumpSyncVer, _cloudReady, _learnedPatterns, etc.).
+  const appStateRef=useRef({});
   // Auto-validate cached leads on startup
   const[leads,setLeads]=useState(()=>{
     const cached=stored.leads||[];
@@ -1834,7 +1875,7 @@ function App(){
     if(changed>0)DBG('[AutoDial] Fixed',changed,'stale statuses');
     // Flag if leads need re-fetch (most have empty notes = stale cache)
     const emptyNotes=fixed.filter(l=>!l.notes&&l.status==='pending').length;
-    if(emptyNotes>fixed.length*0.7&&stored.cfg?.sheetId)window._needsRefetch=true;
+    if(emptyNotes>fixed.length*0.7&&stored.cfg?.sheetId)appStateRef.current._needsRefetch=true;
     return fixed;
   });
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:3,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0});
@@ -1871,7 +1912,7 @@ function App(){
     setSetDone(false);
     // Store undo info for Set
     const li=showPostCall?.leadIdx??curIdx;
-    window._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now()};
+    appStateRef.current._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now()};
     setUndoInfo({leadIdx:li,name:leads[li]?.name||'',status:'set',ts:Date.now()});
     // Auto-advance after 3 seconds — timer stored in ref so doUndo can cancel it
     const nextIdx=nextLeadRef.current;
@@ -1892,11 +1933,9 @@ function App(){
   const[apptShaky,setApptShaky]=useState(false); // Shaky flag on new appointment
   const[pendingShakyKey,setPendingShakyKey]=useState(null); // "dayKey_HH:MM" for inline confirm
   const[calViewMode,setCalViewMode]=useState(()=>load('calvm')||'list'); // 'list' | 'grid' for Cal tab
-  // Shaky flags stored per-appointment-id in localStorage (since schema doesn't have column)
-  const[shakyMap,setShakyMap]=useState(()=>{try{return JSON.parse(localStorage.getItem('shakyAppts')||'{}')}catch(e){return{}}});
-  const setShaky=(apptId,val)=>{setShakyMap(p=>{const n={...p};if(val)n[apptId]=true;else delete n[apptId];localStorage.setItem('shakyAppts',JSON.stringify(n));return n})};
-  // Single source of truth for shaky status — checks both the a.shaky column (from Supabase) and local shakyMap cache
-  const isApptShaky=(a)=>!!(a&&((a.shaky)||(shakyMap&&a.phone&&shakyMap[a.phone])));
+  // Shaky status derives solely from the Supabase `shaky` column on the appointment row.
+  // Writes go through DB.updateApptShaky + optimistic setAppointments updates.
+  const isApptShaky=(a)=>!!(a&&a.shaky);
   // 60s cache for picker events to avoid refetching on every modal open
   const pickerEventsCacheRef=useRef({key:'',ts:0,data:null});
   const[detailId,setDetailId]=useState(null);
@@ -2055,7 +2094,7 @@ function App(){
   const[undoInfo,setUndoInfo]=useState(null); // {leadIdx,name,status,ts} for 10s undo
   // Auto-clear undo after 10 seconds
   useEffect(()=>{if(!undoInfo)return;const t=setTimeout(()=>setUndoInfo(null),10000);return()=>clearTimeout(t)},[undoInfo]);
-  const doUndo=()=>{if(!undoInfo)return;const u=window._lastUndo;if(!u)return;
+  const doUndo=()=>{if(!undoInfo)return;const u=appStateRef.current._lastUndo;if(!u)return;
     // ═══ CANCEL any pending auto-advance timer FIRST so we don't advance mid-undo ═══
     if(autoAdvanceTimerRef.current){clearTimeout(autoAdvanceTimerRef.current);autoAdvanceTimerRef.current=null}
     setLeads(p=>p.map((l,i)=>i===u.leadIdx?{...l,status:u.prevStatus,npCount:u.prevNpCount}:l));
@@ -2073,8 +2112,6 @@ function App(){
       if(u.leadIdx>=0){const lead=leadsRef.current[u.leadIdx];
         if(lead){
           setAppointments(p=>p.filter(a=>a.phone!==lead.phone||a.status!=='pending'));
-          // Also clear shaky flag if set
-          if(u.apptId){setShaky(u.apptId,false)}
         }}
       toast('↩️ Set undone — pick a status for this lead');
     }else{toast('↩️ Undone — back to '+undoInfo.name)}
@@ -2084,7 +2121,7 @@ function App(){
     setNextPreviewIdx(-1);
     // Return user to the current lead, calling phase, with all buttons available
     setCurIdx(u.leadIdx);setPhase('calling');setRunning(true);
-    setUndoInfo(null);window._lastUndo=null};
+    setUndoInfo(null);appStateRef.current._lastUndo=null};
   const[postCallNote,setPostCallNote]=useState('');
   const[sessionTarget,setSessionTarget]=useState(load('starget')||{type:'dials',count:50});
 
@@ -2110,13 +2147,13 @@ function App(){
   // Auto re-fetch if cached leads are stale (no notes)
   useEffect(()=>{
     // Auto-fetch for admin with synced sheet
-    if(role==='admin'&&myCfg.timesheetId&&myCfg.sheetTab&&gOk&&leads.length===0&&!window._autoFetched){
-      window._autoFetched=true;
+    if(role==='admin'&&myCfg.timesheetId&&myCfg.sheetTab&&gOk&&leads.length===0&&!appStateRef.current._autoFetched){
+      appStateRef.current._autoFetched=true;
       setCfg(s=>({...s,sheetId:myCfg.timesheetId,sheetTab:myCfg.sheetTab}));
       setTimeout(()=>fetchLeads(),500);
     }
-    if(window._needsRefetch&&cfg.sheetId&&cfg.sheetTab&&gOk){
-      window._needsRefetch=false;
+    if(appStateRef.current._needsRefetch&&cfg.sheetId&&cfg.sheetTab&&gOk){
+      appStateRef.current._needsRefetch=false;
       DBG('[AutoDial] Auto re-fetching stale leads...');
       setTimeout(()=>fetchLeads(),1000)
     }
@@ -2653,16 +2690,6 @@ function App(){
                 shaky:!!a.shaky, // ← cross-device shaky sync
                 location:'',industry:'',remarks:'',gender:'',age:''
               })});
-            // Hydrate local shakyMap from cloud rows so UI stays in sync without waiting for a render cycle
-            (()=>{try{
-              const next={...(shakyMap||{})};
-              let changed=false;
-              dbAppts.forEach(a=>{
-                if(a.shaky&&a.lead_phone){if(!next[a.lead_phone]){next[a.lead_phone]=true;changed=true}}
-                else if(a.lead_phone&&next[a.lead_phone]){delete next[a.lead_phone];changed=true}
-              });
-              if(changed){setShakyMap(next);localStorage.setItem('shakyAppts',JSON.stringify(next))}
-            }catch(e){}})();
             return _dedupAppts(merged)});
         }
       }catch(e){console.warn('[HardSync]',e.message)}
@@ -2818,7 +2845,7 @@ function App(){
           return newFromCloud.length?_dedupAppts([...prev,...newFromCloud]):prev});
         const ts=p('ts_');if(ts?.ts)setTotalSets(prev=>ts.ts>prev?ts.ts:prev);
 
-        window._lastPull=Date.now();
+        appStateRef.current._lastPull=Date.now();
       }catch(e){console.warn('[LiveSync]',e.message)}
       _pulling=false};
 
@@ -2827,11 +2854,11 @@ function App(){
       setTimeout(pullLatest,500)}});
 
     // [2] Visibility change — tab becomes visible, check for updates
-    const onVis=()=>{if(!document.hidden&&(Date.now()-(window._lastPull||0))>5000)pullLatest()};
+    const onVis=()=>{if(!document.hidden&&(Date.now()-(appStateRef.current._lastPull||0))>5000)pullLatest()};
     document.addEventListener('visibilitychange',onVis);
 
     // [3] Periodic poll — safety net every 60s
-    _pullTimer=setInterval(()=>{if(!document.hidden&&(Date.now()-(window._lastPull||0))>55000)pullLatest()},60000);
+    _pullTimer=setInterval(()=>{if(!document.hidden&&(Date.now()-(appStateRef.current._lastPull||0))>55000)pullLatest()},60000);
 
     return()=>{try{unsub()}catch(e){}document.removeEventListener('visibilitychange',onVis);clearInterval(_pullTimer);clearTimeout(_verDebounce)};
     }catch(e){console.warn('[LiveSync setup]',e.message);return()=>{clearInterval(_pullTimer);clearTimeout(_verDebounce)}}
@@ -3133,7 +3160,7 @@ function App(){
     // ═══ SMART AUTO-DIAL: NI/NP skip post-call, auto-advance ═══
     if(status==='ni'||status==='np'){
       // Store undo info before advancing
-      window._lastUndo={leadIdx,status,prevStatus:leads[leadIdx]?.status||'pending',prevNpCount:leads[leadIdx]?.npCount||0,ts:Date.now()};
+      appStateRef.current._lastUndo={leadIdx,status,prevStatus:leads[leadIdx]?.status||'pending',prevNpCount:leads[leadIdx]?.npCount||0,ts:Date.now()};
       setUndoInfo({leadIdx,name:leads[leadIdx]?.name||'',status,ts:Date.now()});
       // Auto-advance to next lead immediately
       const nextIdx=nextLeadRef.current;
@@ -3279,7 +3306,7 @@ function App(){
             {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:10,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
       {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:10,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
       <button onClick={()=>setShowHelp(true)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:12,fontWeight:700}}>?</button>
-      <button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
+      <button onClick={()=>authLogout()} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       </button>
     </div>
@@ -3935,7 +3962,7 @@ function App(){
               <button onClick={()=>{setCalRefreshing(true);setCalRefreshTrigger(p=>p+1);toast('Refreshing calendar…','info')}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flexShrink:0}}>{calRefreshing?'⟳…':'⟳'}</button>
               <button onClick={()=>setCalFilterOpen(p=>!p)} style={{padding:'6px 12px',borderRadius:8,background:calFilterOpen?'var(--adim)':'var(--bg3)',color:calFilterOpen?'var(--accent2)':'var(--text2)',fontSize:10,fontWeight:700,border:calFilterOpen?'1px solid rgba(99,102,241,.3)':'none',flexShrink:0}}>{(()=>{const hidden=Object.values(calVisibility).filter(v=>v===false).length;const extras=[];if(hidden)extras.push(hidden+' hidden');if(!showInvited)extras.push('invites off');if(showDeclined)extras.push('+declined');return '⚙ Filter'+(extras.length?' · '+extras.join(' · '):'')})()}</button>
             </div>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,margin:'8px 0 0',fontSize:9,color:'var(--text3)'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>
               <span>{weekEvents.length} events{(()=>{const cals=new Set(weekEvents.map(e=>e._calId).filter(Boolean));return cals.size>1?' · '+cals.size+' calendars':''})()}</span>
               <span>·</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:8,height:8,borderRadius:2,background:'linear-gradient(135deg,rgba(34,197,94,.6),rgba(16,185,129,.4))',boxShadow:'0 0 6px rgba(34,197,94,.4)'}}/>= 1.5h+ free slot</span>
@@ -3960,8 +3987,8 @@ function App(){
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
                 <p style={{margin:0,fontSize:11,fontWeight:800,color:'var(--accent2)',textTransform:'uppercase',letterSpacing:'.08em'}}>📁 Calendars ({cals.length})</p>
                 <div style={{display:'flex',gap:4}}>
-                  <button onClick={()=>{const n={};cals.forEach(c=>{n[c.id]=true});setCalVisibility(p=>({...p,...Object.fromEntries(cals.map(c=>[c.id,false]))}))}} style={{padding:'3px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:9,fontWeight:700}}>Hide all</button>
-                  <button onClick={()=>{setCalVisibility(p=>{const n={...p};cals.forEach(c=>{delete n[c.id]});return n})}} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:700}}>Show all</button>
+                  <button onClick={()=>{const n={};cals.forEach(c=>{n[c.id]=true});setCalVisibility(p=>({...p,...Object.fromEntries(cals.map(c=>[c.id,false]))}))}} style={{padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,fontWeight:700}}>Hide all</button>
+                  <button onClick={()=>{setCalVisibility(p=>{const n={...p};cals.forEach(c=>{delete n[c.id]});return n})}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:700}}>Show all</button>
                 </div>
               </div>
               {cals.length===0&&<p style={{margin:'4px 0',fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>No calendars detected. Connect Google Calendar in Settings first.</p>}
@@ -3984,7 +4011,7 @@ function App(){
                 </button>
                 <div style={{flex:1,minWidth:0}}>
                   <p style={{margin:0,fontSize:11,fontWeight:700,color:'#f1f5f9'}}>Show invites I haven't accepted yet</p>
-                  <p style={{margin:'1px 0 0',fontSize:9,color:'var(--text3)'}}>Includes "maybe" and "needs response"</p>
+                  <p style={{margin:'1px 0 0',fontSize:10,color:'var(--text3)'}}>Includes "maybe" and "needs response"</p>
                 </div>
               </label>
               <label style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)',cursor:'pointer'}}>
@@ -3993,7 +4020,7 @@ function App(){
                 </button>
                 <div style={{flex:1,minWidth:0}}>
                   <p style={{margin:0,fontSize:11,fontWeight:700,color:'#f1f5f9'}}>Include invites I declined</p>
-                  <p style={{margin:'1px 0 0',fontSize:9,color:'var(--text3)'}}>Off by default — you already said no</p>
+                  <p style={{margin:'1px 0 0',fontSize:10,color:'var(--text3)'}}>Off by default — you already said no</p>
                 </div>
               </label>
               <p style={{margin:'10px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>Settings sync across your devices automatically</p>
@@ -4073,7 +4100,7 @@ function App(){
                     const ev=item.ev;const es=new Date(ev.start?.dateTime||ev.start?.date||0);const ee=new Date(ev.end?.dateTime||ev.end?.date||0);
                     const allDay=!ev.start?.dateTime;
                     const timeStr=allDay?'All day':es.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+ee.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
-                    // Shaky? Cross-ref appointments by calEventId or by phone in shakyMap
+                    // Shaky? Cross-ref appointments by calEventId (a.shaky from Supabase)
                     const _isShaky=(appointments||[]).some(a=>(a.calEventId&&a.calEventId===ev.id)&&isApptShaky(a));
                     return<div key={'e'+i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:_isShaky?'linear-gradient(135deg,rgba(251,146,60,.08),rgba(234,88,12,.04))':'var(--bg)',border:'1px solid '+(_isShaky?'rgba(251,146,60,.45)':'var(--border)'),boxShadow:_isShaky?'0 0 10px rgba(251,146,60,.2)':'none'}}>
                       <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:_isShaky?'linear-gradient(180deg,#fb923c,#ea580c)':(ev._calColor||'var(--accent)'),flexShrink:0,minHeight:28,boxShadow:_isShaky?'0 0 6px rgba(251,146,60,.6)':'none'}}/>
@@ -4268,7 +4295,7 @@ function App(){
           {/* Shaky tickbox — tap to toggle whether this slot reappears as an "available (shaky)" slot in future pickers */}
           {a.apptDate&&(()=>{
             const isShaky=isApptShaky(a);
-            return<div onClick={e=>{e.stopPropagation();const next=!isShaky;setShaky(a.phone,next);setAppointments(p=>p.map(x=>x.id===a.id?{...x,shaky:next}:x));
+            return<div onClick={e=>{e.stopPropagation();const next=!isShaky;setAppointments(p=>p.map(x=>x.id===a.id?{...x,shaky:next}:x));
               // Sync shaky flag to Supabase so other devices see it
               DB.updateApptShaky(a.admin||myEmail,a.phone,a.apptDate,next).then(ok=>{if(!ok&&_SB)console.warn('[Shaky] cloud sync failed — local only')}).catch(()=>{});
               toast(next?'🟠 Marked as shaky · synced':'Shaky removed · synced','info')}} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'3px 8px',marginBottom:6,borderRadius:8,background:isShaky?'linear-gradient(135deg,rgba(251,146,60,.15),rgba(234,88,12,.08))':'var(--bg3)',border:'1px solid '+(isShaky?'rgba(251,146,60,.5)':'var(--border)'),cursor:'pointer',fontSize:9,fontWeight:700,color:isShaky?'#fb923c':'var(--text3)',boxShadow:isShaky?'0 0 6px rgba(251,146,60,.25)':'none'}}>
@@ -4793,8 +4820,8 @@ function App(){
         {gOk&&<>
           <div style={{position:'relative',marginBottom:8}}>
             <input value={sheetQ} onChange={e=>{setSheetQ(e.target.value);
-              clearTimeout(window._sheetSearchTimer);
-              if(e.target.value.length>=2){window._sheetSearchTimer=setTimeout(()=>{setSheetSearching(true);gDrive.search(e.target.value).then(r=>{setSheetResults(r);setSheetSearching(false)}).catch(()=>setSheetSearching(false))},400)}
+              clearTimeout(appStateRef.current._sheetSearchTimer);
+              if(e.target.value.length>=2){appStateRef.current._sheetSearchTimer=setTimeout(()=>{setSheetSearching(true);gDrive.search(e.target.value).then(r=>{setSheetResults(r);setSheetSearching(false)}).catch(()=>setSheetSearching(false))},400)}
               else{setSheetResults([])}
             }} onKeyDown={e=>{if(e.key==='Enter')searchSheets()}} placeholder="🔍 Type to search sheets…" style={{fontSize:13,paddingRight:40}}/>
             {sheetSearching&&<span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:10,color:'var(--accent2)'}}>…</span>}
@@ -5128,8 +5155,8 @@ function App(){
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{ac.bizName||em}</p>
             <div style={{display:'flex',gap:4}}>
-              <button onClick={()=>setEditingAdmin(editingAdmin===em?null:em)} style={{padding:'4px 10px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>{editingAdmin===em?'Close':'Edit'}</button>
-              <button onClick={()=>{const c={...adminConfigs};delete c[em];setAdminConfigs(c)}} style={{padding:'4px 10px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>×</button>
+              <Btn variant="primary" size="sm" weight={600} onClick={()=>setEditingAdmin(editingAdmin===em?null:em)}>{editingAdmin===em?'Close':'Edit'}</Btn>
+              <Btn variant="danger" size="sm" weight={600} onClick={()=>{const c={...adminConfigs};delete c[em];setAdminConfigs(c)}}>×</Btn>
             </div>
           </div>
           <div style={{display:'flex',gap:6,fontSize:10,color:'var(--text3)',flexWrap:'wrap'}}>
@@ -5141,14 +5168,14 @@ function App(){
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:8,padding:'4px 0'}}>
               {TIER_META.map((t,i)=>{const _on=!(ac.enabledTiers&&ac.enabledTiers[i]===false);return<div key={i} style={{background:_on?'var(--bg)':'var(--bg3)',border:'1px solid '+(_on?t.color+'20':'var(--border)'),borderRadius:8,padding:'4px',textAlign:'center',opacity:_on?1:.35,position:'relative'}}>
                 <button onClick={(ev)=>{ev.stopPropagation();const et=[...(ac.enabledTiers||[true,true,true,true,true,true])];et[i]=!et[i];setAdminConfigs(p=>({...p,[em]:{...p[em],enabledTiers:et}}))}} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:11,background:_on?'#22c55e':'#ef4444',color:'#fff',fontSize:11,fontWeight:800,border:'2px solid var(--bg2)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,zIndex:2,boxShadow:'0 2px 6px rgba(0,0,0,.3)'}}>{_on?'✓':'✗'}</button>
-                <span style={{fontSize:12}}>{t.emoji}</span>
-                <p style={{margin:0,fontSize:10,fontWeight:700,color:t.color}}>{t.label}</p>
-                <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>$/hr</label>
+                <span style={{fontSize:13}}>{t.emoji}</span>
+                <p style={{margin:0,fontSize:11,fontWeight:700,color:t.color}}>{t.label}</p>
+                <label style={{fontSize:10,color:'var(--text3)',fontWeight:600,marginTop:3,display:'block'}}>$/hr</label>
                 <div style={{position:'relative'}}><span style={{position:'absolute',left:4,top:'50%',transform:'translateY(-50%)',fontSize:10,color:'var(--text3)',pointerEvents:'none'}}>$</span>
-                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':+e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} style={{fontSize:10,textAlign:'center',padding:'4px 4px 4px 14px',marginTop:1}}/></div>
-                <label style={{fontSize:7,color:'var(--text3)',fontWeight:600,marginTop:2}}>Min appts</label>
+                <input type="number" min="0" value={(ac.payRates||DEF_PAY_RATES)[i]??''} onChange={e=>{const r=[...(ac.payRates||DEF_PAY_RATES)];while(r.length<6)r.push(0);r[i]=e.target.value===''?'':+e.target.value;setAdminConfigs(p=>({...p,[em]:{...p[em],payRates:r}}))}} style={{fontSize:11,textAlign:'center',padding:'5px 4px 5px 14px',marginTop:1}}/></div>
+                <label style={{fontSize:10,color:'var(--text3)',fontWeight:600,marginTop:3,display:'block'}}>Min appts</label>
                 <input type="number" min="0" value={(ac.tierMins||DEF_TIER_MINS)[i]??''} onChange={e=>{const m=[...(ac.tierMins||DEF_TIER_MINS)];while(m.length<6)m.push(0);m[i]=e.target.value===''?'':+e.target.value;
-                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} style={{fontSize:10,textAlign:'center',padding:'3px',marginTop:1}} disabled={i===0}/>
+                  setAdminConfigs(p=>({...p,[em]:{...p[em],tierMins:m}}))}} style={{fontSize:11,textAlign:'center',padding:'5px 3px',marginTop:1}} disabled={i===0}/>
               </div>})}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
@@ -5554,7 +5581,7 @@ function App(){
       {isManageMode&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates</h3>
-          {waTemplates.length>0&&<button onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>Delete All</button>}
+          {waTemplates.length>0&&<Btn variant="danger" size="sm" weight={600} radius={6} onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}}>Delete All</Btn>}
         </div>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Message templates for WhatsApp. Placeholders: {'{{name}}, {{date}}, {{time}}, {{admin}}, {{company}}'}</p>
         {waTemplates.map((t,i)=><div key={t.id||i} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
@@ -5563,7 +5590,7 @@ function App(){
             <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.template}</p></div>
           <div style={{display:'flex',gap:4,flexShrink:0}}>
             <button onClick={()=>{setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Editing — make changes and save')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Edit</button>
-            <button onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Deleted')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>×</button>
+            <Btn variant="danger" size="sm" weight={600} radius={6} style={{padding:'4px 8px'}} onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Deleted')}}>×</Btn>
           </div>
         </div>)}
         <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
@@ -5591,7 +5618,7 @@ function App(){
       </div>}
       </>}
 
-      {settingsSubtab==='prefs'&&<button onClick={()=>{if(confirm('Sign out?'))authLogout()}} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>}
+      {settingsSubtab==='prefs'&&<button onClick={()=>authLogout()} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>}
     </div>}
 
     {/* ═══ ACHIEVEMENT POPUP ═══ */}
@@ -5624,8 +5651,8 @@ function App(){
     </Modal>
 
     {/* ═══ HELP / INSTRUCTIONS MODAL ═══ */}
-    {showHelp&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:110,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:520,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+    <Modal show={showHelp} onClose={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}} align="center" bg=".9" zIndex={110}>
+      <div style={{width:'100%',maxWidth:520,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <div style={{textAlign:'center',marginBottom:16}}>
           <p style={{fontSize:40,margin:'0 0 4px'}}>👋</p>
           <h2 style={{fontSize:20,fontWeight:900,color:'#f1f5f9',margin:'0 0 4px'}}>Welcome to AutoDial</h2>
@@ -5719,11 +5746,11 @@ function App(){
 
         <button onClick={()=>{setShowHelp(false);localStorage.setItem('autodial_seen_help','1')}} style={{width:'100%',padding:'14px',borderRadius:14,background:'var(--adim)',color:'var(--accent2)',fontSize:14,fontWeight:700,marginTop:8}}>Got it!</button>
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ USER MANAGEMENT MODAL ═══ */}
-    {showApprovalModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowApprovalModal(false)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:500,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+    <Modal show={showApprovalModal} onClose={()=>setShowApprovalModal(false)} align="center" bg=".85" zIndex={100}>
+      <div style={{width:'100%',maxWidth:500,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
           <h3 style={{margin:0,fontSize:18,fontWeight:800,color:'#f1f5f9'}}>👥 User Management</h3>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -5743,7 +5770,7 @@ function App(){
               <span className="pill" style={{background:'var(--bg)',color:'var(--amber)',fontSize:10,marginTop:2}}>Requested: {u.requested_role||u.autodial_role||'admin'}</span>
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0}}>
-              <button onClick={async()=>{const role=u.requested_role||u.autodial_role||'admin';try{await _SB.from('profiles').update({approved:true,autodial_role:role,role:role}).eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));setUsersList(p=>{const exists=p.find(x=>x.id===u.id);if(exists)return p.map(x=>x.id===u.id?{...x,approved:true,autodial_role:role}:x);return[...p,{...u,approved:true,autodial_role:role}]});toast(u.full_name+' approved as '+role+' ✓')}catch(e){toast('Error','err')}}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:11,fontWeight:700}}>✓ Approve</button>
+              <Btn variant="success" style={{padding:'8px 14px'}} onClick={async()=>{const role=u.requested_role||u.autodial_role||'admin';try{await _SB.from('profiles').update({approved:true,autodial_role:role,role:role}).eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));setUsersList(p=>{const exists=p.find(x=>x.id===u.id);if(exists)return p.map(x=>x.id===u.id?{...x,approved:true,autodial_role:role}:x);return[...p,{...u,approved:true,autodial_role:role}]});toast(u.full_name+' approved as '+role+' ✓')}catch(e){toast('Error','err')}}}>✓ Approve</Btn>
               <button onClick={async()=>{if(!confirm('Reject '+u.full_name+'?'))return;try{await _SB.from('profiles').delete().eq('id',u.id);setPendingUsers(p=>p.filter(x=>x.id!==u.id));toast('Rejected')}catch(e){toast('Error','err')}}} style={{padding:'4px 14px',borderRadius:8,background:'var(--bg)',color:'var(--text3)',fontSize:10,fontWeight:600}}>Reject</button>
             </div>
           </div>)}
@@ -5764,7 +5791,7 @@ function App(){
             <div style={{display:'flex',gap:3}}>
               {['admin','main','both'].map(r=><button key={r} onClick={async()=>{try{await _SB.from('profiles').update({autodial_role:r,role:r}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,autodial_role:r,role:r}:x));toast(u.full_name+' → '+r)}catch(e){toast('Error','err')}}} style={{padding:'4px 8px',borderRadius:6,background:(u.autodial_role||u.role)=== r?'var(--adim)':'var(--bg)',color:(u.autodial_role||u.role)===r?'var(--accent2)':'var(--text3)',fontSize:10,fontWeight:700,border:'1px solid '+((u.autodial_role||u.role)===r?'var(--accent)':'var(--border)')}}>{r==='admin'?'📋':r==='main'?'👔':'🌟'} {r}</button>)}
             </div>
-            <button onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}} style={{padding:'3px 10px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600}}>Revoke</button>
+            <Btn variant="danger" size="sm" weight={600} radius={6} style={{padding:'3px 10px'}} onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}}>Revoke</Btn>
           </div>
         </div>)}
 
@@ -5776,11 +5803,11 @@ function App(){
 
         <button onClick={()=>setShowApprovalModal(false)} style={{width:'100%',padding:'12px',borderRadius:14,background:'var(--bg3)',color:'var(--text3)',fontSize:13,marginTop:12}}>Close</button>
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ CHALLENGE PICKER MODAL ═══ */}
-    {showSlotPicker&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowSlotPicker(false)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:24,padding:'28px 20px',border:'1px solid var(--border2)'}}>
+    <Modal show={showSlotPicker} onClose={()=>setShowSlotPicker(false)} align="center" bg=".9" zIndex={100}>
+      <div style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:24,padding:'28px 20px',border:'1px solid var(--border2)'}}>
         <div style={{textAlign:'center',marginBottom:20}}>
           <p style={{fontSize:40,margin:'0 0 8px'}}>⚔️</p>
           <h2 style={{margin:0,fontSize:22,fontWeight:900,color:'#f1f5f9',letterSpacing:'-.02em'}}>Choose Your Challenge</h2>
@@ -5831,7 +5858,7 @@ function App(){
         })()}
         <button onClick={()=>setShowSlotPicker(false)} style={{width:'100%',padding:'12px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,marginTop:4}}>Cancel</button>
       </div>
-    </div>}
+    </Modal>
 
     {/* CB Modal — flexible scheduling with "No fixed date/time" + quick picks */}
     {showCb&&<div style={MODAL_OVERLAY} onClick={()=>setShowCb(false)}>
@@ -5915,8 +5942,8 @@ function App(){
 
     {/* Appt Modal */}
     {/* ═══ COMBINED APPOINTMENT MODAL — picker + form in one surface ═══ */}
-    {showAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:100,display:'flex',alignItems:'stretch',justifyContent:'center'}} onClick={()=>setShowAppt(false)}>
-      <div onClick={ev=>ev.stopPropagation()} className="glass" style={{width:'100%',maxWidth:980,maxHeight:'100vh',overflowY:'auto',borderRadius:0,padding:'16px 14px 32px'}}>
+    <Modal show={showAppt} onClose={()=>setShowAppt(false)} align="stretch" bg=".88" zIndex={100}>
+      <div style={{width:'100%',maxWidth:980,maxHeight:'100vh',overflowY:'auto',borderRadius:0,padding:'16px 14px 32px'}} className="glass">
         {/* Header */}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:8,position:'sticky',top:-16,background:'rgba(17,24,39,.92)',backdropFilter:'blur(8px)',padding:'8px 0',zIndex:2,margin:'-16px -14px 10px',paddingLeft:14,paddingRight:14}}>
           <div style={{flex:1,minWidth:0}}>
@@ -6146,8 +6173,7 @@ function App(){
               if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
               DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation,shaky:apptShaky},_user?.id);
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
-              if(window._lastUndo&&window._lastUndo.status==='set'){window._lastUndo.calEventId=evt?.id||'';window._lastUndo.apptId=lead?.phone}
-              if(apptShaky&&lead?.phone)setShaky(lead.phone,true);
+              if(appStateRef.current._lastUndo&&appStateRef.current._lastUndo.status==='set'){appStateRef.current._lastUndo.calEventId=evt?.id||'';appStateRef.current._lastUndo.apptId=lead?.phone}
               if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs,shaky:apptShaky}:a));
               // Invalidate picker cache so the new booking shows up on next open
               pickerEventsCacheRef.current={key:'',ts:0,data:null};
@@ -6159,11 +6185,11 @@ function App(){
             setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:(!apptDate||!apptTime)?'var(--bg3)':'linear-gradient(135deg,var(--green),#059669)',color:(!apptDate||!apptTime)?'var(--text3)':'#fff',fontSize:14,fontWeight:800,borderRadius:12,opacity:(!apptDate||!apptTime)?.5:1}}>📅 Create Appointment</button>
         </div>
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ TIP INPUT MODAL — Met→Closed / Pending→Closed flow ═══ */}
-    {tipModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:101,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setTipModal(null)}>
-      <div onClick={e=>e.stopPropagation()} className="glass fi" style={{width:'100%',maxWidth:420,borderRadius:20,padding:'24px 22px',border:'1px solid rgba(240,180,41,.3)'}}>
+    <Modal show={tipModal} onClose={()=>setTipModal(null)} align="center" bg=".85" zIndex={101}>
+      <div style={{width:'100%',maxWidth:420,borderRadius:20,padding:'24px 22px',border:'1px solid rgba(240,180,41,.3)'}} className="glass fi">
         <div style={{textAlign:'center',marginBottom:16}}>
           <p style={{margin:0,fontSize:32}}>💰</p>
           <h3 style={{margin:'6px 0 2px',fontSize:18,fontWeight:800,color:'var(--gold)'}}>{role==='main'?'EFYC Amount':'Tip Amount'}</h3>
@@ -6212,7 +6238,7 @@ function App(){
           }} style={{flex:2,padding:'12px',borderRadius:12,background:'linear-gradient(135deg,var(--gold),#d97706)',color:'#fff',fontSize:13,fontWeight:800,boxShadow:'0 4px 16px rgba(240,180,41,.3)'}}>💰 Mark Closed</button>
         </div>
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ TIP CELEBRATION OVERLAY — intensity scales by $100 up to $1000 ═══ */}
     {celebration&&(()=>{const t=celebration.tier;
@@ -6258,8 +6284,8 @@ function App(){
     </div>}
 
     {/* ═══ Column Picker Modal (ambiguous status/remarks) ═══ */}
-    {showColPicker&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowColPicker(null)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:400,background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
+    <Modal show={showColPicker} onClose={()=>setShowColPicker(null)} align="center" bg=".85" zIndex={100}>
+      <div style={{width:'100%',maxWidth:400,background:'var(--bg2)',borderRadius:20,padding:'24px 20px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 6px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>Which column has status/remarks?</h3>
         <p style={{margin:'0 0 16px',fontSize:12,color:'var(--text3)'}}>Multiple columns look like they could contain lead status. Pick the one that has NI/NP/CB/Set info:</p>
         {showColPicker.candidates.map(col=>{
@@ -6294,13 +6320,13 @@ function App(){
           </button>})}
         <button onClick={()=>setShowColPicker(null)} style={{width:'100%',padding:'12px',borderRadius:14,background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,marginTop:4}}>Skip — keep all as Pending</button>
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ Session Replay Modal ═══ */}
 
     {/* ═══ Column Map Override Modal ═══ */}
-    {showColMap&&rawSheet&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowColMap(false)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
+    <Modal show={showColMap&&rawSheet} onClose={()=>setShowColMap(false)} align="center" bg=".88" zIndex={100}>
+      <div style={{width:'100%',maxWidth:440,maxHeight:'85vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 4px',fontSize:16,fontWeight:800,color:'#f1f5f9'}}>🔧 Column Mapping</h3>
         <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)'}}>Tap a role to reassign. Changes re-import your leads.</p>
         {(()=>{
@@ -6375,12 +6401,12 @@ function App(){
           </div>
         })()}
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ Session Replay Modal ═══ */}
     {/* ═══ CYCLE CLOSE PREVIEW MODAL ═══ */}
-    {cycleCloseModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:103,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setCycleCloseModal(null)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:460,maxHeight:'88vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'18px 16px',border:'1px solid var(--border2)'}}>
+    <Modal show={cycleCloseModal} onClose={()=>setCycleCloseModal(null)} align="center" bg=".88" zIndex={103}>
+      <div style={{width:'100%',maxWidth:460,maxHeight:'88vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'18px 16px',border:'1px solid var(--border2)'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
           <div><h3 style={{margin:0,fontSize:17,fontWeight:800,color:'#f1f5f9'}}>🔒 Close Cycle {cycleCloseModal.cycleNum}</h3>
             <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)'}}>Archive unpaid work into a locked billing cycle</p></div>
@@ -6425,14 +6451,14 @@ function App(){
           }} style={{flex:2,padding:'11px',borderRadius:12,background:'linear-gradient(135deg,var(--amber),#d97706)',color:'#fff',fontSize:12,fontWeight:800,border:'none',boxShadow:'0 2px 10px rgba(210,153,34,.35)'}}>🔒 Close Cycle {cycleCloseModal.cycleNum}</button>
         </div>
       </div>
-    </div>}
+    </Modal>
 
     {/* ═══ INVITE LINK MODAL ═══ */}
     {showInviteLink&&(()=>{
       const _token=btoa(JSON.stringify({main:myEmail,ts:Date.now()})).replace(/=+$/,'');
       const _url=window.location.origin+window.location.pathname+'?invite='+encodeURIComponent(_token);
-      return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:103,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowInviteLink(false)}>
-        <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:440,background:'var(--bg2)',borderRadius:20,padding:'18px 16px',border:'1px solid var(--border2)'}}>
+      return<Modal show={true} onClose={()=>setShowInviteLink(false)} align="center" bg=".88" zIndex={103}>
+    <div style={{width:'100%',maxWidth:440,background:'var(--bg2)',borderRadius:20,padding:'18px 16px',border:'1px solid var(--border2)'}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
             <h3 style={{margin:0,fontSize:17,fontWeight:800,color:'#f1f5f9'}}>🔗 Invite Admin</h3>
             <button onClick={()=>setShowInviteLink(false)} style={{width:30,height:30,borderRadius:10,background:'var(--bg3)',color:'var(--text3)',padding:0,fontSize:16,border:'none'}}>×</button>
@@ -6451,7 +6477,7 @@ function App(){
           </div>
           <p style={{margin:0,fontSize:10,color:'var(--text3)',textAlign:'center'}}>You'll still need to approve them once they sign up.</p>
         </div>
-      </div>})()}
+  </Modal>})()}
 
     {/* ═══ LIVE PAYNOW QR MODAL ═══ */}
     {payQRModal&&(()=>{const m=payQRModal;const isBatch=!!(m.queue&&m.queue.length>=0&&m.queueTotal);
@@ -6478,8 +6504,8 @@ function App(){
         else{setPayQRModal(null)}
       };
       const _skip=()=>{if(isBatch&&m.queue&&m.queue.length>0){const next=m.queue[0];const rest=m.queue.slice(1);setPayQRModal({...next,queue:rest,queueTotal:m.queueTotal,queueIdx:(m.queueIdx||1)+1})}else{setPayQRModal(null)}};
-      return<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.92)',zIndex:102,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setPayQRModal(null)}>
-        <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:400,maxHeight:'92vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'18px 16px 14px',border:'1px solid var(--border2)'}}>
+      return<Modal show={true} onClose={()=>setPayQRModal(null)} align="center" bg=".92" zIndex={102}>
+    <div style={{width:'100%',maxWidth:400,maxHeight:'92vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'18px 16px 14px',border:'1px solid var(--border2)'}}>
           {/* Header */}
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
             <div><h3 style={{margin:0,fontSize:17,fontWeight:800,color:'#f1f5f9'}}>💳 Pay via PayNow</h3>
@@ -6539,10 +6565,10 @@ function App(){
             <button onClick={_confirmPaid} style={{flex:2,padding:'11px',borderRadius:12,background:'linear-gradient(135deg,#22c55e,#16a34a)',color:'#fff',fontSize:12,fontWeight:800,border:'none',boxShadow:'0 2px 10px rgba(34,197,94,.3)'}}>✓ I've Transferred</button>
           </div>
         </div>
-      </div>})()}
+  </Modal>})()}
 
-    {showReplay&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setShowReplay(null)}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
+    <Modal show={showReplay} onClose={()=>setShowReplay(null)} align="center" bg=".85" zIndex={100}>
+      <div style={{width:'100%',maxWidth:480,maxHeight:'80vh',overflow:'auto',background:'var(--bg2)',borderRadius:20,padding:'20px 16px',border:'1px solid var(--border2)'}}>
         <h3 style={{margin:'0 0 14px',fontSize:17,fontWeight:800,color:'#f1f5f9'}}>📹 Session Replay</h3>
         {showReplay.log?.length?showReplay.log.map((l,i)=>{
           const t=new Date(l.ts);const icons={call:'📲',np:'🔸',cb:'🔵',ni:'🔴',set:'✅',skip:'⏭'};
@@ -6555,7 +6581,7 @@ function App(){
         }):<p style={{color:'var(--text3)',textAlign:'center',padding:20}}>No call log available for this session</p>}
         <button onClick={()=>setShowReplay(null)} style={{width:'100%',marginTop:14,padding:'12px',borderRadius:14,background:'var(--bg3)',color:'var(--text3)',fontSize:13}}>Close</button>
       </div>
-    </div>}
+    </Modal>
   </div>
 
   {/* ═══ DESKTOP SCRIPT PANEL ═══ */}
