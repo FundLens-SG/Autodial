@@ -4380,7 +4380,7 @@ function App(){
                       const top=Math.max(0,(sh-HR_START)*HOUR_PX);
                       const height=Math.max(20,(Math.min(eh,HR_END)-Math.max(sh,HR_START))*HOUR_PX-2);
                       const hrsLabel=s.hours>=1?s.hours.toFixed(s.hours%1===0?0:1)+'h':Math.round(s.hours*60)+'m';
-                      return<div key={'fs-'+si} className="free-slot" title={'Free · '+hrsLabel+' · click to book'} onClick={gOk&&role!=='admin'?async()=>{
+                      return<div key={'fs-'+si} className="free-slot" title={'Free · '+hrsLabel+' · click to book'} onClick={gOk?async()=>{
                         const title=prompt('New event title for '+fmtDayMonth(d.date)+' '+s.start.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+':');
                         if(!title)return;
                         try{toast('Creating event…','info');
@@ -4391,10 +4391,10 @@ function App(){
                           if(evt?.id){toast('✓ Event created');setWeekEvents(p=>[...p,{id:evt.id,summary:title,start:{dateTime:s.start.toISOString()},end:{dateTime:_end.toISOString()},_calId:'primary'}])}
                           else{toast('Create failed','err')}
                         }catch(e){toast('Create failed: '+(e.message||e),'err')}
-                      }:undefined} style={{position:'absolute',left:2,right:2,top:top+2,height,borderRadius:5,padding:'3px 4px',fontSize:9,fontWeight:700,overflow:'hidden',color:'#86efac',cursor:(gOk&&role!=='admin')?'pointer':'default',zIndex:0}}>
+                      }:undefined} style={{position:'absolute',left:2,right:2,top:top+2,height,borderRadius:5,padding:'3px 4px',fontSize:9,fontWeight:700,overflow:'hidden',color:'#86efac',cursor:gOk?'pointer':'default',zIndex:0}}>
                         <div style={{fontSize:8,fontWeight:800,color:'#22c55e',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>✨ Free · {hrsLabel}</div>
                         {height>32&&<div style={{fontSize:7,opacity:.85,marginTop:1}}>{String(s.start.getHours()).padStart(2,'0')}:{String(s.start.getMinutes()).padStart(2,'0')} – {String(s.end.getHours()).padStart(2,'0')}:{String(s.end.getMinutes()).padStart(2,'0')}</div>}
-                        {height>52&&gOk&&role!=='admin'&&<div style={{fontSize:7,color:'#22c55e',fontWeight:800,marginTop:2,padding:'1px 4px',borderRadius:3,background:'rgba(34,197,94,.15)',display:'inline-block'}}>+ BOOK</div>}
+                        {height>52&&gOk&&<div style={{fontSize:7,color:'#22c55e',fontWeight:800,marginTop:2,padding:'1px 4px',borderRadius:3,background:'rgba(34,197,94,.15)',display:'inline-block'}}>+ BOOK</div>}
                       </div>
                     })}
                     {_evT.map(({ev,start,end},ei)=>{
@@ -4467,7 +4467,7 @@ function App(){
                       <p className="mono" style={{margin:0,fontSize:10,fontWeight:700,color:isBig?'#22c55e':'var(--text3)'}}>{timeStr}</p>
                       <p style={{margin:'2px 0 0',fontSize:11,fontWeight:600,color:isBig?'#86efac':'var(--text3)'}}>{isBig?'✨ Free · ':'Gap · '}{hrsLabel}</p>
                     </div>
-                    {isBig&&role!=='admin'&&gOk&&<button onClick={async()=>{
+                    {isBig&&gOk&&<button onClick={async()=>{
                       const title=prompt('New event title (e.g. "Call Winnie", "Prep meeting"):');
                       if(!title)return;
                       try{toast('Creating event…','info');
