@@ -937,7 +937,13 @@ window.DB={
   // Appointments
   async saveAppt(a,uid){if(!_SB)return;try{await _SB.from('autodial_appointments').insert({
     admin_id:uid,admin_email:a.admin||'',lead_name:a.name,lead_phone:a.phone,appt_date:a.apptDate,appt_time:a.apptTime,
-    duration_mins:a.duration||60,calendar_event_id:a.calEventId||'',invite_emails:a.inviteEmails||''})}catch(e){}},
+    duration_mins:a.duration||60,calendar_event_id:a.calEventId||'',invite_emails:a.inviteEmails||'',shaky:!!a.shaky})}catch(e){console.warn('[saveAppt] If this is a schema error, run: alter table autodial_appointments add column shaky boolean default false;',e?.message||e)}},
+  // Update shaky flag on existing appointment — matched by admin+phone+date (no id required)
+  async updateApptShaky(adminEmail,phone,apptDate,shaky){if(!_SB)return false;try{
+    const q=_SB.from('autodial_appointments').update({shaky:!!shaky}).eq('lead_phone',phone||'').eq('appt_date',apptDate||'');
+    const r=await(adminEmail?q.eq('admin_email',adminEmail):q);
+    return !r.error
+  }catch(e){console.warn('[updateApptShaky]',e?.message||e);return false}},
   async getAppts(email){if(!_SB)return[];try{var r=await _SB.from('autodial_appointments').select('*').eq('admin_email',email).order('created_at',{ascending:false});return r.data||[]}catch(e){return[]}},
   async getAllAppts(){if(!_SB)return[];try{var r=await _SB.from('autodial_appointments').select('*').order('created_at',{ascending:false});return r.data||[]}catch(e){return[]}},
   async updateApptFollowUp(id,followUp,tip){if(!_SB)return;try{await _SB.from('autodial_appointments').update({follow_up:followUp,follow_up_date:new Date().toISOString(),tip:tip||0}).eq('id',id)}catch(e){}},
@@ -2251,7 +2257,7 @@ function App(){
         // Load from start of today through 4 weeks (28 days)
         const now=new Date();
         const minD=new Date(now.getFullYear(),now.getMonth(),now.getDate());
-        const maxD=new Date(minD.getTime()+28*86400000);
+        const maxD=new Date(minD.getTime()+56*86400000); // 8 weeks forward
         const evs=await gCal.loadRange(calFetchList,minD,maxD);
         if(!cancelled){setPickerEvents(evs);setPickerLoading(false)}
       }catch(e){if(!cancelled){setPickerEvents([]);setPickerLoading(false)}}
@@ -2546,8 +2552,19 @@ function App(){
                 followUp:a.follow_up||'pending',tip:a.tip||0,
                 createdAt:a.created_at||new Date().toISOString(),
                 followUpDate:a.follow_up_date||null,
+                shaky:!!a.shaky, // ← cross-device shaky sync
                 location:'',industry:'',remarks:'',gender:'',age:''
               })});
+            // Hydrate local shakyMap from cloud rows so UI stays in sync without waiting for a render cycle
+            (()=>{try{
+              const next={...(shakyMap||{})};
+              let changed=false;
+              dbAppts.forEach(a=>{
+                if(a.shaky&&a.lead_phone){if(!next[a.lead_phone]){next[a.lead_phone]=true;changed=true}}
+                else if(a.lead_phone&&next[a.lead_phone]){delete next[a.lead_phone];changed=true}
+              });
+              if(changed){setShakyMap(next);localStorage.setItem('shakyAppts',JSON.stringify(next))}
+            }catch(e){}})();
             return _dedupAppts(merged)});
         }
       }catch(e){console.warn('[HardSync]',e.message)}
@@ -4143,7 +4160,10 @@ function App(){
           {/* Shaky tickbox — tap to toggle whether this slot reappears as an "available (shaky)" slot in future pickers */}
           {a.apptDate&&(()=>{
             const isShaky=!!(shakyMap&&shakyMap[a.phone])||!!a.shaky;
-            return<div onClick={e=>{e.stopPropagation();const next=!isShaky;setShaky(a.phone,next);setAppointments(p=>p.map(x=>x.id===a.id?{...x,shaky:next}:x));toast(next?'🟠 Marked as shaky':'Shaky removed','info')}} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'3px 8px',marginBottom:6,borderRadius:8,background:isShaky?'linear-gradient(135deg,rgba(251,146,60,.15),rgba(234,88,12,.08))':'var(--bg3)',border:'1px solid '+(isShaky?'rgba(251,146,60,.5)':'var(--border)'),cursor:'pointer',fontSize:9,fontWeight:700,color:isShaky?'#fb923c':'var(--text3)',boxShadow:isShaky?'0 0 6px rgba(251,146,60,.25)':'none'}}>
+            return<div onClick={e=>{e.stopPropagation();const next=!isShaky;setShaky(a.phone,next);setAppointments(p=>p.map(x=>x.id===a.id?{...x,shaky:next}:x));
+              // Sync shaky flag to Supabase so other devices see it
+              DB.updateApptShaky(a.admin||myEmail,a.phone,a.apptDate,next).then(ok=>{if(!ok&&_SB)console.warn('[Shaky] cloud sync failed — local only')}).catch(()=>{});
+              toast(next?'🟠 Marked as shaky · synced':'Shaky removed · synced','info')}} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'3px 8px',marginBottom:6,borderRadius:8,background:isShaky?'linear-gradient(135deg,rgba(251,146,60,.15),rgba(234,88,12,.08))':'var(--bg3)',border:'1px solid '+(isShaky?'rgba(251,146,60,.5)':'var(--border)'),cursor:'pointer',fontSize:9,fontWeight:700,color:isShaky?'#fb923c':'var(--text3)',boxShadow:isShaky?'0 0 6px rgba(251,146,60,.25)':'none'}}>
               <span style={{width:12,height:12,borderRadius:3,background:isShaky?'linear-gradient(135deg,#fb923c,#ea580c)':'var(--bg)',border:'1px solid '+(isShaky?'#fb923c':'var(--border2)'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:9,fontWeight:800}}>{isShaky?'✓':''}</span>
               🟠 Shaky
             </div>
@@ -5748,7 +5768,7 @@ function App(){
       const todayKey=localDateKey(todayMid);
       // Build 4 weeks of days starting from the current week's Sunday
       const weekStart0=startOfWeek(todayMid);
-      const TOTAL_WEEKS=4;
+      const TOTAL_WEEKS=8; // 8-week lookahead
       const allDays=[];
       for(let w=0;w<TOTAL_WEEKS;w++){
         for(let i=0;i<7;i++){
@@ -6006,7 +6026,7 @@ function App(){
               const evt=await gCal.create('Appt: '+(lead?.name||'')+(apptLocation?' @ '+apptLocation:''),desc,s.toISOString(),end.toISOString(),invites);
               // Remember new invitees
               if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
-              DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation},_user?.id);
+              DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation,shaky:apptShaky},_user?.id);
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
               // Wire undo: attach calEventId so doUndo can delete the gCal event
               if(window._lastUndo&&window._lastUndo.status==='set'){window._lastUndo.calEventId=evt?.id||'';window._lastUndo.apptId=lead?.phone}
