@@ -1858,7 +1858,19 @@ const MilestonePopup=({show,title,sub,emoji,onClose})=>{if(!show)return null;
 
 // ══════ MAIN APP ══════
 function App(){
-  const role=window._role||'admin';
+  // ═══ STRICT ROLE RESOLUTION ═══
+  // role='main' REQUIRES one of two explicit signals:
+  //   (a) Email is in the CREATOR list (owner account), OR
+  //   (b) Supabase profile has autodial_role === 'main' LITERALLY (app-specific column)
+  // Everything else — including stale window._role='main', localStorage fallback, legacy
+  // profile.role='main' column, 'both', 'authenticated', undefined — resolves to 'admin'.
+  // This prevents admin accounts from seeing the CALL/MGMT toggle or the Warrior/ML rank
+  // system, both of which are main-only features.
+  const _profEmail=(window._prof?.email||window._user?.email||'').toLowerCase();
+  const _autodialRole=window._prof?.autodial_role;
+  const _isCreator=isCreator(_profEmail);
+  const role=(_isCreator||_autodialRole==='main')?'main':'admin';
+  console.log('[AutoDial] Role resolved:',{email:_profEmail,resolved:role,isCreator:_isCreator,autodial_role:_autodialRole,legacy_role:window._prof?.role,window_role:window._role});
   const stored=load('data')||{};
   // Single ref bag for React-internal non-reactive state that used to live on window._*.
   // Only for state that is set AND read exclusively from inside this component — any global
@@ -2004,6 +2016,10 @@ function App(){
   const[cbQueue,setCbQueue]=useState([]);     // Callback queue
   const[notifications,setNotifications]=useState([]);
   const[waTemplates,setWaTemplates]=useState([]);
+  // Tracks whether WA templates have finished their initial load from the cloud.
+  // Writes (including intentional delete-all to empty) only propagate AFTER this is true,
+  // so we don't wipe the cloud during the brief moment between mount and first fetch.
+  const waInitRef=useRef(false);
   const[calShares,setCalShares]=useState([]);
   const[calList,setCalList]=useState([]);
   const[weekEvents,setWeekEvents]=useState([]); // Events for the coming week across shared/own calendars
@@ -2087,7 +2103,9 @@ function App(){
   const[showApprovalModal,setShowApprovalModal]=useState(false);
   const[showHelp,setShowHelp]=useState(!localStorage.getItem('autodial_seen_help'));
   const[showMoreMenu,setShowMoreMenu]=useState(false);
-  const[settingsSubtab,setSettingsSubtab]=useState('prefs');
+  const[settingsSubtab,setSettingsSubtab]=useState(role==='admin'?'prefs':'integr');
+  // If a main somehow lands on 'prefs' (which doesn't exist for mains), redirect to integr
+  useEffect(()=>{if(role!=='admin'&&settingsSubtab==='prefs')setSettingsSubtab('integr')},[role,settingsSubtab]);
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
   const[showPostCall,setShowPostCall]=useState(null);
@@ -2400,13 +2418,14 @@ function App(){
     if(tab==='dial'||showAppt)loadPickerEventsIfStale();
   },[tab,showAppt,gOk,loadPickerEventsIfStale]);
 
-  // Hard sync WA templates (shared + own key for cross-device)
+  // Hard sync WA templates (shared + own key for cross-device).
+  // IMPORTANT: writes propagate even when waTemplates is empty, so a deliberate "Delete All"
+  // flows to the cloud. The waInitRef guard prevents the initial pre-fetch empty state from
+  // wiping cloud templates before they've loaded.
   useEffect(()=>{
-    if(_SB&&window._cloudReady&&waTemplates.length){
-      if(role!=='admin')_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(function(){});
-
-      if(_user){_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+_user.email.toLowerCase(),biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}}
-
+    if(!_SB||!window._cloudReady||!waInitRef.current)return;
+    if(role!=='admin')_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(function(){});
+    if(_user){_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+_user.email.toLowerCase(),biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}
   },[waTemplates]);
   useEffect(()=>{save('mainMode',mainMode);cloudSave('mainMode',mainMode)},[mainMode]);
   useEffect(()=>{save('invitees',savedInvitees);cloudSave('invitees',savedInvitees)},[savedInvitees]);
@@ -2697,12 +2716,24 @@ function App(){
 
     // Load CB queue
     DB.getCBQueue((role==='admin'||(role==='main'&&mainMode==='call'))?myEmail:null).then(setCbQueue);
-    // Load WA templates
-    DB.getWATemplates().then(t=>{
-        if(t&&t.length)setWaTemplates(t);
-        else if(role==='admin'&&_SB){_SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_wa_templates').single().then(r=>{
-          if(r.data&&r.data.biz_name){try{const shared=JSON.parse(r.data.biz_name);if(shared.length)setWaTemplates(shared)}catch(e){}}})}
-      });
+    // Load WA templates — dedupe by name (is_default seeds can duplicate user templates).
+    // Respects the "ad_wa_cleared_<email>" flag: if user explicitly deleted all templates,
+    // stay empty and never refetch the seed table (which contains is_default rows that
+    // the user can't delete via RLS). Mark waInitRef=true after resolving so subsequent
+    // writes (including delete-all) are allowed to propagate to the cloud.
+    if(localStorage.getItem('ad_wa_cleared_'+myEmail)==='1'){
+      setWaTemplates([]);
+      waInitRef.current=true;
+    }else{
+      DB.getWATemplates().then(t=>{
+          const dedup=(arr)=>{const seen=new Set();return(arr||[]).filter(x=>{const k=(x.name||'').toLowerCase();if(seen.has(k))return false;seen.add(k);return true})};
+          if(t&&t.length){setWaTemplates(dedup(t));waInitRef.current=true}
+          else if(role==='admin'&&_SB){_SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_wa_templates').single().then(r=>{
+            if(r.data&&r.data.biz_name){try{const shared=JSON.parse(r.data.biz_name);setWaTemplates(dedup(shared))}catch(e){}}
+            waInitRef.current=true})}
+          else{waInitRef.current=true}
+        });
+    }
     // Load notifications
     if(_user?.id)DB.getNotifs(_user.id).then(setNotifications);
     // Main: subscribe to live feed
@@ -2825,7 +2856,9 @@ function App(){
 
         const gk=p('gemini_');if(gk?.key){const cur=localStorage.getItem('autodial_gemini');if(gk.key!==cur){setGeminiKeyVal(gk.key);localStorage.setItem('autodial_gemini',gk.key)}}
         const ck=p('claude_');if(ck?.key){const cur=localStorage.getItem('autodial_claude_key');if(ck.key!==cur){setClaudeKeyVal(ck.key);localStorage.setItem('autodial_claude_key',ck.key)}}
-        const wt=p('watpl_');if(wt?.length)setWaTemplates(prev=>JSON.stringify(wt)!==JSON.stringify(prev)?wt:prev);
+        // WA templates intentionally NOT pulled here — they're user-curated config, not append-only log.
+        // Pulling them on every 60s cycle would resurrect deleted templates. Initial load (DB.getWATemplates)
+        // handles cross-device sync when a device first opens the app.
         const ac=p('acfg_');if(ac&&Object.keys(ac).length)setAdminConfigs(prev=>JSON.stringify(ac)!==JSON.stringify(prev)?ac:prev);
         const ad=p('apptdur_');if(ad?.dur)setApptDuration(prev=>ad.dur!==prev?ad.dur:prev);
         const sr=p('stars_');if(sr?.stars)setTotalStars(prev=>sr.stars>prev?sr.stars:prev);
@@ -3007,8 +3040,10 @@ function App(){
     s.creditHours=creditH;s.tsNote=tsNote;
     s.fullSession=full;s.bonus=bonus;s.bonusMult=n(myCfg.bonusMult,1.5);s.hourlyRate=hourlyRate;s.tier=tier.label;
     // ═══ PROMOTION DETECTION: compare tier vs most recent session ═══
+    // Skip entirely for mains — they don't earn hourly pay, so pay-tier promotions don't apply to them
+    // even when they're using Call mode for practice sessions.
     const _prevSess=sessionLog[0];
-    if(_prevSess&&_prevSess.tier&&_prevSess.tier!==tier.label){
+    if(role!=='main'&&_prevSess&&_prevSess.tier&&_prevSess.tier!==tier.label){
       // Find tier indices to determine direction
       const _tierOrder=['Bronze','Silver','Gold','Platinum','Platinum Ruby','Platinum Elite'];
       const _prevIdx=_tierOrder.indexOf(_prevSess.tier);const _curIdx=_tierOrder.indexOf(tier.label);
@@ -3370,8 +3405,8 @@ function App(){
       const _todayAppts=appointments.filter(a=>a.createdAt&&new Date(a.createdAt).toDateString()===_todayKey);
       const _todayClosed=_todayAppts.filter(a=>a.followUp==='closed');
       const _todayRevenue=_todayClosed.reduce((a,x)=>a+(x.efyc||0),0);
-      // Recent promotions (last 7 days)
-      const _recentProm=(promotionLog||[]).filter(p=>(_now-new Date(p.date).getTime())<(7*_oneDay)).slice(0,5);
+      // Recent promotions (last 7 days) — exclude main's own entries (mains have no basic pay, so their entries are stale data from before the role guard)
+      const _recentProm=(promotionLog||[]).filter(p=>(p.admin||'').toLowerCase()!==myEmail.toLowerCase()&&(_now-new Date(p.date).getTime())<(7*_oneDay)).slice(0,5);
       return <div className='content-pad'>
         {/* Today banner */}
         <div className="card" style={{marginBottom:10,background:'linear-gradient(135deg,rgba(99,102,241,.08),rgba(139,92,246,.04))',borderColor:'rgba(99,102,241,.25)'}}>
@@ -5115,7 +5150,7 @@ function App(){
       {/* ═══ Settings subtabs: Prefs / Integrations / Team ═══ */}
       <div style={{display:'flex',gap:4,marginBottom:14,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)'}}>
         {[
-          ['prefs','⚙️','Prefs'],
+          ...(role==='admin'?[['prefs','⚙️','Prefs']]:[]),
           ['integr','🔗','Integrations'],
           ...(isManageMode?[['team','👥','Team']]:[])
         ].map(([_k,_ic,_lbl])=><button key={_k} onClick={()=>setSettingsSubtab(_k)} style={{flex:1,padding:'9px 6px',borderRadius:8,background:settingsSubtab===_k?'var(--adim)':'transparent',color:settingsSubtab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}><span style={{fontSize:13}}>{_ic}</span>{_lbl}</button>)}
@@ -5581,7 +5616,18 @@ function App(){
       {isManageMode&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates</h3>
-          {waTemplates.length>0&&<Btn variant="danger" size="sm" weight={600} radius={6} onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});setWaTemplates([]);toast('All templates deleted')}}>Delete All</Btn>}
+          {waTemplates.length>0&&<Btn variant="danger" size="sm" weight={600} radius={6} onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;
+            // Delete from the WA templates table (best-effort; may silently fail for is_default seeds)
+            waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});
+            // Explicitly wipe the config-key copies so a subsequent pull/reload doesn't resurrect them
+            if(_SB&&_user){
+              _SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+_user.email.toLowerCase(),biz_name:JSON.stringify([])},{onConflict:'admin_email'}).catch(()=>{});
+              if(role!=='admin')_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify([])},{onConflict:'admin_email'}).catch(()=>{});
+            }
+            // Persist a "user cleared" flag so next mount skips the seed-table fetch (which might contain is_default rows the user can't delete)
+            try{localStorage.setItem('ad_wa_cleared_'+(_user?.email||''),'1')}catch(e){}
+            setWaTemplates([]);toast('All templates deleted')
+          }}>Delete All</Btn>}
         </div>
         <p style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Message templates for WhatsApp. Placeholders: {'{{name}}, {{date}}, {{time}}, {{admin}}, {{company}}'}</p>
         {waTemplates.map((t,i)=><div key={t.id||i} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
@@ -5600,6 +5646,8 @@ function App(){
             <option value="appointment">Appointment</option><option value="reminder">Reminder</option><option value="followup">Follow-up</option><option value="custom">Custom</option>
           </select>
           <button onClick={()=>{if(!newWA.name||!newWA.template)return toast('Fill name and template','err');
+            // Clear the "user cleared all" flag since they're adding templates again
+            try{localStorage.removeItem('ad_wa_cleared_'+(_user?.email||''))}catch(e){}
             DB.saveWATemplate(newWA,_user?.id);setWaTemplates(p=>{const updated=[...p,{...newWA,id:Date.now()}];
               if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(updated)},{onConflict:'admin_email'})}catch(e){}}
               return updated});setNewWA({name:'',template:'',category:'appointment'});toast('Template saved')
@@ -5618,7 +5666,7 @@ function App(){
       </div>}
       </>}
 
-      {settingsSubtab==='prefs'&&<button onClick={()=>authLogout()} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>}
+      {settingsSubtab==='prefs'&&role==='admin'&&<button onClick={()=>authLogout()} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>}
     </div>}
 
     {/* ═══ ACHIEVEMENT POPUP ═══ */}
