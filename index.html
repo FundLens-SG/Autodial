@@ -2049,11 +2049,25 @@ function App(){
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
   useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
-    if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})}},[geminiKeyVal]);
+    if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})
+    // ═══ AUTO-SHARE: if main is in manage mode, auto-publish Gemini key to admins (no button click needed) ═══
+    if(role==='main'&&mainMode==='manage'&&_SB&&window._cloudReady){
+      setCfg(s=>{if(s.sharedGeminiKey===geminiKeyVal)return s;const next={...s,sharedGeminiKey:geminiKeyVal};
+        try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{})}catch(e){}
+        return next})
+    }
+  }},[geminiKeyVal]);
   // ═══ Claude key: persist to localStorage + sync to Supabase (same pattern as Gemini) ═══
   useEffect(()=>{
     if(claudeKeyVal){localStorage.setItem('autodial_claude_key',claudeKeyVal);
-      if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})}
+      if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})
+      // ═══ AUTO-SHARE: if main is in manage mode, auto-publish Claude key to admins (no button click needed) ═══
+      if(role==='main'&&mainMode==='manage'&&_SB&&window._cloudReady){
+        setCfg(s=>{if(s.sharedClaudeKey===claudeKeyVal)return s;const next={...s,sharedClaudeKey:claudeKeyVal};
+          try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{})}catch(e){}
+          return next})
+      }
+    }
   },[claudeKeyVal]);
 
   // ═══ DESKTOP SCRIPT PANEL ═══
@@ -2464,6 +2478,7 @@ function App(){
             const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
             if(r.data&&r.data.biz_name){
               try{const myCfgFromMain=JSON.parse(r.data.biz_name);
+              // Manager is authoritative for admin's own config row — manager's values always win (including sharedCals)
               setAdminConfigs(p=>({...p,[myEmail]:Object.assign({},p[myEmail]||{},myCfgFromMain)}));
               DBG('[AutoDial] Loaded config from Main:',Object.keys(myCfgFromMain))}catch(pe){}
             }
@@ -2472,7 +2487,18 @@ function App(){
             const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
             if(gr.data&&gr.data.biz_name){
               try{const globalCfg=JSON.parse(gr.data.biz_name);
-              setCfg(p=>{const merged={...p};Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});return merged});
+              // ═══ FIX: manager-owned global keys must ALWAYS overwrite on admin side. Previous "only fill empty" logic meant stale Gemini/Claude keys & team rules stuck around forever. ═══
+              const GLOBAL_OVERWRITE=['sharedGeminiKey','sharedClaudeKey','payRates','tierMins','sessionDur','mThresh','nThresh','bonusMult','metIncentive','starThresholds','npMax','cpl','delay','callingScript','refNotes'];
+              setCfg(p=>{
+                const merged={...p};
+                // Fill any empty slots (original behaviour preserved for other keys)
+                Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});
+                // Force overwrite for manager-owned keys
+                GLOBAL_OVERWRITE.forEach(k=>{if(globalCfg[k]!==undefined)merged[k]=globalCfg[k]});
+                return merged;
+              });
+              // Propagate Claude key to the window-level fallback used by claudeKey() helper
+              if(globalCfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key'))window._sharedClaudeKey=globalCfg.sharedClaudeKey;
               DBG('[AutoDial] Loaded global config')}catch(pe){}
             }
           }catch(e){console.warn('[AdminCfg]',e.message||'no global config')}
@@ -5376,15 +5402,17 @@ function App(){
             {gOk&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
                 <label style={{fontSize:10,color:'#4285f4',fontWeight:700}}>📅 Share Calendars with {em.split('@')[0]}</label>
-                {!calList.length&&<button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>Load</button>}
+                <button onClick={()=>gCalShare.listCalendars().then(setCalList)} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:600}}>{calList.length?'↻ Refresh':'Load'}</button>
               </div>
-              {calList.filter(c=>c.accessRole==='owner').length===0&&<p style={{fontSize:10,color:'var(--text3)',margin:0}}>No owned calendars loaded yet</p>}
-              {calList.filter(c=>c.accessRole==='owner').map(c=>{
+              {/* Include ALL calendars the user can read — owned + subscribed/invited. Owned/writer calendars can be ACL-shared; reader-only calendars still get metadata-shared so admin (if they have access too) can see events. */}
+              {calList.length===0&&<p style={{fontSize:10,color:'var(--text3)',margin:0}}>No calendars loaded yet — tap Load</p>}
+              {calList.filter(c=>c.accessRole&&c.accessRole!=='freeBusyReader').map(c=>{
                 const current=(ac.sharedCals||[]).find(s=>s.id===c.id);
                 const isShared=!!current;
+                const canACL=c.accessRole==='owner'||c.accessRole==='writer';
                 return<div key={c.id} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
                   <div style={{width:10,height:10,borderRadius:2,background:c.backgroundColor||'var(--accent)',flexShrink:0}}/>
-                  <span style={{flex:1,fontSize:11,color:isShared?'#f1f5f9':'var(--text3)',fontWeight:isShared?600:400,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.summary}</span>
+                  <span style={{flex:1,fontSize:11,color:isShared?'#f1f5f9':'var(--text3)',fontWeight:isShared?600:400,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.summary}{!canACL&&<span style={{fontSize:8,color:'var(--amber)',marginLeft:4}}>(invited)</span>}</span>
                   {isShared&&<label style={{display:'flex',alignItems:'center',gap:3,fontSize:9,color:'var(--text3)',cursor:'pointer'}}>
                     <input type="checkbox" checked={!!current.hideDetails} onChange={e=>{
                       const shares=[...(ac.sharedCals||[])];
@@ -5397,28 +5425,30 @@ function App(){
                   <button onClick={async()=>{
                     const shares=[...(ac.sharedCals||[])];
                     if(isShared){
-                      // Unshare: remove from list + revoke Google ACL
+                      // Unshare: remove from list + revoke Google ACL (if we were the owner)
                       const next=shares.filter(s=>s.id!==c.id);
                       setAdminConfigs(p=>({...p,[em]:{...p[em],sharedCals:next}}));
-                      try{
+                      if(canACL){try{
                         const acl=await gCalShare.getACL(c.id);
                         const rule=acl.find(r=>r.scope?.value?.toLowerCase()===em.toLowerCase());
                         if(rule)await gCalShare.unshare(c.id,rule.id);
                         toast('Unshared "'+c.summary+'"');
-                      }catch(e){toast('Unshare failed: '+e.message,'err')}
+                      }catch(e){toast('Unshared (metadata only)','info')}}
+                      else toast('Unshared "'+c.summary+'" (metadata only)');
                     }else{
-                      // Share: add to list + grant Google ACL
-                      const ok=await gCalShare.share(c.id,em,'reader');
+                      // Share: add to list + grant Google ACL (only if owner/writer)
+                      let ok=true;
+                      if(canACL){ok=await gCalShare.share(c.id,em,'reader')}
                       if(ok){
-                        shares.push({id:c.id,name:c.summary,hideDetails:false});
+                        shares.push({id:c.id,name:c.summary,hideDetails:false,viaACL:canACL});
                         setAdminConfigs(p=>({...p,[em]:{...p[em],sharedCals:shares}}));
-                        toast('Shared "'+c.summary+'" with '+em);
+                        toast(canACL?('Shared "'+c.summary+'" with '+em):('Tracked "'+c.summary+'" (invited cal — admin must have own access)'));
                       }else toast('Share failed — check Google permissions','err');
                     }
                   }} style={{padding:'4px 10px',borderRadius:6,background:isShared?'var(--rdim)':'var(--adim)',color:isShared?'var(--red)':'var(--accent2)',fontSize:10,fontWeight:700,flexShrink:0}}>{isShared?'Unshare':'Share'}</button>
                 </div>;
               })}
-              {(ac.sharedCals||[]).length>0&&<p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>✓ {em.split('@')[0]} can see these calendars when booking. "Busy only" hides event titles/locations.</p>}
+              {(ac.sharedCals||[]).length>0&&<p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>✓ {em.split('@')[0]} can see these calendars when booking. "Busy only" hides event titles/locations. <span style={{color:'var(--amber)'}}>(invited)</span> = event calendars from others you were added to.</p>}
             </div>}
             
           </div>}
@@ -5562,6 +5592,49 @@ function App(){
       </div>}
 
       {settingsSubtab==='integr'&&<>
+      {/* ═══ HARD SAVE ALL SETTINGS — force-persist every config to cloud + broadcast to admins ═══ */}
+      {isManageMode&&<button onClick={async()=>{
+        if(!_SB){toast('Not connected to cloud','err');return}
+        try{
+          toast('💾 Saving all settings…','info');
+          // 1) Save cfg locally
+          save('cfg',cfg);
+          // 2) Push cfg to cloud (user bucket)
+          try{cloudSave('cfg',cfg)}catch(e){}
+          // 3) Publish global cfg for all admins to pick up (includes sharedGeminiKey, sharedClaudeKey, team rules, etc.)
+          await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});
+          // 4) Save + publish per-admin configs (pay rates, tiers, shared calendars, sheets, etc.)
+          save('acfg',adminConfigs);
+          try{cloudSave('acfg',adminConfigs)}catch(e){}
+          publishAdminConfigs(adminConfigs);
+          // 5) Force-persist Gemini & Claude keys under dedicated rows too
+          if(geminiKeyVal&&_user)await _SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'});
+          if(claudeKeyVal&&_user)await _SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'});
+          // 6) WA templates
+          if(waTemplates&&waTemplates.length){try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(waTemplates)},{onConflict:'admin_email'})}catch(e){}}
+          toast('✅ All settings saved & synced to admins');
+        }catch(e){toast('Save failed: '+(e.message||e),'err')}
+      }} style={{width:'100%',padding:'14px',borderRadius:12,background:'linear-gradient(135deg,rgba(99,102,241,.25),rgba(139,92,246,.2))',color:'#c7d2fe',fontSize:13,fontWeight:800,border:'1px solid rgba(99,102,241,.4)',marginBottom:12,boxShadow:'0 2px 8px rgba(99,102,241,.15)'}}>💾 HARD SAVE ALL SETTINGS</button>}
+
+      {/* ═══ PULL LATEST (admin) — re-fetch shared config from manager on demand ═══ */}
+      {role==='admin'&&<button onClick={async()=>{
+        if(!_SB){toast('Not connected','err');return}
+        try{
+          toast('↻ Pulling latest from manager…','info');
+          // Re-fetch shared_globalcfg (includes sharedGeminiKey, sharedClaudeKey, team rules)
+          const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
+          if(gr.data?.biz_name){const globalCfg=JSON.parse(gr.data.biz_name);setCfg(p=>({...p,...globalCfg}))}
+          // Re-fetch shared_admincfg_<my email> (includes sharedCals for calendar sync, pay rates, etc.)
+          const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
+          if(r.data?.biz_name){const myShared=JSON.parse(r.data.biz_name);setAdminConfigs(p=>({...p,[myEmail]:{...(p[myEmail]||{}),...myShared}}))}
+          // Also refresh shared calendar list (legacy Supabase table)
+          DB.getSharedCalendars(myEmail).then(setCalShares);
+          // Trigger calendar week re-fetch
+          setCalRefreshTrigger(t=>t+1);
+          toast('✅ Latest settings & calendars pulled');
+        }catch(e){toast('Pull failed: '+(e.message||e),'err')}
+      }} style={{width:'100%',padding:'12px',borderRadius:12,background:'linear-gradient(135deg,rgba(34,197,94,.2),rgba(16,185,129,.15))',color:'#86efac',fontSize:12,fontWeight:700,border:'1px solid rgba(34,197,94,.35)',marginBottom:12}}>↻ Pull Latest from Manager (settings + calendars)</button>}
+
       {role!=='admin'?<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
@@ -5581,27 +5654,57 @@ function App(){
         {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');setGOk(false);toast('Reset to manager connection');setTimeout(()=>location.reload(),500)}} style={{marginTop:8,padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10,border:'1px solid var(--border)'}}>Reset Google connection</button>}
       </div>}
 
-      <div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI</h3>
-        <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
-          {isManageMode&&<button onClick={()=>{if(!geminiKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedGeminiKey:geminiKeyVal}));toast('Gemini key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginBottom:8}}>Share key with admins</button>}
-          {role==='admin'&&cfg.sharedGeminiKey&&!localStorage.getItem('autodial_gemini')&&<p style={{fontSize:10,color:'var(--green)',margin:'0 0 8px'}}>✓ Using shared key from manager</p>}
-        <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');toast('Key saved');
-            if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
-            else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){
-              // Re-fetch and analyze
-              toast('Re-fetching leads with AI…','info');fetchLeads()}
-          }} disabled={aiAnalyzing} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{aiAnalyzing?'Analyzing…':'Save & Analyze'}</button>
+      {/* ═══ Gemini AI ═══ Hidden for main-in-call-mode (API setup lives in Mgmt mode). Admin sees greyed-out "auto-applied" card. ═══ */}
+      {(isManageMode||role==='admin')&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:6,color:'var(--amber)'}}>🤖 Gemini AI {role==='admin'&&<span style={{fontSize:9,fontWeight:500,color:'var(--text3)'}}>(auto-applied by manager)</span>}</h3>
+        {role==='admin'?<>
+          {/* Admin sees masked, read-only — key auto-applied from shared_globalcfg */}
+          <div style={{position:'relative'}}>
+            <input value={cfg.sharedGeminiKey?'••••••••••••••••••••••••••••••••••':''} disabled placeholder="Waiting for manager to share key…" className="mono" style={{fontSize:12,marginBottom:4,opacity:.55,cursor:'not-allowed',color:'var(--text3)'}}/>
+          </div>
+          <p style={{margin:'0 0 8px',fontSize:10,color:cfg.sharedGeminiKey?'var(--green)':'var(--text3)'}}>{cfg.sharedGeminiKey?'✓ Applied automatically · Analyzing your leads with manager\'s key':'⏳ No key shared yet — ask manager to add one in Mgmt mode'}</p>
+          {cfg.sharedGeminiKey&&leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600}}>🧠 Re-analyze Leads</button>}
+        </>:<>
+          <input value={geminiKeyVal} onChange={e=>{setGeminiKeyVal(e.target.value);localStorage.setItem('autodial_gemini',e.target.value.trim())}} placeholder="AIza…" className="mono" style={{fontSize:12,marginBottom:4}}/>
+          <p style={{margin:'0 0 8px',fontSize:10,color:geminiKeyVal?'var(--green)':'var(--text3)'}}>{geminiKeyVal?'✓ Auto-shared with your admins':'Enter Gemini key — will auto-share with admins'}</p>
+          <button onClick={()=>{const k=geminiKey();if(!k)return toast('No key','err');
+              // Hard save: also force push to shared_globalcfg immediately
+              if(_SB&&geminiKeyVal){setCfg(s=>{const next={...s,sharedGeminiKey:geminiKeyVal};try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{})}catch(e){}return next})}
+              toast('Key saved & shared ✓');
+              if(leads.length>0&&rawSheet){reanalyzeWithAI(rawSheet.headers,rawSheet.rows)}
+              else if(leads.length>0&&cfg.sheetId&&cfg.sheetTab){toast('Re-fetching leads with AI…','info');fetchLeads()}
+            }} disabled={aiAnalyzing} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{aiAnalyzing?'Analyzing…':'💾 Save & Analyze'}</button>
           {leads.length>0&&!aiAnalyzing&&<button onClick={()=>{if(rawSheet)reanalyzeWithAI(rawSheet.headers,rawSheet.rows);else if(cfg.sheetId)fetchLeads()}} style={{padding:'8px 14px',borderRadius:8,background:'var(--gdim)',color:'var(--green)',fontSize:12,fontWeight:600,marginLeft:6}}>🧠 Re-analyze Leads</button>}
-      </div>
+        </>}
+      </div>}
 
-      {WORKER_URL&&role!=='admin'&&<div className="card" style={{marginBottom:12}}>
-        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:10,fontWeight:400,color:'var(--text3)'}}>(smarter sheet analysis)</span></h3>
-        <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
-        <input value={claudeKeyVal} onChange={e=>setClaudeKeyVal(e.target.value.trim())} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
-        <p style={{margin:0,fontSize:10,color:claudeKeyVal?'var(--green)':'var(--text3)'}}>{claudeKeyVal?'✓ Key saved — synced to your account · Claude will analyze your leads':'No key — using Gemini only'}</p>
-          {isManageMode&&<button onClick={()=>{if(!claudeKeyVal)return toast('Enter key first','err');setCfg(s=>({...s,sharedClaudeKey:claudeKeyVal}));toast('Claude key shared with admins ✓')}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,marginTop:6}}>Share key with admins</button>}
-          {role==='admin'&&cfg.sharedClaudeKey&&!claudeKeyVal&&<p style={{fontSize:10,color:'var(--green)',margin:'4px 0 0'}}>✓ Using shared Claude key from manager</p>}
+      {/* ═══ Claude AI ═══ Hidden for main-in-call-mode. Admin sees greyed-out "auto-applied" card. ═══ */}
+      {WORKER_URL&&(isManageMode||role==='admin')&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>🧠 Claude AI <span style={{fontSize:10,fontWeight:400,color:'var(--text3)'}}>{role==='admin'?'(auto-applied by manager)':'(smarter sheet analysis)'}</span></h3>
+        {role==='admin'?<>
+          {/* Admin sees masked, read-only — key auto-applied from shared_globalcfg */}
+          <input value={cfg.sharedClaudeKey?'••••••••••••••••••••••••••••••••••••••••••':''} disabled placeholder="Waiting for manager to share key…" className="mono" type="password" style={{fontSize:12,marginBottom:4,opacity:.55,cursor:'not-allowed',color:'var(--text3)'}}/>
+          <p style={{margin:0,fontSize:10,color:cfg.sharedClaudeKey?'var(--green)':'var(--text3)'}}>{cfg.sharedClaudeKey?'✓ Applied automatically · Claude will analyze your leads with manager\'s key':'⏳ No key shared yet — ask manager to add one in Mgmt mode'}</p>
+        </>:<>
+          <p style={{margin:'0 0 6px',fontSize:10,color:'var(--text3)'}}>Each user uses their own key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" style={{color:'var(--blue)'}}>console.anthropic.com</a> ($5 min credit)</p>
+          <input value={claudeKeyVal} onChange={e=>setClaudeKeyVal(e.target.value.trim())} placeholder="sk-ant-…" className="mono" type="password" style={{fontSize:12,marginBottom:4}}/>
+          <p style={{margin:'0 0 8px',fontSize:10,color:claudeKeyVal?'var(--green)':'var(--text3)'}}>{claudeKeyVal?'✓ Key saved — auto-shared with your admins · Claude will analyze your leads':'No key — using Gemini only'}</p>
+          {/* ═══ HARD SAVE button for Claude key — force writes to Supabase + shared_globalcfg immediately ═══ */}
+          <button onClick={async()=>{
+            if(!claudeKeyVal)return toast('Enter key first','err');
+            try{
+              localStorage.setItem('autodial_claude_key',claudeKeyVal);
+              if(_SB&&_user){
+                await _SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'});
+                // Also push to shared_globalcfg so admins pick it up
+                setCfg(s=>{const next={...s,sharedClaudeKey:claudeKeyVal};
+                  _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{});
+                  return next});
+              }
+              toast('Claude key saved & shared ✓');
+            }catch(e){toast('Save failed: '+e.message,'err')}
+          }} style={{padding:'8px 14px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:700,border:'1px solid rgba(99,102,241,.3)'}}>💾 Save Claude Key</button>
+        </>}
       </div>}
 
       {/* Calendar defaults — sharing moved into Admin Pay (Per-Person) */}
