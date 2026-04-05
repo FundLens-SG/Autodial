@@ -2010,6 +2010,45 @@ function App(){
   const[calEditEvent,setCalEditEvent]=useState(null); // raw Google Calendar event
   const[calEditForm,setCalEditForm]=useState({summary:'',date:'',time:'',duration:60,location:''});
   const[calEditSaving,setCalEditSaving]=useState(false);
+  // ═══ Dateless-appointment fix-up modal (Appts tab → "Set date & time" button)
+  const[fixDateAppt,setFixDateAppt]=useState(null); // the appointment row being fixed
+  const[fixDateForm,setFixDateForm]=useState({date:'',time:'',duration:60});
+  const[fixDateSaving,setFixDateSaving]=useState(false);
+  // ═══ Reusable: aggregate admin appointments into Main's dashboard
+  // RECONCILES: reflects admin-side deletions too. Rebuilds the admin-scoped half of
+  // `appointments` from the cloud on every call, so if an admin deletes a row their
+  // cloud record loses it, and the next pull drops it from Main's view as well.
+  const pullAdminAppts=useCallback(async()=>{
+    if(role==='admin'||!_SB||!_user)return 0;
+    try{
+      const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
+      if(!_adminEmails.length)return 0;
+      const _byAdmin={};
+      await Promise.all(_adminEmails.map(async em=>{
+        const k=em.toLowerCase();
+        try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+k).single();
+          if(r.data?.biz_name){const list=JSON.parse(r.data.biz_name);_byAdmin[k]=Array.isArray(list)?list.map(a=>({...a,admin:a.admin||em})):[]}
+          else _byAdmin[k]=[];
+        }catch(_e){_byAdmin[k]=[]}
+      }));
+      const _delIds=_getDelIds();
+      let _added=0;
+      setAppointments(prev=>{
+        // Keep Main's own appts (untouched by aggregation)
+        const _mine=prev.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase());
+        // Rebuild the admin-scoped half from fresh cloud data
+        const _adminFresh=[];
+        Object.entries(_byAdmin).forEach(([em,list])=>{
+          list.forEach(a=>{if(!isApptDeleted(a,_delIds))_adminFresh.push(a)})
+        });
+        // Track additions for toast feedback
+        const _prevKeys=new Set(prev.filter(a=>a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase()).map(a=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')))));
+        _adminFresh.forEach(a=>{const k=String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')));if(!_prevKeys.has(k))_added++});
+        return _dedupAppts([..._mine,..._adminFresh]);
+      });
+      return _added;
+    }catch(e){console.warn('[pullAdminAppts]',e?.message||e);return 0}
+  },[role,myEmail,adminConfigs]);
   const _openCalEdit=(ev)=>{
     if(!ev)return;
     const s=new Date(ev.start?.dateTime||ev.start?.date||0);
@@ -2327,6 +2366,54 @@ function App(){
   useEffect(()=>{save('payh',paymentHistory);cloudSave('payh',paymentHistory);
     if(_SB&&_user&&window._cloudReady&&paymentHistory.length)_SB.from('autodial_admin_config').upsert({admin_email:'payh_'+_user.email.toLowerCase(),biz_name:JSON.stringify(paymentHistory.slice(-200))},{onConflict:'admin_email'}).catch(function(){})},[paymentHistory]);
 
+  // ═══ Periodic pull of admin appts while Main is on the Appts tab (every 45s)
+  useEffect(()=>{
+    if(role==='admin'||tab!=='appts'||!isManageMode)return;
+    pullAdminAppts();
+    const _id=setInterval(()=>{pullAdminAppts()},45000);
+    return()=>clearInterval(_id)
+  },[role,tab,isManageMode,pullAdminAppts]);
+
+  // ═══ Admin side: poll own cloud appts_<email> every 45s to pick up Main-initiated deletions.
+  // When cloud is missing rows we have locally, reconcile down so the deletion propagates.
+  useEffect(()=>{
+    if(role!=='admin'||!_SB||!_user||tab!=='appts')return;
+    let _cancelled=false;
+    const _poll=async()=>{
+      try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+myEmail.toLowerCase()).single();
+        if(_cancelled||!r.data?.biz_name)return;
+        const cloudList=JSON.parse(r.data.biz_name);
+        if(!Array.isArray(cloudList))return;
+        const cloudKeys=new Set(cloudList.map(a=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')))));
+        setAppointments(prev=>{
+          const _keyOf=(a)=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')));
+          // Only drop rows that exist locally but NOT in cloud AND belong to this admin
+          const _keep=prev.filter(a=>{
+            const _mine=!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase();
+            if(!_mine)return true; // leave other-admin rows alone
+            return cloudKeys.has(_keyOf(a)); // drop ours if Main scrubbed them
+          });
+          if(_keep.length===prev.length)return prev;
+          // Also push the newly-dropped phones into the local suppress list so they don't come back
+          const _dropped=prev.filter(a=>!_keep.includes(a));
+          if(_dropped.length){
+            const _d=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+            _dropped.forEach(a=>{if(a.phone)_d.push(a.phone);if(a.id)_d.push(String(a.id))});
+            localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(_d)].slice(-500)));
+            // Also scrub the Google Calendar event locally so the Cal tab updates
+            _dropped.forEach(a=>{if(a.calEventId)setWeekEvents(prev2=>prev2.filter(ev=>ev.id!==a.calEventId))});
+            DBG('[AutoDial] Admin: reconciled '+_dropped.length+' appts deleted by manager');
+          }
+          return _keep;
+        });
+      }catch(_e){}
+    };
+    _poll();
+    const _id=setInterval(_poll,45000);
+    return()=>{_cancelled=true;clearInterval(_id)}
+  },[role,tab,myEmail]);
+
   useEffect(()=>{save('asess',adminSessions);
     // ALWAYS push — even when cleared to {} — so "Clear All" actually persists and doesn't rehydrate from cloud
     if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'asess_'+_user.email.toLowerCase(),biz_name:JSON.stringify(adminSessions)},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}},[adminSessions]);
@@ -2643,6 +2730,31 @@ function App(){
               if(myA.length){const delIds=_getDelIds();
                 const filtered=myA.filter(a=>!isApptDeleted(a,delIds));
                 if(filtered.length>appointments.length){setAppointments(_dedupAppts(filtered));DBG('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
+          // ═══ AGGREGATE admin appointments — pull each admin's appts_<email> and merge into Main's dashboard
+          try{
+            const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
+            if(_adminEmails.length){
+              const _results=await Promise.all(_adminEmails.map(async em=>{
+                try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+em.toLowerCase()).single();
+                  if(r.data?.biz_name){const list=JSON.parse(r.data.biz_name);if(Array.isArray(list))return list.map(a=>({...a,admin:a.admin||em}))}}catch(_e){}
+                return[]
+              }));
+              const _merged=_results.flat();
+              if(_merged.length){
+                const _delIds=_getDelIds();
+                const _fresh=_merged.filter(a=>!isApptDeleted(a,_delIds));
+                if(_fresh.length){
+                  setAppointments(prev=>{
+                    const _keyOf=(a)=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')));
+                    const _existing=new Set(prev.map(_keyOf));
+                    const _newOnes=_fresh.filter(a=>!_existing.has(_keyOf(a)));
+                    return _newOnes.length?_dedupAppts([...prev,..._newOnes]):prev;
+                  });
+                  DBG('[AutoDial] Aggregated '+_fresh.length+' admin appts from '+_adminEmails.length+' admins');
+                }
+              }
+            }
+          }catch(e){console.warn('[AutoDial] Admin appt aggregation failed',e?.message||e)}
           try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
             if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
               if(sl.length>sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}}catch(e){}
@@ -4166,7 +4278,7 @@ function App(){
             <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,margin:'8px 0 0',fontSize:10,color:'var(--text3)'}}>
               <span>{weekEvents.length} events{(()=>{const cals=new Set(weekEvents.map(e=>e._calId).filter(Boolean));return cals.size>1?' · '+cals.size+' calendars':''})()}</span>
               <span>·</span>
-              <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:8,height:8,borderRadius:2,background:'linear-gradient(135deg,rgba(34,197,94,.6),rgba(16,185,129,.4))',boxShadow:'0 0 6px rgba(34,197,94,.4)'}}/>= 1.5h+ free slot</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:4}}><span style={{width:8,height:8,borderRadius:2,background:'linear-gradient(135deg,rgba(34,197,94,.6),rgba(16,185,129,.4))',boxShadow:'0 0 6px rgba(34,197,94,.4)'}}/>= {((n(apptDuration,60)||60)/60).toFixed((n(apptDuration,60)||60)%60===0?0:1)}h+ free slot</span>
               <span>·</span>
               <span>{BIZ_START}am–{BIZ_END-12}pm</span>
             </div>
@@ -4251,8 +4363,40 @@ function App(){
                 {days.map(d=>{
                   const _evT=d.events.filter(ev=>ev.start?.dateTime).map(ev=>({ev,start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
                   const isToday=d.key===todayKey;
+                  const isPastDay=d.key<todayKey;
+                  // ═══ Compute free slots for this day (same helper the list view uses)
+                  const _slotEvs=_evT.map(({start,end})=>({start,end}));
+                  const _freeSlots=isPastDay?[]:findFreeSlots(d.date,_slotEvs,BIZ_START,BIZ_END);
+                  const _minMin=(n(apptDuration,60)||60);
                   return<div key={'col-'+d.key} style={{position:'relative',borderRight:'1px solid var(--border)',background:isToday?'rgba(99,102,241,.04)':'transparent'}}>
                     {hours.map(h=><div key={'hb-'+h} style={{height:HOUR_PX,borderTop:'1px solid var(--border)'}}/>)}
+                    {/* ═══ Free slot blocks — rendered BEFORE events so events overlay if any weird overlap */}
+                    {_freeSlots.map((s,si)=>{
+                      const sh=s.start.getHours()+s.start.getMinutes()/60;
+                      const eh=s.end.getHours()+s.end.getMinutes()/60;
+                      if(eh<=HR_START||sh>=HR_END)return null;
+                      const _isBig=s.hours*60>=_minMin;
+                      if(!_isBig)return null; // only show bookable slots
+                      const top=Math.max(0,(sh-HR_START)*HOUR_PX);
+                      const height=Math.max(20,(Math.min(eh,HR_END)-Math.max(sh,HR_START))*HOUR_PX-2);
+                      const hrsLabel=s.hours>=1?s.hours.toFixed(s.hours%1===0?0:1)+'h':Math.round(s.hours*60)+'m';
+                      return<div key={'fs-'+si} className="free-slot" title={'Free · '+hrsLabel+' · click to book'} onClick={gOk&&role!=='admin'?async()=>{
+                        const title=prompt('New event title for '+fmtDayMonth(d.date)+' '+s.start.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+':');
+                        if(!title)return;
+                        try{toast('Creating event…','info');
+                          // Use the configured default duration (capped at slot size)
+                          const _dur=Math.min(_minMin,s.hours*60);
+                          const _end=new Date(s.start.getTime()+_dur*60000);
+                          const evt=await gCal.create(title,'Created from AutoDial free slot',s.start.toISOString(),_end.toISOString(),[]);
+                          if(evt?.id){toast('✓ Event created');setWeekEvents(p=>[...p,{id:evt.id,summary:title,start:{dateTime:s.start.toISOString()},end:{dateTime:_end.toISOString()},_calId:'primary'}])}
+                          else{toast('Create failed','err')}
+                        }catch(e){toast('Create failed: '+(e.message||e),'err')}
+                      }:undefined} style={{position:'absolute',left:2,right:2,top:top+2,height,borderRadius:5,padding:'3px 4px',fontSize:9,fontWeight:700,overflow:'hidden',color:'#86efac',cursor:(gOk&&role!=='admin')?'pointer':'default',zIndex:0}}>
+                        <div style={{fontSize:8,fontWeight:800,color:'#22c55e',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>✨ Free · {hrsLabel}</div>
+                        {height>32&&<div style={{fontSize:7,opacity:.85,marginTop:1}}>{String(s.start.getHours()).padStart(2,'0')}:{String(s.start.getMinutes()).padStart(2,'0')} – {String(s.end.getHours()).padStart(2,'0')}:{String(s.end.getMinutes()).padStart(2,'0')}</div>}
+                        {height>52&&gOk&&role!=='admin'&&<div style={{fontSize:7,color:'#22c55e',fontWeight:800,marginTop:2,padding:'1px 4px',borderRadius:3,background:'rgba(34,197,94,.15)',display:'inline-block'}}>+ BOOK</div>}
+                      </div>
+                    })}
                     {_evT.map(({ev,start,end},ei)=>{
                       const startH=start.getHours()+start.getMinutes()/60;
                       const endH=end.getHours()+end.getMinutes()/60;
@@ -4268,7 +4412,7 @@ function App(){
                   </div>
                 })}
               </div>
-              <p style={{margin:'10px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>Grid view · 7am–10pm · Scroll horizontally on mobile for full week</p>
+              <p style={{margin:'10px 0 0',fontSize:9,color:'var(--text3)',textAlign:'center'}}>Grid view · 7am–10pm · Tap a green slot to book · Tap an event to edit</p>
             </div>;
           })()}
           {/* ═══ LIST VIEW (default) ═══ */}
@@ -4281,7 +4425,7 @@ function App(){
             // Compute free slots for this day (only for today and future days)
             const _evWithTimes=d.events.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
             const freeSlots=isPast?[]:findFreeSlots(d.date,_evWithTimes,BIZ_START,BIZ_END);
-            const bigSlots=freeSlots.filter(s=>s.hours>=1.5);
+            const bigSlots=freeSlots.filter(s=>s.hours*60>=(n(apptDuration,60)||60));
             const totalFreeHrs=freeSlots.reduce((a,s)=>a+s.hours,0);
             return<div key={d.key} className="card" style={{marginBottom:8,padding:'12px 14px',opacity:isPast&&!isToday?0.55:1,borderColor:isToday?'rgba(99,102,241,.4)':'var(--border)',background:isToday?'linear-gradient(135deg,rgba(99,102,241,.04),var(--bg2))':undefined}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:d.events.length||bigSlots.length?8:0}}>
@@ -4314,7 +4458,7 @@ function App(){
                     </div>;
                   }
                   // Free slot row
-                  const s=item.slot;const isBig=s.hours>=1.5;
+                  const s=item.slot;const isBig=s.hours*60>=(n(apptDuration,60)||60);
                   const timeStr=s.start.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true})+' – '+s.end.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:true});
                   const hrsLabel=s.hours>=1?s.hours.toFixed(s.hours%1===0?0:1)+'h':Math.round(s.hours*60)+'m';
                   return<div key={'s'+i} className={isBig?'free-slot':undefined} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:4,borderRadius:10,background:isBig?undefined:'rgba(148,163,184,.04)',border:isBig?undefined:'1px dashed var(--border)'}}>
@@ -4351,6 +4495,7 @@ function App(){
         <h3 style={{fontSize:15,fontWeight:800,color:'#f1f5f9',margin:0}}>{isCallMode?'My Appointments':'All Appointments'}</h3>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
+          {role!=='admin'&&isManageMode&&<button onClick={async()=>{toast('↻ Pulling admin appts…','info');const n=await pullAdminAppts();toast(n>0?'✅ '+n+' new appt'+(n===1?'':'s'):'Up to date')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,border:'1px solid rgba(99,102,241,.2)'}}>↻ Pull Admins</button>}
           {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
               // ═══ Delete Google Calendar events so they stop blocking calendar slots ═══
               const _calIds=new Set(appointments.map(a=>a.calEventId).filter(Boolean));
@@ -4499,6 +4644,16 @@ function App(){
                         DBG('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from '+a.admin);
                       }
                     }
+                    // ═══ Also scrub from the admin's OWN appts_<email> cloud record so the delete propagates to their device
+                    const r2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+a.admin.toLowerCase()).single();
+                    if(r2.data&&r2.data.biz_name){
+                      const list2=JSON.parse(r2.data.biz_name)||[];
+                      const cleaned2=list2.filter(x=>x.phone!==a.phone&&String(x.id||'')!==String(a.id||''));
+                      if(cleaned2.length!==list2.length){
+                        await _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+a.admin.toLowerCase(),biz_name:JSON.stringify(cleaned2)},{onConflict:'admin_email'});
+                        DBG('[AutoDial] Scrubbed '+(list2.length-cleaned2.length)+' copies of '+a.phone+' from '+a.admin+'\'s own appts_');
+                      }
+                    }
                   }catch(e){console.warn('[AutoDial] shared_appts scrub failed',e?.message||e)}})();
                 }
                 // Remove ALL copies of this phone from local state, not just the matched id
@@ -4507,6 +4662,13 @@ function App(){
           </div>
           
           {a.apptDate&&<p style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>📅 {a.apptDate} {a.apptTime} {a.location?'· 📍'+a.location:''}</p>}
+          {/* ═══ Dateless appointment → prompt to set date & time right here */}
+          {!a.apptDate&&a.followUp!=='met'&&a.followUp!=='closed'&&<button onClick={e=>{e.stopPropagation();
+            setFixDateForm({date:localDateKey(new Date()),time:'10:00',duration:n(apptDuration,60)||60});
+            setFixDateAppt(a);
+          }} style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'8px 12px',marginBottom:6,borderRadius:10,background:'linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.06))',border:'1px dashed rgba(99,102,241,.4)',color:'var(--accent2)',fontSize:11,fontWeight:700}}>
+            <span style={{fontSize:13}}>📅</span><span>Set date &amp; time</span><span style={{marginLeft:'auto',fontSize:9,color:'var(--text3)',fontWeight:600}}>⚠ no date set</span>
+          </button>}
           {/* Shaky tickbox — tap to toggle whether this slot reappears as an "available (shaky)" slot in future pickers */}
           {a.apptDate&&(()=>{
             const isShaky=isApptShaky(a);
@@ -6892,6 +7054,61 @@ function App(){
           <p style={{margin:0,fontSize:10,color:'var(--text3)',textAlign:'center'}}>You'll still need to approve them once they sign up.</p>
         </div>
   </Modal>})()}
+
+    {/* ═══ APPT TAB: "SET DATE & TIME" FIXER MODAL (for appointments created without a date) ═══ */}
+    {fixDateAppt&&<Modal show={true} onClose={()=>setFixDateAppt(null)} align="center" bg=".85" zIndex={101}>
+      <div style={{width:'100%',maxWidth:420,background:'var(--bg2)',borderRadius:20,padding:'18px 18px 14px',border:'1px solid var(--border2)'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'#f1f5f9'}}>📅 Set Date & Time</h3>
+          <button onClick={()=>setFixDateAppt(null)} style={{width:30,height:30,borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:16,border:'none'}}>×</button>
+        </div>
+        <p style={{margin:'0 0 12px',fontSize:11,color:'var(--text3)'}}>{fixDateAppt.name} <span className="mono" style={{color:'var(--text3)'}}>· {fixDateAppt.phone}</span></p>
+        <div style={{display:'flex',gap:8,marginBottom:10}}>
+          <div style={{flex:1}}>
+            <label style={{display:'block',fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:4,letterSpacing:'.04em'}}>DATE</label>
+            <input type="date" value={fixDateForm.date} onChange={e=>setFixDateForm(s=>({...s,date:e.target.value}))}/>
+          </div>
+          <div style={{width:110}}>
+            <label style={{display:'block',fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:4,letterSpacing:'.04em'}}>TIME</label>
+            <input type="time" value={fixDateForm.time} onChange={e=>setFixDateForm(s=>({...s,time:e.target.value}))}/>
+          </div>
+        </div>
+        <div style={{marginBottom:14}}>
+          <label style={{display:'block',fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:4,letterSpacing:'.04em'}}>DURATION (MINUTES)</label>
+          <div style={{display:'flex',gap:6}}>
+            {[30,60,90,120].map(d=><button key={d} onClick={()=>setFixDateForm(s=>({...s,duration:d}))} style={{flex:1,padding:'8px',borderRadius:8,background:fixDateForm.duration===d?'var(--adim)':'var(--bg3)',color:fixDateForm.duration===d?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'1px solid '+(fixDateForm.duration===d?'var(--accent)':'var(--border)')}}>{d}m</button>)}
+            <input type="number" value={fixDateForm.duration} onChange={e=>setFixDateForm(s=>({...s,duration:+e.target.value||60}))} style={{width:70,padding:'8px',fontSize:11,textAlign:'center'}}/>
+          </div>
+        </div>
+        <button disabled={fixDateSaving} onClick={async()=>{
+          if(!fixDateForm.date||!fixDateForm.time){toast('Date and time required','err');return}
+          setFixDateSaving(true);
+          try{
+            const [y,mo,da]=fixDateForm.date.split('-').map(Number);
+            const [h,mi]=fixDateForm.time.split(':').map(Number);
+            const startD=new Date(y,mo-1,da,h,mi,0);
+            const endD=new Date(startD.getTime()+fixDateForm.duration*60000);
+            // Create (or reuse) a Google Calendar event
+            let evt=null;
+            if(gOk&&window.gCal){
+              try{evt=await gCal.create(fixDateAppt.name+' (appt)','Follow-up appointment for '+fixDateAppt.name+(fixDateAppt.phone?' · '+fixDateAppt.phone:''),startD.toISOString(),endD.toISOString(),fixDateAppt.inviteEmails?String(fixDateAppt.inviteEmails).split(/[,;\s]/).filter(Boolean):null)}catch(_e){console.warn('[fixDate] gCal.create failed',_e)}
+            }
+            const calEventId=evt?.id||fixDateAppt.calEventId||'';
+            const dateKey=fixDateForm.date;
+            const timeStr=fixDateForm.time;
+            // Update local state
+            setAppointments(prev=>prev.map(x=>x.id===fixDateAppt.id?{...x,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId}:x));
+            // Push the new event into weekEvents so Cal tab reflects it immediately
+            if(evt?.id)setWeekEvents(prev=>[...prev.filter(e=>e.id!==evt.id),{id:evt.id,summary:fixDateAppt.name+' (appt)',start:{dateTime:startD.toISOString()},end:{dateTime:endD.toISOString()},_calId:'primary'}]);
+            // Cloud sync via DB.saveAppt so Main/Admin both see it
+            try{DB.saveAppt({...fixDateAppt,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,admin:fixDateAppt.admin||myEmail},_user?.id)}catch(_e){}
+            toast('✓ Date set for '+fixDateAppt.name);
+            setFixDateAppt(null);
+          }catch(e){toast('Failed: '+(e.message||e),'err')}
+          setFixDateSaving(false);
+        }} style={{width:'100%',padding:'12px',borderRadius:10,background:'linear-gradient(135deg,var(--accent),#4f46e5)',color:'#fff',fontSize:13,fontWeight:800,border:'none',opacity:fixDateSaving?0.6:1}}>{fixDateSaving?'Saving…':'✓ Set Date & Time'}</button>
+      </div>
+    </Modal>}
 
     {/* ═══ CAL TAB: CLICK-TO-EDIT EVENT MODAL ═══ */}
     {calEditEvent&&<Modal show={true} onClose={()=>setCalEditEvent(null)} align="center" bg=".85" zIndex={101}>
