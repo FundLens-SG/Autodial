@@ -384,13 +384,30 @@ document.addEventListener('DOMContentLoaded',function(){
 });
 
 // ══════ REALTIME SYNC ══════
-var _channel=null,_syncCbs=[];
-function initSync(){try{if(!_SB||!_user?.id)return;if(_channel)try{_SB.removeChannel(_channel)}catch(e){}
-  _channel=_SB.channel('ad-'+_user.id);
-  _channel.on('broadcast',{event:'sync'},function(msg){var d=msg.payload;if(!d||d._dev===window._devId)return;_syncCbs.forEach(function(cb){cb(d)})});
-  _channel.subscribe();if(!window._devId)window._devId=Math.random().toString(36).slice(2)}catch(e){console.warn('[InitSync]',e)}}
-window.syncSend=function(t,p){if(_channel)_channel.send({type:'broadcast',event:'sync',payload:{...p,type:t,_dev:window._devId,_ts:Date.now()}})};
+// Persistent device ID — survives reloads so cloud write-backs from this device are always ignored.
+window._devId = localStorage.getItem('autodial_devId');
+if(!window._devId){window._devId='dev_'+Math.random().toString(36).slice(2)+'_'+Date.now().toString(36);localStorage.setItem('autodial_devId',window._devId)}
+var _channel=null,_syncCbs=[],_channelStatus='idle',_reconnectTimer=null;
+function initSync(){try{if(!_SB||!_user?.id)return;
+  if(_channel){try{_SB.removeChannel(_channel)}catch(e){}_channel=null}
+  _channelStatus='connecting';
+  _channel=_SB.channel('ad-'+_user.id,{config:{broadcast:{self:false,ack:false}}});
+  _channel.on('broadcast',{event:'sync'},function(msg){var d=msg.payload;if(!d||d._dev===window._devId)return;_syncCbs.forEach(function(cb){try{cb(d)}catch(e){console.warn('[sync cb]',e)}})});
+  _channel.subscribe(function(status,err){
+    _channelStatus=status;
+    if(status==='SUBSCRIBED'){console.info('[InitSync] connected',window._devId);clearTimeout(_reconnectTimer);_reconnectTimer=null}
+    else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+      console.warn('[InitSync] channel lost →',status,err||'',', reconnecting in 2s');
+      clearTimeout(_reconnectTimer);
+      _reconnectTimer=setTimeout(function(){if(_channelStatus!=='SUBSCRIBED')initSync()},2000);
+    }
+  });
+}catch(e){console.warn('[InitSync]',e);clearTimeout(_reconnectTimer);_reconnectTimer=setTimeout(initSync,3000)}}
+window.syncSend=function(t,p){if(_channel&&_channelStatus==='SUBSCRIBED')_channel.send({type:'broadcast',event:'sync',payload:{...p,type:t,_dev:window._devId,_ts:Date.now()}})};
 window.onSync=function(cb){_syncCbs.push(cb);return function(){_syncCbs=_syncCbs.filter(function(c){return c!==cb})}};
+// Re-establish channel on visibility + online
+if(typeof document!=='undefined'){document.addEventListener('visibilitychange',function(){if(!document.hidden&&_SB&&_user&&_channelStatus!=='SUBSCRIBED')initSync()})}
+if(typeof window!=='undefined'){window.addEventListener('online',function(){if(_SB&&_user)initSync()})}
 
 // ══════ GOOGLE API ══════
 var GC_ID='649883090396-mrhmtjaum8u4ec12ciq0p4m31npabbut.apps.googleusercontent.com',_gToken=null;
@@ -2094,23 +2111,11 @@ function App(){
 
   useEffect(()=>{save('activeSession',session)},[session]);
 
-  // ═══ CROSS-DEVICE SESSION SYNC — push full session state to sess_<email> in Supabase.
-  // Previously only the `ended` flag was pushed, so picking up a session on another device was
-  // impossible. Now we push {session, curIdx, phase, running, ts} whenever any of those change,
-  // debounced 1.5s to avoid spamming writes. On startup, the hard-sync block reads this key
-  // and restores an active session if one is newer than the local copy.
-  const _sessSyncRef=useRef(null);
-  useEffect(()=>{
-    if(!_SB||!_user||!window._cloudReady)return;
-    clearTimeout(_sessSyncRef.current);
-    _sessSyncRef.current=setTimeout(()=>{
-      try{
-        const payload=session?{session:{...session,_syncedAt:undefined},curIdx,phase,running,ts:Date.now(),ended:!!session.ended,endTime:session?.endTime||0}:{ended:true,endTime:Date.now(),ts:Date.now()};
-        _SB.from('autodial_admin_config').upsert({admin_email:'sess_'+_user.email.toLowerCase(),biz_name:JSON.stringify(payload)},{onConflict:'admin_email'}).catch(function(){})
-      }catch(e){}
-    },1500);
-    return()=>clearTimeout(_sessSyncRef.current);
-  },[session,curIdx,phase,running]);
+  // (Cross-device session sync is now handled by the unified live-sync useEffect defined later in the App body.
+  //  That layer uses postgres_changes realtime + 2s polling + write-through, all atomic via a single
+  //  `live_<email>` cloud key. The old per-effect push to `sess_<email>` was unreliable because it was
+  //  push-only and the other device had no fast way to pull.)
+
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[totalStars,setTotalStars]=useState(load('totalStars')||0);
   const[starBank,setStarBank]=useState(Math.round(load('starBank')||0)); // Lifetime accumulated stars
@@ -3144,20 +3149,231 @@ function App(){
     }catch(e){console.warn('[LiveSync setup]',e.message);return()=>{clearInterval(_pullTimer);clearTimeout(_verDebounce)}}
   },[]);
 
-  // Sync broadcast
+  // ════════════════════════════════════════════════════════════════════════════════
+  // ═══ UNIFIED LIVE SYNC v2 — cross-device active-call state
+  // ═══ Strategy: write-through on every change → postgres_changes realtime push
+  // ═══ → 2s polling fallback → visibility/focus/online handlers for cold-wake.
+  // ═══ Echo suppression uses a boolean `suppressNextPush` flag, and a stable
+  // ═══ ts check (cloud.ts > lastAppliedTs) prevents double-applies across retries.
+  // ════════════════════════════════════════════════════════════════════════════════
+  const _liveSyncRef=useRef({
+    lastAppliedTs:0,       // ts of the most recent remote state we've applied
+    lastLeadsHash:'',      // FNV-1a hash of the leads state we last pushed/applied
+    suppressNextPush:false,// flag set when applying remote; skips next push to avoid echo
+    livePushTimer:null,    // 300ms debounce timer for session state push
+    leadsPushTimer:null,   // 800ms debounce timer for leads push
+    hasPulledOnce:false,   // gates the write-through so we never push before pulling cloud state once
+  });
+  // Visible sync status: 'idle' | 'pushing' | 'pulling' | 'synced' | 'offline'
+  const[syncStatus,setSyncStatus]=useState('idle');
+  const[lastSyncAt,setLastSyncAt]=useState(0);
+  // Tick every 3s so the "Xs ago" badge label refreshes without needing a real state change
+  const[,setSyncTick]=useState(0);
+  useEffect(()=>{const t=setInterval(()=>setSyncTick(x=>x+1),3000);return()=>clearInterval(t)},[]);
+  // Cheap FNV-1a-ish hash of leads state (only the fields that matter for sync correctness)
+  const _hashLeads=(ls)=>{if(!ls||!ls.length)return'0';let h=2166136261;for(let i=0;i<ls.length;i++){const l=ls[i];const s=(l.phone||'')+':'+(l.status||'')+':'+(l.npCount||0)+':'+(l.cbDate||'')+':'+(l.cbTime||'');for(let j=0;j<s.length;j++){h^=s.charCodeAt(j);h=Math.imul(h,16777619)}}return(h>>>0).toString(36)};
+
+  // Owns: session/curIdx/phase/running pull-and-subscribe
+  useEffect(()=>{
+    if(!_SB||!_user)return;
+    const me=(_user.email||'').toLowerCase();
+    const liveKey='live_'+me;
+    const leadsKey='leads_'+me;
+    let _cancelled=false;
+
+    const applyRemoteLive=(remote)=>{
+      if(_cancelled||!remote||!remote.ts)return;
+      if(remote.devId===window._devId)return; // our own write coming back
+      if(remote.ts<=_liveSyncRef.current.lastAppliedTs)return; // stale or already applied
+      _liveSyncRef.current.lastAppliedTs=remote.ts;
+      _liveSyncRef.current.suppressNextPush=true; // don't echo back
+      setSyncStatus('synced');setLastSyncAt(Date.now());
+      // Apply session state
+      if('session' in remote){
+        if(remote.session===null||remote.session===undefined){
+          setSession(null);setRunning(false);setPhase('idle');setCurIdx(-1);
+        }else{
+          setSession(remote.session);
+          if(typeof remote.curIdx==='number')setCurIdx(remote.curIdx);
+          if(typeof remote.phase==='string')setPhase(remote.phase);
+          if(typeof remote.running==='boolean')setRunning(remote.running);
+          // Save to localStorage so a hard reload also picks it up
+          save('activeSession',remote.session);
+        }
+      }
+      // If leads state on the other device has a different hash, pull the leads array too
+      if(remote.leadsHash&&remote.leadsHash!==_liveSyncRef.current.lastLeadsHash){
+        pullLeads();
+      }
+      DBG('[LiveSync] applied remote from',remote.devId,'ts',remote.ts);
+    };
+
+    const pullLive=async()=>{
+      if(_cancelled)return;
+      try{
+        setSyncStatus(p=>p==='synced'?p:'pulling');
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',liveKey).maybeSingle();
+        if(r.data&&r.data.biz_name){
+          const remote=JSON.parse(r.data.biz_name);
+          applyRemoteLive(remote);
+        }
+        setSyncStatus('synced');setLastSyncAt(Date.now());
+      }catch(e){setSyncStatus('offline');console.warn('[LiveSync pull]',e?.message||e)}
+      finally{_liveSyncRef.current.hasPulledOnce=true}
+    };
+
+    const pullLeads=async()=>{
+      if(_cancelled)return;
+      try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',leadsKey).maybeSingle();
+        if(r.data&&r.data.biz_name){
+          const p=JSON.parse(r.data.biz_name);
+          if(p&&p.devId===window._devId)return; // our own write
+          if(p&&Array.isArray(p.leads)){
+            const newHash=_hashLeads(p.leads);
+            if(newHash!==_liveSyncRef.current.lastLeadsHash){
+              _liveSyncRef.current.lastLeadsHash=newHash;
+              _liveSyncRef.current.suppressNextPush=true;
+              setLeads(p.leads);
+              DBG('[LiveSync] applied',p.leads.length,'leads from cloud');
+            }
+          }
+        }
+      }catch(e){console.warn('[LiveSync leads pull]',e?.message||e)}
+    };
+
+    // Expose pull functions so other code paths (e.g. button clicks) can trigger a manual pull
+    window._liveSyncPull=()=>{pullLive();pullLeads()};
+
+    // Initial pull on mount — wait a moment for cloud to bootstrap
+    const _initialDelay=setTimeout(()=>{pullLive();pullLeads()},800);
+
+    // ═══ Postgres realtime subscription — instant push when any row updates
+    let _pgChannel=null;
+    try{
+      _pgChannel=_SB.channel('pglive-'+me)
+        .on('postgres_changes',{event:'*',schema:'public',table:'autodial_admin_config',filter:'admin_email=eq.'+liveKey},(payload)=>{
+          try{
+            const row=payload.new||payload.record;
+            if(row&&row.biz_name){const remote=JSON.parse(row.biz_name);applyRemoteLive(remote)}
+          }catch(e){}
+        })
+        .on('postgres_changes',{event:'*',schema:'public',table:'autodial_admin_config',filter:'admin_email=eq.'+leadsKey},(payload)=>{
+          try{
+            const row=payload.new||payload.record;
+            if(row&&row.biz_name){
+              const p=JSON.parse(row.biz_name);
+              if(p&&p.devId===window._devId)return;
+              if(p&&Array.isArray(p.leads)){
+                const newHash=_hashLeads(p.leads);
+                if(newHash!==_liveSyncRef.current.lastLeadsHash){
+                  _liveSyncRef.current.lastLeadsHash=newHash;
+                  _liveSyncRef.current.suppressNextPush=true;
+                  setLeads(p.leads);
+                  DBG('[LiveSync] RT pushed',p.leads.length,'leads');
+                }
+              }
+            }
+          }catch(e){}
+        })
+        .subscribe((status,err)=>{
+          if(status==='SUBSCRIBED'){console.info('%c[LiveSync] ✅ Realtime connected — instant push enabled','color:#22c55e;font-weight:bold');setSyncStatus('synced');setLastSyncAt(Date.now())}
+          else if(status==='CHANNEL_ERROR'){console.warn('[LiveSync] ⚠ Realtime channel error — falling back to 2s polling',err||'');setSyncStatus('offline')}
+          else if(status==='TIMED_OUT'){console.warn('[LiveSync] ⚠ Realtime timed out — falling back to 2s polling');setSyncStatus('offline')}
+          else if(status==='CLOSED'){console.info('[LiveSync] channel closed')}
+          else{DBG('[LiveSync] pg channel',status)}
+        });
+    }catch(e){console.warn('[LiveSync pg subscribe]',e?.message||e)}
+
+    // ═══ Polling fallback — every 2s while tab is visible (handles postgres_changes disabled)
+    const pollId=setInterval(()=>{
+      if(document.visibilityState==='visible')pullLive();
+    },2000);
+
+    // ═══ Visibility/focus/online handlers — pull immediately when user comes back
+    const onVis=()=>{if(document.visibilityState==='visible'){pullLive();pullLeads()}};
+    const onFocus=()=>{pullLive()};
+    const onOnline=()=>{pullLive();pullLeads()};
+    document.addEventListener('visibilitychange',onVis);
+    window.addEventListener('focus',onFocus);
+    window.addEventListener('online',onOnline);
+
+    return()=>{
+      _cancelled=true;
+      clearTimeout(_initialDelay);
+      clearInterval(pollId);
+      document.removeEventListener('visibilitychange',onVis);
+      window.removeEventListener('focus',onFocus);
+      window.removeEventListener('online',onOnline);
+      if(_pgChannel){try{_SB.removeChannel(_pgChannel)}catch(e){}}
+    };
+  },[_user?.id]);
+
+  // ═══ Write-through: push session state to cloud on every change (300ms debounce)
+  useEffect(()=>{
+    if(!_SB||!_user||!window._cloudReady)return;
+    if(!_liveSyncRef.current.hasPulledOnce)return; // prevent pushing stale local state before first pull lands
+    if(_liveSyncRef.current.suppressNextPush){_liveSyncRef.current.suppressNextPush=false;return}
+    clearTimeout(_liveSyncRef.current.livePushTimer);
+    _liveSyncRef.current.livePushTimer=setTimeout(async()=>{
+      try{
+        const me=(_user.email||'').toLowerCase();
+        const ts=Date.now();
+        const leadsHash=_hashLeads(leadsRef.current);
+        _liveSyncRef.current.lastLeadsHash=leadsHash;
+        const payload={
+          session:session||null,
+          curIdx:typeof curIdx==='number'?curIdx:-1,
+          phase:phase||'idle',
+          running:!!running,
+          leadsCount:(leadsRef.current||[]).length,
+          leadsHash,
+          currentLeadPhone:(curIdx>=0&&leadsRef.current[curIdx])?leadsRef.current[curIdx].phone:null,
+          ts,
+          devId:window._devId,
+          email:(_user.email||'').toLowerCase()
+        };
+        _liveSyncRef.current.lastAppliedTs=ts; // prevent our own write from echoing back and triggering an apply
+        setSyncStatus('pushing');
+        await _SB.from('autodial_admin_config').upsert({admin_email:'live_'+me,biz_name:JSON.stringify(payload)},{onConflict:'admin_email'});
+        setSyncStatus('synced');setLastSyncAt(Date.now());
+        DBG('[LiveSync] push session state ts',ts);
+      }catch(e){setSyncStatus('offline');console.warn('[LiveSync session push]',e?.message||e)}
+    },300);
+    return()=>clearTimeout(_liveSyncRef.current.livePushTimer);
+  },[session,curIdx,phase,running]);
+
+  // ═══ Write-through: push leads array on every change (800ms debounce — bigger payload)
+  useEffect(()=>{
+    if(!_SB||!_user||!window._cloudReady)return;
+    if(!_liveSyncRef.current.hasPulledOnce)return; // prevent pushing stale local state before first pull lands
+    const newHash=_hashLeads(leads);
+    if(newHash===_liveSyncRef.current.lastLeadsHash)return; // no meaningful change
+    if(_liveSyncRef.current.suppressNextPush){_liveSyncRef.current.suppressNextPush=false;_liveSyncRef.current.lastLeadsHash=newHash;return}
+    clearTimeout(_liveSyncRef.current.leadsPushTimer);
+    _liveSyncRef.current.leadsPushTimer=setTimeout(async()=>{
+      try{
+        const me=(_user.email||'').toLowerCase();
+        _liveSyncRef.current.lastLeadsHash=newHash;
+        const payload={leads:(leads||[]).slice(0,5000),hash:newHash,count:leads.length,ts:Date.now(),devId:window._devId};
+        await _SB.from('autodial_admin_config').upsert({admin_email:'leads_'+me,biz_name:JSON.stringify(payload)},{onConflict:'admin_email'});
+        DBG('[LiveSync] push',leads.length,'leads hash',newHash);
+      }catch(e){console.warn('[LiveSync leads push]',e?.message||e)}
+    },800);
+    return()=>clearTimeout(_liveSyncRef.current.leadsPushTimer);
+  },[leads]);
+
+  // Sync broadcast — legacy path used only for explicit user-intent events
+  // (syncSend('start'), syncSend('pause'), syncSend('end'), etc). Active state sync
+  // (session/curIdx/phase/running/leads) is now owned by the unified live-sync layer above.
   const syncRef=useRef(null);
-  const broadcast=useCallback((extra={})=>{clearTimeout(syncRef.current);syncRef.current=setTimeout(()=>{syncSend('sync',{leads,cfg:{sheetId:cfg.sheetId,sheetTab:cfg.sheetTab,delay:cfg.delay},curIdx,phase,running,session,countdown,...extra})},300)},[leads,cfg,curIdx,phase,running,session,countdown]);
+  const broadcast=useCallback(()=>{/* no-op — live sync owns this now */},[]);
   const prevLeads=useRef(leads);
   const leadsRef=useRef(leads); // Always-current leads for callbacks
   useEffect(()=>{leadsRef.current=leads},[leads]);
-  useEffect(()=>{if(leads!==prevLeads.current){prevLeads.current=leads;broadcast()}},[leads,broadcast]);
-  // ═══ Also broadcast realtime state changes so other devices of the same user catch up live
-  // (desktop → phone mid-session). Previously only `leads` triggered broadcast.
-  useEffect(()=>{broadcast()},[session,curIdx,phase,running,broadcast]);
 
-  // Sync listener
+  // Sync listener — still handles the legacy explicit-intent messages for instant cross-device actions
   useEffect(()=>{const unsub=onSync(d=>{
-    if(d.type==='sync'){if(d.leads)setLeads(d.leads);if(d.curIdx!==undefined)setCurIdx(d.curIdx);if(d.phase)setPhase(d.phase);if(d.running!==undefined)setRunning(d.running);if(d.session)setSession(d.session)}
     if(d.type==='dial'&&isMob)setTimeout(()=>{window.location.href='tel:'+d.phone.replace(/[^+\d]/g,'')},500);
     if(d.type==='start'){if(d.leads)setLeads(d.leads);setCurIdx(d.curIdx);setRunning(true);setPhase('calling');setSession(d.session);setTab('dial');if(isMob&&d.phone)setTimeout(()=>{window.location.href='tel:'+d.phone.replace(/[^+\d]/g,'')},800)}
     if(d.type==='pause'){setRunning(false);setPhase('idle')}
@@ -3636,6 +3852,17 @@ function App(){
       </button>}
       {isOffline&&<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:10,padding:'2px 7px'}}>OFFLINE</span>}
             {session&&!session.ended&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)',fontSize:10,padding:'2px 7px'}}>LIVE {fmtTime(elapsed)}</span>}
+      {/* ═══ Live-sync status — green dot=synced, amber=pushing, red=offline. Click to force-pull. */}
+      {(()=>{const _ago=lastSyncAt?Math.floor((Date.now()-lastSyncAt)/1000):null;
+        const _fresh=_ago!==null&&_ago<8;
+        const _color=syncStatus==='offline'?'var(--red)':_fresh?'var(--green)':syncStatus==='pushing'||syncStatus==='pulling'?'var(--amber)':'var(--text3)';
+        const _bg=syncStatus==='offline'?'var(--rdim)':_fresh?'var(--gdim)':syncStatus==='pushing'||syncStatus==='pulling'?'var(--amdim)':'var(--bg3)';
+        const _label=syncStatus==='offline'?'Offline':_fresh?'Synced':syncStatus==='pushing'?'Pushing…':syncStatus==='pulling'?'Pulling…':_ago!==null?_ago+'s ago':'Idle';
+        return<button onClick={()=>{if(window._liveSyncPull){window._liveSyncPull();toast('↻ Force-pulled from cloud','info')}}} title={'Live sync · '+_label+(lastSyncAt?' · '+new Date(lastSyncAt).toLocaleTimeString():'')+' · tap to force-pull'} className="pill" style={{background:_bg,color:_color,fontSize:10,padding:'2px 7px',border:'none',display:'flex',alignItems:'center',gap:4,cursor:'pointer'}}>
+          <span style={{width:6,height:6,borderRadius:'50%',background:_color,display:'inline-block',boxShadow:_fresh?'0 0 5px '+_color:'none',animation:syncStatus==='pushing'||syncStatus==='pulling'?'pulse 1s infinite':undefined}}/>
+          {_label}
+        </button>
+      })()}
       {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:10,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
       <button onClick={()=>setShowHelp(true)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:12,fontWeight:700}}>?</button>
       <button onClick={()=>authLogout()} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
