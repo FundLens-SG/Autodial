@@ -575,7 +575,7 @@ window.gSheets={
       {method:'POST',body:JSON.stringify({values:[row]})});return true}catch(e){return false}
   },
   async meta(id){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'?fields=sheets.properties')).json()).sheets?.map(function(s){return{id:s.properties.sheetId,title:s.properties.title,rows:s.properties.gridProperties?.rowCount}})||[]},async vals(id,range){return(await(await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range))).json()).values||[]},async put(id,range,val){await gF('https://sheets.googleapis.com/v4/spreadsheets/'+id+'/values/'+encodeURIComponent(range)+'?valueInputOption=USER_ENTERED',{method:'PUT',body:JSON.stringify({values:[[val]]})})}};
-window.gCal={async create(sum,desc,s,e,att){var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all},async del(eventId){if(!eventId)return false;try{await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events/'+encodeURIComponent(eventId)+'?sendUpdates=all',{method:'DELETE'});return true}catch(e){console.warn('[gCal.del]',e?.message||e);return false}},async update(eventId,patch){if(!eventId)return null;try{return await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events/'+encodeURIComponent(eventId)+'?sendUpdates=all',{method:'PATCH',body:JSON.stringify(patch)})).json()}catch(e){console.warn('[gCal.update]',e?.message||e);return null}},async loadRange(calIds,minD,maxD){var all=[];var list=(calIds||['primary']);for(var i=0;i<list.length;i++){var cid=list[i];try{var evs=cid==='primary'?await this.events(minD.toISOString(),maxD.toISOString()):await this.eventsFromCal(cid,minD.toISOString(),maxD.toISOString());evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}catch(e){}}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
+window.gCal={async create(sum,desc,s,e,att,calId){var cid=calId||'primary';var b={summary:sum,description:desc,start:{dateTime:s,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},end:{dateTime:e,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}};if(att?.length)b.attendees=att.map(function(e){return{email:e}});return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(cid)+'/events?sendUpdates=all',{method:'POST',body:JSON.stringify(b)})).json())},async events(min,max){return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]},async eventsFromCal(calId,min,max){try{return(await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events?timeMin='+min+'&timeMax='+max+'&singleEvents=true&orderBy=startTime&maxResults=250&showDeleted=false')).json()).items||[]}catch(e){return[]}},async loadWeek(calIds){var now=new Date();var min=new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();var max=new Date(now.getTime()+7*86400000).toISOString();var all=[];for(var i=0;i<(calIds||['primary']).length;i++){var cid=calIds[i];var evs=cid==='primary'?await this.events(min,max):await this.eventsFromCal(cid,min,max);evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all},async del(eventId,calId){if(!eventId)return false;var cid=calId||'primary';try{await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(cid)+'/events/'+encodeURIComponent(eventId)+'?sendUpdates=all',{method:'DELETE'});return true}catch(e){console.warn('[gCal.del]',e?.message||e);return false}},async update(eventId,patch,calId){if(!eventId)return null;var cid=calId||'primary';try{return await(await gF('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(cid)+'/events/'+encodeURIComponent(eventId)+'?sendUpdates=all',{method:'PATCH',body:JSON.stringify(patch)})).json()}catch(e){console.warn('[gCal.update]',e?.message||e);return null}},async loadRange(calIds,minD,maxD){var all=[];var list=(calIds||['primary']);for(var i=0;i<list.length;i++){var cid=list[i];try{var evs=cid==='primary'?await this.events(minD.toISOString(),maxD.toISOString()):await this.eventsFromCal(cid,minD.toISOString(),maxD.toISOString());evs.forEach(function(e){e._calId=cid});all=all.concat(evs)}catch(e){}}all.sort(function(a,b){var ta=new Date(a.start?.dateTime||a.start?.date||0).getTime();var tb=new Date(b.start?.dateTime||b.start?.date||0).getTime();return ta-tb});return all}};
 window.gDrive={async search(q){var fq="mimeType='application/vnd.google-apps.spreadsheet'";if(q)fq+=" and name contains '"+q.replace(/'/g,"\\'")+"'";return(await(await gF('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(fq)+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20')).json()).files||[]}};
 
 // ══════ AI PROMPTS — centralized ══════
@@ -2003,6 +2003,8 @@ function App(){
   const[pickerEvents,setPickerEvents]=useState([]);
   const[pickerLoading,setPickerLoading]=useState(false);
   const[pickerWeekIdx,setPickerWeekIdx]=useState(0); // 0 = current week, 1 = next, etc.
+  const[pickerViewMode,setPickerViewMode]=useState(()=>load('pickerVM')||'list'); // 'list' | 'grid'
+  useEffect(()=>{save('pickerVM',pickerViewMode)},[pickerViewMode]);
   const[apptShaky,setApptShaky]=useState(false); // Shaky flag on new appointment
   const[pendingShakyKey,setPendingShakyKey]=useState(null); // "dayKey_HH:MM" for inline confirm
   const[calViewMode,setCalViewMode]=useState(()=>load('calvm')||'list'); // 'list' | 'grid' for Cal tab
@@ -2091,6 +2093,24 @@ function App(){
     if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'gamify_'+_user.email.toLowerCase(),biz_name:JSON.stringify({bestStreak,achievements,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}},[bestStreak,achievements]);
 
   useEffect(()=>{save('activeSession',session)},[session]);
+
+  // ═══ CROSS-DEVICE SESSION SYNC — push full session state to sess_<email> in Supabase.
+  // Previously only the `ended` flag was pushed, so picking up a session on another device was
+  // impossible. Now we push {session, curIdx, phase, running, ts} whenever any of those change,
+  // debounced 1.5s to avoid spamming writes. On startup, the hard-sync block reads this key
+  // and restores an active session if one is newer than the local copy.
+  const _sessSyncRef=useRef(null);
+  useEffect(()=>{
+    if(!_SB||!_user||!window._cloudReady)return;
+    clearTimeout(_sessSyncRef.current);
+    _sessSyncRef.current=setTimeout(()=>{
+      try{
+        const payload=session?{session:{...session,_syncedAt:undefined},curIdx,phase,running,ts:Date.now(),ended:!!session.ended,endTime:session?.endTime||0}:{ended:true,endTime:Date.now(),ts:Date.now()};
+        _SB.from('autodial_admin_config').upsert({admin_email:'sess_'+_user.email.toLowerCase(),biz_name:JSON.stringify(payload)},{onConflict:'admin_email'}).catch(function(){})
+      }catch(e){}
+    },1500);
+    return()=>clearTimeout(_sessSyncRef.current);
+  },[session,curIdx,phase,running]);
   const[totalSets,setTotalSets]=useState(load('ts')||0);
   const[totalStars,setTotalStars]=useState(load('totalStars')||0);
   const[starBank,setStarBank]=useState(Math.round(load('starBank')||0)); // Lifetime accumulated stars
@@ -2799,77 +2819,62 @@ function App(){
           }
         }
       }catch(e){console.warn('[CloudSync]',e.message)}
-      // ═══ DEDICATED HARD-SYNC RESTORE (each item isolated so one failure never blocks others) ═══
+      // ═══ DEDICATED HARD-SYNC RESTORE — parallelized (previously serial, ~3-6s cold start) ═══
       if(_SB){
         const _hs=async(key,fn)=>{try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',key).single();if(r.data?.biz_name){const d=JSON.parse(r.data.biz_name);fn(d)}}catch(e){console.warn('[HardSync:'+key+']',e.message)}};
 
-        if(!localStorage.getItem('autodial_gemini'))
-          await _hs('gemini_'+myEmail,d=>{if(d.key){setGeminiKeyVal(d.key);localStorage.setItem('autodial_gemini',d.key)}});
-
-        if(!localStorage.getItem('autodial_claude_key'))
-          await _hs('claude_'+myEmail,d=>{if(d.key){setClaudeKeyVal(d.key);localStorage.setItem('autodial_claude_key',d.key)}});
-
-        if(!Object.keys(calVisibility).length)
-          await _hs('calvis_'+myEmail,d=>{if(d&&typeof d==='object')setCalVisibility(d)});
-        await _hs('calinv_'+myEmail,d=>{if(d){if(typeof d.showInvited==='boolean')setShowInvited(d.showInvited);if(typeof d.showDeclined==='boolean')setShowDeclined(d.showDeclined)}});
-
-        if(!waTemplates.length)
-          await _hs('watpl_'+myEmail,d=>{if(d?.length)setWaTemplates(d)});
-
-        if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length))
-          await _hs('acfg_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminConfigs(d)});
-
-        if(!load('apptDur'))
-          await _hs('apptdur_'+myEmail,d=>{if(d.dur&&d.dur!==60)setApptDuration(d.dur)});
-
-        // Restore deleted appointment IDs from Supabase (cross-device)
-        try{const dar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dappt_'+myEmail).single();
+        // Fire all independent restores in PARALLEL — each is isolated so one failure never blocks others.
+        // Previously these were awaited sequentially which meant ~400ms × 15 keys of round-trip latency.
+        const _hsJobs=[];
+        if(!localStorage.getItem('autodial_gemini'))_hsJobs.push(_hs('gemini_'+myEmail,d=>{if(d.key){setGeminiKeyVal(d.key);localStorage.setItem('autodial_gemini',d.key)}}));
+        if(!localStorage.getItem('autodial_claude_key'))_hsJobs.push(_hs('claude_'+myEmail,d=>{if(d.key){setClaudeKeyVal(d.key);localStorage.setItem('autodial_claude_key',d.key)}}));
+        if(!Object.keys(calVisibility).length)_hsJobs.push(_hs('calvis_'+myEmail,d=>{if(d&&typeof d==='object')setCalVisibility(d)}));
+        _hsJobs.push(_hs('calinv_'+myEmail,d=>{if(d){if(typeof d.showInvited==='boolean')setShowInvited(d.showInvited);if(typeof d.showDeclined==='boolean')setShowDeclined(d.showDeclined)}}));
+        if(!waTemplates.length)_hsJobs.push(_hs('watpl_'+myEmail,d=>{if(d?.length)setWaTemplates(d)}));
+        if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length))_hsJobs.push(_hs('acfg_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminConfigs(d)}));
+        if(!load('apptDur'))_hsJobs.push(_hs('apptdur_'+myEmail,d=>{if(d.dur&&d.dur!==60)setApptDuration(d.dur)}));
+        // Deleted appointment IDs
+        _hsJobs.push((async()=>{try{const dar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dappt_'+myEmail).single();
           if(dar.data&&dar.data.biz_name){const cloudDel=JSON.parse(dar.data.biz_name);
             const localDel=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
             const merged=[...new Set([...localDel,...cloudDel])].slice(-500);
-            localStorage.setItem('_deletedApptIds',JSON.stringify(merged))}}catch(e){}
-        // Google token — restore from cloud
-        if(!localStorage.getItem('ad_gt')){
-          await _hs('shared_gtoken',d=>{
-            if(d.token&&d.ts&&(Date.now()-d.ts)<2700000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());setGOk(true)}})
-        }
-
-        if(!load('totalStars'))
-          await _hs('stars_'+myEmail,d=>{if(d.stars)setTotalStars(d.stars)});
-
-        if(!paymentHistory.length)
-          await _hs('payh_'+myEmail,d=>{if(d?.length)setPaymentHistory(d)});
-
-        if(!incentives.length)
-          await _hs('incv_'+myEmail,d=>{if(d?.length)setIncentives(d)});
-
-        if(!Object.keys(adminSessions).length)
-          await _hs('asess_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminSessions(d)});
-
-        // ═══ RESURRECTION FIX: pull sessSuppress so paid/cleared sessions don't come back on a fresh device
-        if(sessSuppress.size===0)
-          await _hs('ssup_'+myEmail,d=>{if(Array.isArray(d)&&d.length)setSessSuppress(new Set(d))});
-
-        if(!Object.keys(learnedPatterns).length)
-          await _hs('learned_'+myEmail,d=>{if(d&&Object.keys(d).length){setLearnedPatterns(d);window._learnedPatterns=d}});
-
-        if(!promotionLog.length)
-          await _hs('promo_'+myEmail,d=>{if(d?.length)setPromotionLog(d)});
-
-        if(!sTabs.length)
-          await _hs('stabs_'+myEmail,d=>{if(d?.length)setSTabs(d)});
-
-        if(!load('bestStreak')&&!load('achievements'))
-          await _hs('gamify_'+myEmail,d=>{if(d.bestStreak)setBestStreak(d.bestStreak);if(d.achievements?.length)setAchievements(d.achievements)});
+            localStorage.setItem('_deletedApptIds',JSON.stringify(merged))}}catch(e){}})());
+        // Google token
+        if(!localStorage.getItem('ad_gt'))_hsJobs.push(_hs('shared_gtoken',d=>{
+          if(d.token&&d.ts&&(Date.now()-d.ts)<2700000){_gToken=d.token;localStorage.setItem('ad_gt',d.token);localStorage.setItem('ad_gt_ts',(d.ts||0).toString());setGOk(true)}}));
+        if(!load('totalStars'))_hsJobs.push(_hs('stars_'+myEmail,d=>{if(d.stars)setTotalStars(d.stars)}));
+        if(!paymentHistory.length)_hsJobs.push(_hs('payh_'+myEmail,d=>{if(d?.length)setPaymentHistory(d)}));
+        if(!incentives.length)_hsJobs.push(_hs('incv_'+myEmail,d=>{if(d?.length)setIncentives(d)}));
+        if(!Object.keys(adminSessions).length)_hsJobs.push(_hs('asess_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminSessions(d)}));
+        if(sessSuppress.size===0)_hsJobs.push(_hs('ssup_'+myEmail,d=>{if(Array.isArray(d)&&d.length)setSessSuppress(new Set(d))}));
+        if(!Object.keys(learnedPatterns).length)_hsJobs.push(_hs('learned_'+myEmail,d=>{if(d&&Object.keys(d).length){setLearnedPatterns(d);window._learnedPatterns=d}}));
+        if(!promotionLog.length)_hsJobs.push(_hs('promo_'+myEmail,d=>{if(d?.length)setPromotionLog(d)}));
+        if(!sTabs.length)_hsJobs.push(_hs('stabs_'+myEmail,d=>{if(d?.length)setSTabs(d)}));
+        if(!load('bestStreak')&&!load('achievements'))_hsJobs.push(_hs('gamify_'+myEmail,d=>{if(d.bestStreak)setBestStreak(d.bestStreak);if(d.achievements?.length)setAchievements(d.achievements)}));
+        // ═══ Cross-device session restore — if another device has an active session, pick it up
+        _hsJobs.push(_hs('sess_'+myEmail,d=>{
+          if(!d)return;
+          // If cloud has ended marker newer than our local session, clear local
+          if(d.ended&&d.endTime&&session&&!session.ended&&d.endTime>session.startTime){
+            setSession(null);setRunning(false);setPhase('idle');save('activeSession',null);
+            toast('Session ended on another device','info');return;
+          }
+          // If cloud has an ACTIVE session newer than our local state, adopt it
+          if(!d.ended&&d.session&&d.session.startTime){
+            const _local=session;
+            const _cloudNewer=!_local||_local.ended||(d.ts>(_local._syncedAt||0)&&d.session.startTime===_local.startTime);
+            if(_cloudNewer||(!_local&&d.session.startTime&&Date.now()-d.session.startTime<86400000)){
+              setSession({...d.session,_syncedAt:Date.now()});
+              if(typeof d.curIdx==='number')setCurIdx(d.curIdx);
+              if(d.running)setRunning(true);
+              if(d.phase)setPhase(d.phase);
+              save('activeSession',d.session);
+              toast('Resumed active session from another device','info');
+            }
+          }
+        }));
+        await Promise.all(_hsJobs);
       }
-      // Cross-device session check — if another device ended the session, clear it here
-      if(session&&!session.ended&&_SB){
-        try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sess_'+myEmail).single();
-          if(sr.data&&sr.data.biz_name){const sd=JSON.parse(sr.data.biz_name);
-            if(sd.ended&&sd.endTime&&sd.endTime>session.startTime){
-              DBG('[AutoDial] Session was ended on another device');
-              setSession(null);setRunning(false);setPhase('idle');save('activeSession',null);
-              toast('Session ended on another device','info')}}}catch(e){}}
       // Auto-refresh Google via Worker (silent, no popup)
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
         try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
@@ -3146,6 +3151,9 @@ function App(){
   const leadsRef=useRef(leads); // Always-current leads for callbacks
   useEffect(()=>{leadsRef.current=leads},[leads]);
   useEffect(()=>{if(leads!==prevLeads.current){prevLeads.current=leads;broadcast()}},[leads,broadcast]);
+  // ═══ Also broadcast realtime state changes so other devices of the same user catch up live
+  // (desktop → phone mid-session). Previously only `leads` triggered broadcast.
+  useEffect(()=>{broadcast()},[session,curIdx,phase,running,broadcast]);
 
   // Sync listener
   useEffect(()=>{const unsub=onSync(d=>{
@@ -3324,23 +3332,30 @@ function App(){
       gTimesheet.append(s,userName,myCfg,tsId||undefined)}};
 
 
-  // ═══ FEATURE 4: Live Leaderboard — broadcast stats ═══
+  // ═══ FEATURE 4: Live Leaderboard — broadcast stats (ADMINS ONLY; Mains never push their
+  // practice sessions to lb_ so admins can't see Main's calling progress)
   const broadcastStats=useCallback(()=>{
     if(!_SB||!_user||!session||session.ended)return;
+    if(role==='main')return;
     const stats={email:myEmail,name:window._prof?.full_name||myEmail,dialed:session.dialed||0,sets:session.sets||0,
-      np:session.np||0,ni:session.ni||0,rank:rank?.label||'',ts:Date.now()};
+      np:session.np||0,ni:session.ni||0,rank:rank?.label||'',role,ts:Date.now()};
     try{_SB.from('autodial_admin_config').upsert({admin_email:'lb_'+myEmail.toLowerCase(),biz_name:JSON.stringify(stats)},{onConflict:'admin_email'}).catch(()=>{})}catch(e){}
-  },[session,myEmail,rank]);
+  },[session,myEmail,rank,role]);
   // Broadcast every 30 seconds during active session
   useEffect(()=>{if(!session||session.ended)return;broadcastStats();
     const t=setInterval(broadcastStats,30000);return()=>clearInterval(t)},[session,broadcastStats]);
   const[leaderboard,setLeaderboard]=useState([]);
   // Load leaderboard data
-  useEffect(()=>{if(!_SB||role==='admin')return;
+  useEffect(()=>{if(!_SB)return;
     const loadLB=async()=>{try{const r=await _SB.from('autodial_admin_config').select('admin_email,biz_name').like('admin_email','lb_%');
-      if(r.data){const lb=r.data.map(d=>{try{const s=JSON.parse(d.biz_name);return s}catch(e){return null}}).filter(Boolean).filter(s=>Date.now()-s.ts<86400000).sort((a,b)=>b.sets-a.sets||b.dialed-a.dialed);
+      if(r.data){const lb=r.data.map(d=>{try{const s=JSON.parse(d.biz_name);return s}catch(e){return null}}).filter(Boolean).filter(s=>Date.now()-s.ts<86400000).filter(s=>s.role!=='main').sort((a,b)=>b.sets-a.sets||b.dialed-a.dialed);
         setLeaderboard(lb)}}catch(e){}};
     loadLB();const t=setInterval(loadLB,30000);return()=>clearInterval(t)},[]);
+  // ═══ One-time: scrub any Main leaderboard entry left over from older builds so admins can never see it
+  useEffect(()=>{
+    if(role!=='main'||!_SB||!_user)return;
+    try{_SB.from('autodial_admin_config').delete().eq('admin_email','lb_'+_user.email.toLowerCase()).then(()=>{},()=>{})}catch(e){}
+  },[role]);
   const applyOutcome=useCallback((status,extra={})=>{const idx=curIdx;
     setLeads(p=>p.map((l,i)=>{if(i!==idx)return l;const now=new Date().toLocaleString();let u={...l,calledAt:now,...extra};
       if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=n(myCfg.npMax,5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
@@ -3389,7 +3404,11 @@ function App(){
       return s})},[curIdx,session,totalSets,myCfg,syncSheet,monthlyAppts]);
 
   const moveNext=useCallback(()=>{setLeads(p=>{const n=getNextDialable(p,curIdx,filters);
-    if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return p}setCurIdx(n);setPhase('waiting');setCountdown(cfg.delay);return p})},[curIdx,cfg.delay,filters]);
+    if(n===-1){setRunning(false);setPhase('idle');setCurIdx(-1);return p}
+    // ═══ Call delay removed — advance to next lead and dial immediately
+    setCurIdx(n);setPhase('calling');
+    setTimeout(()=>{const l=leadsRef.current[n];if(l)dial(l.phone)},300);
+    return p})},[curIdx,filters,dial]);
 
   // ═══ FEATURE 7: Conflict — claim lead before dialing ═══
   const claimLead=useCallback((leadIdx)=>{
@@ -3966,23 +3985,11 @@ function App(){
                 <button onClick={()=>handleOutcome('set')} disabled={setDone||showPostCall?.status==='set'} style={{padding:'12px 0',background:setDone?'var(--bg3)':'linear-gradient(135deg,rgba(63,185,80,.15),rgba(63,185,80,.08))',color:setDone?'var(--text3)':'var(--green)',fontSize:13,fontWeight:700,borderRadius:14,minHeight:48,border:'1px solid '+(setDone?'var(--border)':'rgba(63,185,80,.2)'),opacity:setDone?.5:1,lineHeight:1.1}}>{setDone?'✓ Set':'Set (check dates)'}</button>
                 <button onClick={()=>handleOutcome('pending')} style={{gridColumn:'1/-1',padding:'9px 0',background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:600}}>Skip → (don't mark)</button>
               </div>
-              {/* Adjustable delay timer ±1s */}
-              <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,marginTop:10}}>
-                <span style={{fontSize:10,color:'var(--text3)'}}>Delay:</span>
-                <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
-                <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:36,textAlign:'center'}}>{cfg.delay}s</span>
-                <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
-              </div>
+              {/* Call delay removed — next lead fires immediately after an outcome */}
             </>}
           </>
         ):(!showNextPreview&&<div style={{textAlign:'center',padding:'20px 0'}}>
             <p style={{color:'var(--text3)',fontSize:13,marginBottom:10}}>{pending.length?(cfg.sheetId?'Ready — '+pending.length+' callable. Tap Leads tab → Fetch to refresh':'Ready — '+pending.length+' leads'):'Upload leads to start'}</p>
-            {pending.length>0&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
-              <span style={{fontSize:10,color:'var(--text3)'}}>Call delay:</span>
-              <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
-              <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:36,textAlign:'center'}}>{cfg.delay}s</span>
-              <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:16,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
-            </div>}
           </div>)}
       </div>
 
@@ -4387,7 +4394,7 @@ function App(){
                           // Use the configured default duration (capped at slot size)
                           const _dur=Math.min(_minMin,s.hours*60);
                           const _end=new Date(s.start.getTime()+_dur*60000);
-                          const evt=await gCal.create(title,'Created from AutoDial free slot',s.start.toISOString(),_end.toISOString(),[]);
+                          const evt=await gCal.create(title,'Created from AutoDial free slot',s.start.toISOString(),_end.toISOString(),[],myCfg.targetCalendarId||'primary');
                           if(evt?.id){toast('✓ Event created');setWeekEvents(p=>[...p,{id:evt.id,summary:title,start:{dateTime:s.start.toISOString()},end:{dateTime:_end.toISOString()},_calId:'primary'}])}
                           else{toast('Create failed','err')}
                         }catch(e){toast('Create failed: '+(e.message||e),'err')}
@@ -4471,7 +4478,7 @@ function App(){
                       const title=prompt('New event title (e.g. "Call Winnie", "Prep meeting"):');
                       if(!title)return;
                       try{toast('Creating event…','info');
-                        const evt=await gCal.create(title,'Created from AutoDial free slot',s.start.toISOString(),s.end.toISOString(),[]);
+                        const evt=await gCal.create(title,'Created from AutoDial free slot',s.start.toISOString(),s.end.toISOString(),[],myCfg.targetCalendarId||'primary');
                         if(evt?.id){toast('✓ Event created');setWeekEvents(p=>[...p,{id:evt.id,summary:title,start:{dateTime:s.start.toISOString()},end:{dateTime:s.end.toISOString()},_calId:'primary'}])}
                         else{toast('Create failed','err')}
                       }catch(e){toast('Create failed: '+(e.message||e),'err')}
@@ -4947,30 +4954,36 @@ function App(){
                   doc.setFont('helvetica','bold');doc.text('BILL TO: PolicyLens',120,46);
                   doc.setFont('helvetica','normal');doc.text('(Main Manager)',120,52);
                   const rows=[];let baseTotal=0;let bonusTotal=0;
-                  // Sort sessions by date ascending so promotion rows appear at the right point
+                  // ═══ Simplified: one summary row per rate tier — no "Bronze" labels, no set counts.
+                  // Just "Freelance Admin Services · <from> – <to>" with aggregated hours at the prevailing rate.
                   const _sortedSess=sessions.filter(s=>!s.paid).slice().sort((a,b)=>(a.startTime||0)-(b.startTime||0));
-                  _sortedSess.forEach(s=>{const d=new Date(s.startTime);const hc=s.fullSession?_sessDur:((s.elapsed||0)/3600);
-                    const base=hc*(s.hourlyRate||0);baseTotal+=base;if(s.bonus)bonusTotal+=s.pay-base;
-                    // Insert promotion marker row BEFORE the session where it happened
-                    if(s.promoted){
-                      rows.push([fmtDayMonth(d),'>>> PROMOTED TO '+(s.promotedTo||'')+' ('+(s.promotedFrom||'')+' -> '+(s.promotedTo||'')+')','','$'+(s.promotedFromRate||0)+' -> $'+(s.promotedToRate||0),'+$'+((s.promotedToRate||0)-(s.promotedFromRate||0))+'/hr'])
-                    }
-                    rows.push([fmtDayMonth(d),s.tier+' · '+(s.sets||0)+' sets',hc.toFixed(1)+' hrs','$'+(s.hourlyRate||0),
-                      '$'+base.toFixed(2)])});
-                  if(bonusTotal>0)rows.push(['','Bonus (performance)','','','$'+bonusTotal.toFixed(2)]);
+                  if(_sortedSess.length){
+                    // Group by hourlyRate so promotions still show as separate rows (without leaking tier names)
+                    const _byRate=new Map();
+                    _sortedSess.forEach(s=>{const hc=s.fullSession?_sessDur:((s.elapsed||0)/3600);
+                      const base=hc*(s.hourlyRate||0);baseTotal+=base;if(s.bonus)bonusTotal+=(s.pay||0)-base;
+                      const k=s.hourlyRate||0;
+                      if(!_byRate.has(k))_byRate.set(k,{hours:0,amount:0,firstTs:s.startTime,lastTs:s.startTime});
+                      const b=_byRate.get(k);b.hours+=hc;b.amount+=base;
+                      if(s.startTime<b.firstTs)b.firstTs=s.startTime;
+                      if(s.startTime>b.lastTs)b.lastTs=s.startTime;
+                    });
+                    // Emit one row per rate band, sorted by period start
+                    Array.from(_byRate.entries()).sort((a,b)=>a[1].firstTs-b[1].firstTs).forEach(([rate,info])=>{
+                      const from=new Date(info.firstTs),to=new Date(info.lastTs);
+                      const periodStr=fmtDayMonth(from)+(fmtDayMonth(from)!==fmtDayMonth(to)?' – '+fmtDayMonth(to):'');
+                      rows.push([periodStr,'Freelance Admin Services',info.hours.toFixed(1)+' hrs','$'+rate,'$'+info.amount.toFixed(2)]);
+                    });
+                  }
+                  if(bonusTotal>0)rows.push(['','Performance bonus','','','$'+bonusTotal.toFixed(2)]);
                   // Include unpaid incentives for this admin
                   const adminIncentives=incentives.filter(x=>!x.paid&&(x.admin||'').toLowerCase()===email);
                   const incentiveTotal=adminIncentives.reduce((a,x)=>a+(x.amount||0),0);
-                  adminIncentives.forEach(x=>{rows.push([new Date(x.date).toLocaleDateString('en-SG',{day:'numeric',month:'short'}),(x.type==='met'?'Met incentive':'Tip')+': '+x.leadName,'','','$'+x.amount.toFixed(2)])});
+                  adminIncentives.forEach(x=>{rows.push([new Date(x.date).toLocaleDateString('en-SG',{day:'numeric',month:'short'}),(x.type==='met'?'Met incentive':'Tip'),'','','$'+x.amount.toFixed(2)])});
                   const grandTotal=unpaid+incentiveTotal;
-                  doc.autoTable({startY:payNow?75:65,head:[['Date','Description','Hours','Rate','Amount']],body:rows,
+                  doc.autoTable({startY:payNow?75:65,head:[['Period','Description','Hours','Rate','Amount']],body:rows,
                     styles:{fontSize:10,cellPadding:4},headStyles:{fillColor:[99,102,241]},
-                    didParseCell:function(data){
-                      // Highlight promotion rows with a gold tint
-                      if(data.section==='body'&&rows[data.row.index]&&String(rows[data.row.index][1]||'').indexOf('PROMOTED TO')>=0){
-                        data.cell.styles.fillColor=[254,243,199];data.cell.styles.fontStyle='bold';data.cell.styles.textColor=[146,64,14]}
-                    },
-                    foot:[['','Total: '+sessions.filter(s=>!s.paid).length+' sessions'+(adminIncentives.length?' + '+adminIncentives.length+' incentives':''),totalHrs.toFixed(1)+' hrs','TOTAL','$'+grandTotal.toFixed(2)]],
+                    foot:[['','TOTAL',totalHrs.toFixed(1)+' hrs','','$'+grandTotal.toFixed(2)]],
                     footStyles:{fillColor:[240,240,240],textColor:[0],fontStyle:'bold'}});
                   let fY=doc.lastAutoTable.finalY+10;
                   // ═══ PayNow QR Code ═══
@@ -5125,24 +5138,30 @@ function App(){
                 if(payNow)doc.text('PayNow: '+payNow,20,65);
                 doc.setFont('helvetica','bold');doc.text('BILL TO: PolicyLens',120,46);
                 doc.setFont('helvetica','normal');doc.text('(Main Manager)',120,52);
-                // Body rows
+                // Body rows — collapsed into one summary row per rate band
                 const rows=[];let baseTotal=0;let bonusTotal=0;let totalHrs=0;
-                _sortedSess.forEach(s=>{const d=new Date(s.startTime);const hc=s.fullSession?(myCfg.sessionDur||5):((s.elapsed||0)/3600);
-                  totalHrs+=hc;const base=hc*(s.hourlyRate||0);baseTotal+=base;if(s.bonus)bonusTotal+=(s.pay||0)-base;
-                  if(s.promoted){
-                    rows.push([fmtDayMonth(d),'>>> PROMOTED TO '+(s.promotedTo||'')+' ('+(s.promotedFrom||'')+' -> '+(s.promotedTo||'')+')','','$'+(s.promotedFromRate||0)+' -> $'+(s.promotedToRate||0),'+$'+((s.promotedToRate||0)-(s.promotedFromRate||0))+'/hr'])
-                  }
-                  rows.push([fmtDayMonth(d),(s.tier||'')+' · '+(s.sets||0)+' sets',hc.toFixed(1)+' hrs','$'+(s.hourlyRate||0),'$'+base.toFixed(2)])});
-                if(bonusTotal>0)rows.push(['','Bonus (performance)','','','$'+bonusTotal.toFixed(2)]);
+                if(_sortedSess.length){
+                  const _byRate=new Map();
+                  _sortedSess.forEach(s=>{const hc=s.fullSession?(myCfg.sessionDur||5):((s.elapsed||0)/3600);
+                    totalHrs+=hc;const base=hc*(s.hourlyRate||0);baseTotal+=base;if(s.bonus)bonusTotal+=(s.pay||0)-base;
+                    const k=s.hourlyRate||0;
+                    if(!_byRate.has(k))_byRate.set(k,{hours:0,amount:0,firstTs:s.startTime,lastTs:s.startTime});
+                    const b=_byRate.get(k);b.hours+=hc;b.amount+=base;
+                    if(s.startTime<b.firstTs)b.firstTs=s.startTime;
+                    if(s.startTime>b.lastTs)b.lastTs=s.startTime;
+                  });
+                  Array.from(_byRate.entries()).sort((a,b)=>a[1].firstTs-b[1].firstTs).forEach(([rate,info])=>{
+                    const from=new Date(info.firstTs),to=new Date(info.lastTs);
+                    const periodStr=fmtDayMonth(from)+(fmtDayMonth(from)!==fmtDayMonth(to)?' – '+fmtDayMonth(to):'');
+                    rows.push([periodStr,'Freelance Admin Services',info.hours.toFixed(1)+' hrs','$'+rate,'$'+info.amount.toFixed(2)]);
+                  });
+                }
+                if(bonusTotal>0)rows.push(['','Performance bonus','','','$'+bonusTotal.toFixed(2)]);
                 // Fallback if no sessions resolved — show a single aggregate row
-                if(!rows.length){rows.push([invDate,(p.sessions||0)+' sessions',(p.hours||0).toFixed(1)+' hrs','','$'+(p.amount||0).toFixed(2)]);totalHrs=p.hours||0}
-                doc.autoTable({startY:payNow?75:65,head:[['Date','Description','Hours','Rate','Amount']],body:rows,
+                if(!rows.length){rows.push([invDate,'Freelance Admin Services',(p.hours||0).toFixed(1)+' hrs','','$'+(p.amount||0).toFixed(2)]);totalHrs=p.hours||0}
+                doc.autoTable({startY:payNow?75:65,head:[['Period','Description','Hours','Rate','Amount']],body:rows,
                   styles:{fontSize:10,cellPadding:4},headStyles:{fillColor:[99,102,241]},
-                  didParseCell:function(data){
-                    if(data.section==='body'&&rows[data.row.index]&&String(rows[data.row.index][1]||'').indexOf('PROMOTED TO')>=0){
-                      data.cell.styles.fillColor=[254,243,199];data.cell.styles.fontStyle='bold';data.cell.styles.textColor=[146,64,14]}
-                  },
-                  foot:[['','Total: '+(p.sessions||_sortedSess.length)+' sessions'+(p.incentives?' + '+p.incentives+' incentives':''),totalHrs.toFixed(1)+' hrs','TOTAL','$'+(p.amount||0).toFixed(2)]],
+                  foot:[['','TOTAL',totalHrs.toFixed(1)+' hrs','','$'+(p.amount||0).toFixed(2)]],
                   footStyles:{fillColor:[240,240,240],textColor:[0],fontStyle:'bold'}});
                 let fY=doc.lastAutoTable.finalY+10;
                 // Payment confirmation line in place of QR
@@ -5888,6 +5907,15 @@ function App(){
                 </div>;
               })}
               {(ac.sharedCals||[]).length>0&&<p style={{margin:'6px 0 0',fontSize:9,color:'var(--text3)',lineHeight:1.4}}>✓ {em.split('@')[0]} can see these calendars when booking. "Busy only" hides event titles/locations.</p>}
+              {/* ═══ Target calendar picker — where admin's new appointments get written ═══ */}
+              {(ac.sharedCals||[]).length>0&&<div style={{marginTop:10,padding:'8px 10px',borderRadius:8,background:'rgba(99,102,241,.04)',border:'1px solid rgba(99,102,241,.2)'}}>
+                <label style={{fontSize:10,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:6}}>🎯 Write new appointments to</label>
+                <select value={ac.targetCalendarId||''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],targetCalendarId:e.target.value||undefined}}))} style={{width:'100%',padding:'8px',fontSize:12,background:'var(--bg)',color:'#f1f5f9',border:'1px solid var(--border)',borderRadius:6}}>
+                  <option value="">{em.split('@')[0]}'s own primary calendar</option>
+                  {(ac.sharedCals||[]).map(c=>{const meta=calList.find(x=>x.id===c.id);return<option key={c.id} value={c.id}>{c.name||meta?.summary||c.id}</option>})}
+                </select>
+                <p style={{margin:'4px 0 0',fontSize:9,color:'var(--text3)',lineHeight:1.3}}>{ac.targetCalendarId?'✓ New appts from '+em.split('@')[0]+' will land here, not on their personal calendar.':'Default: events go to '+em.split('@')[0]+'\'s own primary calendar. Pick a shared calendar above to centralize bookings.'}</p>
+              </div>}
             </div>}
             
           </div>}
@@ -6015,17 +6043,6 @@ function App(){
             <input type="number" min="0" step="0.01" value={cfg.cpl??''} onChange={e=>setCfg(s=>({...s,cpl:e.target.value===''?'':parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
           </div>
         </div>}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-          <div>
-            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Call delay</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Seconds between auto-dial calls</p>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <button onClick={()=>setCfg(s=>({...s,delay:Math.max(1,s.delay-1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
-            <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:24,textAlign:'center'}}>{cfg.delay}s</span>
-            <button onClick={()=>setCfg(s=>({...s,delay:Math.min(60,s.delay+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
-          </div>
-        </div>
       </div>}
 
       {settingsSubtab==='prefs'&&role==='admin'&&<div className="card" style={{marginBottom:12}}>
@@ -6592,14 +6609,116 @@ function App(){
               </div>
               <button onClick={()=>setPickerWeekIdx(p=>Math.min(TOTAL_WEEKS-1,p+1))} disabled={pickerWeekIdx>=TOTAL_WEEKS-1} style={{padding:'6px 10px',borderRadius:8,background:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--bg)':'var(--adim)',color:pickerWeekIdx>=TOTAL_WEEKS-1?'var(--text3)':'var(--accent2)',fontSize:14,fontWeight:800,opacity:pickerWeekIdx>=TOTAL_WEEKS-1?.4:1}}>▶</button>
             </div>
-            {/* Legend */}
+            {/* Legend + view toggle */}
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,fontSize:8,color:'var(--text3)',flexWrap:'wrap',justifyContent:'center'}}>
+              <div style={{display:'inline-flex',gap:2,padding:2,borderRadius:6,background:'var(--bg2)',border:'1px solid var(--border)',marginRight:4}}>
+                <button onClick={()=>setPickerViewMode('list')} style={{padding:'4px 9px',borderRadius:5,background:pickerViewMode==='list'?'var(--adim)':'transparent',color:pickerViewMode==='list'?'var(--accent2)':'var(--text3)',fontSize:9,fontWeight:700,border:'none'}}>📋 List</button>
+                <button onClick={()=>setPickerViewMode('grid')} style={{padding:'4px 9px',borderRadius:5,background:pickerViewMode==='grid'?'var(--adim)':'transparent',color:pickerViewMode==='grid'?'var(--accent2)':'var(--text3)',fontSize:9,fontWeight:700,border:'none'}}>🗓 Grid</button>
+              </div>
               <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'linear-gradient(135deg,#22c55e,#10b981)'}}/>Free {MIN_HRS}h+</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'linear-gradient(135deg,#fb923c,#ea580c)'}}/>Shaky</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'rgba(147,51,234,.4)'}}/>CB</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:9,height:9,borderRadius:2,background:'rgba(148,163,184,.3)'}}/>Busy</span>
             </div>
             {pickerLoading&&!pickerEvents.length?<div style={{textAlign:'center',padding:30,color:'var(--text3)',fontSize:11}}>⟳ Loading calendar…</div>:
+            pickerViewMode==='grid'?(()=>{
+              // ═══ GRID VIEW — 7 day cols × hourly rows, click a green block to book
+              const HR_START=Math.max(6,BIZ_START),HR_END=Math.min(23,BIZ_END+1);
+              const HOUR_PX=38;
+              const hours=[];for(let h=HR_START;h<HR_END;h++)hours.push(h);
+              return<div style={{overflowX:'auto'}}>
+                <div style={{display:'grid',gridTemplateColumns:'38px repeat(7,minmax(78px,1fr))',gap:1,minWidth:620}}>
+                  <div/>
+                  {visibleDays.map(d=>{const isToday=d.key===todayKey;return<div key={'hd-'+d.key} style={{padding:'4px 2px',textAlign:'center',borderBottom:'1px solid var(--border)'}}>
+                    <p style={{margin:0,fontSize:8,color:isToday?'var(--accent2)':'var(--text3)',fontWeight:700,textTransform:'uppercase'}}>{fmtWkdShort(d.date)}</p>
+                    <p style={{margin:'1px 0 0',fontSize:13,fontWeight:800,color:isToday?'var(--accent2)':'#f1f5f9'}}>{d.date.getDate()}</p>
+                  </div>})}
+                  <div style={{position:'relative',borderRight:'1px solid var(--border)'}}>
+                    {hours.map(h=><div key={'hr-'+h} style={{height:HOUR_PX,fontSize:8,color:'var(--text3)',textAlign:'right',paddingRight:3,paddingTop:1,borderTop:'1px solid var(--border)'}}>{h>12?h-12:h}{h>=12?'p':'a'}</div>)}
+                  </div>
+                  {visibleDays.map(d=>{
+                    const isToday=d.key===todayKey;
+                    const isPast=d.key<todayKey;
+                    const dayEvents=(byDay[d.key]||[]).slice();
+                    const _evWithTimes=dayEvents.filter(ev=>ev.start?.dateTime).map(ev=>({start:new Date(ev.start.dateTime),end:new Date(ev.end?.dateTime||ev.start.dateTime)}));
+                    const shakyOnDay=shakyByDay[d.key]||[];
+                    const nonShakyBusy=_evWithTimes.filter(bt=>!shakyOnDay.some(sa=>{
+                      if(!sa.apptTime)return false;
+                      const sh=new Date(d.key+'T'+sa.apptTime);
+                      return Math.abs(sh.getTime()-bt.start.getTime())<5*60000
+                    }));
+                    const cbOnDay=cbByDay[d.key]||[];
+                    const cbBusy=cbOnDay.map(l=>{const s=new Date(d.key+'T'+l.cbTime);return{start:s,end:new Date(s.getTime()+30*60000),_isCb:true,_name:l.name}});
+                    const allBusy=[...nonShakyBusy,...cbBusy];
+                    const freeSlots=isPast?[]:findFreeSlots(d.date,allBusy,BIZ_START,BIZ_END);
+                    const selectedOnDay=apptDate===d.key;
+                    return<div key={'gc-'+d.key} style={{position:'relative',borderRight:'1px solid var(--border)',background:isToday?'rgba(99,102,241,.04)':selectedOnDay?'rgba(34,197,94,.04)':'transparent',opacity:isPast?.4:1}}>
+                      {hours.map(h=><div key={'gb-'+h} style={{height:HOUR_PX,borderTop:'1px solid var(--border)'}}/>)}
+                      {/* Free slots — clickable green blocks */}
+                      {freeSlots.filter(s=>s.hours>=MIN_HRS).map((s,si)=>{
+                        const sh=s.start.getHours()+s.start.getMinutes()/60;
+                        const eh=s.end.getHours()+s.end.getMinutes()/60;
+                        if(eh<=HR_START||sh>=HR_END)return null;
+                        const top=Math.max(0,(sh-HR_START)*HOUR_PX);
+                        const height=Math.max(16,(Math.min(eh,HR_END)-Math.max(sh,HR_START))*HOUR_PX-1);
+                        const hh=String(s.start.getHours()).padStart(2,'0');
+                        const mm=String(s.start.getMinutes()).padStart(2,'0');
+                        const isSelectedSlot=selectedOnDay&&apptTime===hh+':'+mm;
+                        return<div key={'fs-'+si} onClick={()=>{
+                          const slotMins=Math.round(s.hours*60);
+                          setApptDate(d.key);
+                          setApptTime(hh+':'+mm);
+                          setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
+                          toast('Slot locked · scroll down to create','info');
+                        }} className="free-slot" style={{position:'absolute',left:1,right:1,top:top+1,height,borderRadius:4,padding:'2px 3px',fontSize:8,fontWeight:700,overflow:'hidden',cursor:'pointer',border:'1px solid '+(isSelectedSlot?'#22c55e':'rgba(34,197,94,.5)'),background:isSelectedSlot?'linear-gradient(135deg,#22c55e,#10b981)':undefined,color:isSelectedSlot?'#fff':'#86efac',boxShadow:isSelectedSlot?'0 0 10px rgba(34,197,94,.5)':'0 0 4px rgba(34,197,94,.18)'}}>
+                          <div style={{fontSize:8,fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{hh}:{mm}</div>
+                          {height>22&&<div style={{fontSize:7,opacity:.85}}>{s.hours.toFixed(1)}h</div>}
+                        </div>
+                      })}
+                      {/* Shaky slots — orange clickable */}
+                      {shakyOnDay.filter(sa=>sa.apptTime).map((sa,si)=>{
+                        const sh=new Date(d.key+'T'+sa.apptTime);
+                        const dur=sa.duration||90;
+                        const endH=sh.getHours()+sh.getMinutes()/60+dur/60;
+                        const startH=sh.getHours()+sh.getMinutes()/60;
+                        if(endH<=HR_START||startH>=HR_END)return null;
+                        const top=Math.max(0,(startH-HR_START)*HOUR_PX);
+                        const height=Math.max(16,(Math.min(endH,HR_END)-Math.max(startH,HR_START))*HOUR_PX-1);
+                        const hh=String(sh.getHours()).padStart(2,'0');
+                        const mm=String(sh.getMinutes()).padStart(2,'0');
+                        const slotKey=d.key+'_'+hh+':'+mm;
+                        return<div key={'sk-'+si} onClick={()=>{setPendingShakyKey(slotKey)}} style={{position:'absolute',left:1,right:1,top:top+1,height,borderRadius:4,padding:'2px 3px',fontSize:8,fontWeight:700,overflow:'hidden',cursor:'pointer',background:'linear-gradient(135deg,rgba(251,146,60,.3),rgba(234,88,12,.18))',border:'1px solid rgba(251,146,60,.6)',color:'#fb923c',boxShadow:'0 0 8px rgba(251,146,60,.35)'}}>
+                          <div style={{fontSize:8,fontWeight:800}}>🟠 {hh}:{mm}</div>
+                          {height>22&&<div style={{fontSize:7,opacity:.85,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{sa.name||'shaky'}</div>}
+                        </div>
+                      })}
+                      {/* Busy events — grey pills */}
+                      {_evWithTimes.map((bt,bi)=>{
+                        const startH=bt.start.getHours()+bt.start.getMinutes()/60;
+                        const endH=bt.end.getHours()+bt.end.getMinutes()/60;
+                        if(endH<=HR_START||startH>=HR_END)return null;
+                        const top=Math.max(0,(startH-HR_START)*HOUR_PX);
+                        const height=Math.max(14,(Math.min(endH,HR_END)-Math.max(startH,HR_START))*HOUR_PX-1);
+                        return<div key={'be-'+bi} style={{position:'absolute',left:1,right:1,top:top+1,height,borderRadius:3,padding:'1px 3px',fontSize:7,fontWeight:600,overflow:'hidden',background:'rgba(148,163,184,.12)',border:'1px solid rgba(148,163,184,.3)',color:'var(--text3)',pointerEvents:'none'}}>
+                          <div style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{String(bt.start.getHours()).padStart(2,'0')}:{String(bt.start.getMinutes()).padStart(2,'0')}</div>
+                        </div>
+                      })}
+                      {/* CB reservations — purple */}
+                      {cbOnDay.map((l,ci)=>{
+                        const cs=new Date(d.key+'T'+l.cbTime);
+                        const startH=cs.getHours()+cs.getMinutes()/60;
+                        const endH=startH+0.5;
+                        if(endH<=HR_START||startH>=HR_END)return null;
+                        const top=Math.max(0,(startH-HR_START)*HOUR_PX);
+                        const height=Math.max(14,(endH-startH)*HOUR_PX-1);
+                        return<div key={'cb-'+ci} title={'CB with '+l.name} style={{position:'absolute',left:1,right:1,top:top+1,height,borderRadius:3,padding:'1px 3px',fontSize:7,fontWeight:700,overflow:'hidden',background:'rgba(147,51,234,.18)',border:'1px solid rgba(147,51,234,.45)',color:'#c084fc',pointerEvents:'none'}}>📞 {l.name}</div>
+                      })}
+                    </div>
+                  })}
+                </div>
+                <p style={{margin:'8px 0 0',fontSize:8,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>Grid view · tap a green block to lock the slot</p>
+              </div>;
+            })():
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:6}}>
               {visibleDays.map(d=>{
                 const isToday=d.key===todayKey;
@@ -6745,7 +6864,7 @@ function App(){
             const desc=['Client: '+(lead?.name||''),'Phone: '+(lead?.phone||''),lead?.age?'Age: '+lead.age:'',lead?.email?'Email: '+lead.email:'',lead?.race?'Background: '+lead.race:'',apptObs?'\nFC Notes:\n'+apptObs:'',lead?.notes?'\nSheet Remarks: '+lead.notes:''].filter(Boolean).join('\n');
             try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
               const invites=apptInvite?apptInvite.split(',').map(s=>s.trim()).filter(Boolean):[];
-              const evt=await gCal.create('Appt: '+(lead?.name||'')+(apptLocation?' @ '+apptLocation:''),desc,s.toISOString(),end.toISOString(),invites);
+              const evt=await gCal.create('Appt: '+(lead?.name||'')+(apptLocation?' @ '+apptLocation:''),desc,s.toISOString(),end.toISOString(),invites,myCfg.targetCalendarId||'primary');
               if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
               DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation,shaky:apptShaky},_user?.id);
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
@@ -7091,7 +7210,7 @@ function App(){
             // Create (or reuse) a Google Calendar event
             let evt=null;
             if(gOk&&window.gCal){
-              try{evt=await gCal.create(fixDateAppt.name+' (appt)','Follow-up appointment for '+fixDateAppt.name+(fixDateAppt.phone?' · '+fixDateAppt.phone:''),startD.toISOString(),endD.toISOString(),fixDateAppt.inviteEmails?String(fixDateAppt.inviteEmails).split(/[,;\s]/).filter(Boolean):null)}catch(_e){console.warn('[fixDate] gCal.create failed',_e)}
+              try{evt=await gCal.create(fixDateAppt.name+' (appt)','Follow-up appointment for '+fixDateAppt.name+(fixDateAppt.phone?' · '+fixDateAppt.phone:''),startD.toISOString(),endD.toISOString(),fixDateAppt.inviteEmails?String(fixDateAppt.inviteEmails).split(/[,;\s]/).filter(Boolean):null,myCfg.targetCalendarId||'primary')}catch(_e){console.warn('[fixDate] gCal.create failed',_e)}
             }
             const calEventId=evt?.id||fixDateAppt.calEventId||'';
             const dateKey=fixDateForm.date;
@@ -7169,7 +7288,7 @@ function App(){
               const endD=new Date(startD.getTime()+calEditForm.duration*60000);
               const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
               const patch={summary:calEditForm.summary.trim(),location:calEditForm.location||'',start:{dateTime:startD.toISOString(),timeZone:tz},end:{dateTime:endD.toISOString(),timeZone:tz}};
-              const res=await gCal.update(calEditEvent.id,patch);
+              const res=await gCal.update(calEditEvent.id,patch,calEditEvent._calId||'primary');
               if(!res){toast('Update failed','err');setCalEditSaving(false);return}
               // ═══ Update local weekEvents cache so the Cal tab reflects changes without a page refresh
               setWeekEvents(prev=>prev.map(ev=>ev.id===calEditEvent.id?{...ev,summary:patch.summary,location:patch.location,start:{...(ev.start||{}),dateTime:startD.toISOString()},end:{...(ev.end||{}),dateTime:endD.toISOString()}}:ev));
@@ -7190,7 +7309,7 @@ function App(){
             if(!confirm('Delete this event from Google Calendar? This cannot be undone.'))return;
             setCalEditSaving(true);
             try{
-              const ok=await gCal.del(calEditEvent.id);
+              const ok=await gCal.del(calEditEvent.id,calEditEvent._calId||'primary');
               if(!ok){toast('Delete failed','err');setCalEditSaving(false);return}
               // ═══ Remove from local weekEvents cache so it disappears immediately (no refresh)
               setWeekEvents(prev=>prev.filter(ev=>ev.id!==calEditEvent.id));
