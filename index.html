@@ -2004,7 +2004,11 @@ function App(){
     setSetDone(false);
     // Store undo info for Set — uses current lead since post-call card is gone
     const li=curIdx;
-    appStateRef.current._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now()};
+    // ═══ Merge in calEventId + apptId that the Create Appointment handler stashed before the modal closed.
+    // Without this merge, Undo has no calEventId to pass to gCal.del, so the Google Calendar event is orphaned.
+    const _pending=appStateRef.current._pendingSetCalEventId||{};
+    appStateRef.current._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now(),calEventId:_pending.calEventId||'',apptId:_pending.apptId||''};
+    appStateRef.current._pendingSetCalEventId=null;
     setUndoInfo({leadIdx:li,name:leads[li]?.name||'',status:'set',ts:Date.now()});
     // If the WhatsApp modal is open, defer the advance until the user closes it.
     // Otherwise advance immediately.
@@ -2349,10 +2353,24 @@ function App(){
       }
       // Delete the Google Calendar event if one was created
       if(u.calEventId&&window.gCal){gCal.del(u.calEventId).then(ok=>{if(ok)DBG('[Undo] gCal event deleted')}).catch(()=>{})}
+      // ═══ Also strip from the local weekEvents cache so the Cal tab updates without a refresh
+      if(u.calEventId)setWeekEvents(prev=>prev.filter(ev=>ev.id!==u.calEventId));
       // Remove the appointment — BUG FIX: appointments use .followUp, not .status
       if(u.leadIdx>=0){const lead=leadsRef.current[u.leadIdx];
         if(lead){
-          setAppointments(p=>p.filter(a=>!(a.phone===lead.phone&&(!a.followUp||a.followUp==='pending'))));
+          // ═══ Add INSTANCE-SPECIFIC blocklist entries (NOT bare phone — that would permanently
+          // block the lead from getting a new appointment later). We only block the exact calEventId
+          // and the exact appointment id so sync can't resurrect this specific undone instance.
+          try{
+            const _d=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+            if(u.calEventId)_d.push(String(u.calEventId));
+            // Find the exact pending appt id this undo targets and blocklist it
+            const _match=(appointments||[]).find(a=>a.phone===lead.phone&&(!a.followUp||a.followUp==='pending'));
+            if(_match?.id)_d.push(String(_match.id));
+            if(_match?.phone&&_match?.createdAt)_d.push(_match.phone+'_'+_match.createdAt);
+            localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(_d)].slice(-500)));
+          }catch(_e){}
+          setAppointments(p=>p.filter(a=>!(a.phone===lead.phone&&(!a.followUp||a.followUp==='pending'))&&a.calEventId!==u.calEventId));
           if(_SB&&lead.phone){try{_SB.from('autodial_appointments').delete().eq('phone',lead.phone).eq('admin',myEmail).is('follow_up','pending').then(()=>{},()=>{})}catch(e){}
             if(u.calEventId)try{_SB.from('autodial_appointments').delete().eq('calendar_event_id',u.calEventId).then(()=>{},()=>{})}catch(e){}}
         }}
@@ -3395,13 +3413,17 @@ function App(){
           if(p&&Array.isArray(p.appts)){
             const newHash=_hashAppts(p.appts);
             if(newHash!==_liveSyncRef.current.lastApptsHash){
-              _liveSyncRef.current.lastApptsHash=newHash;
-              _liveSyncRef.current.suppressNextPush=true;
               // Filter out anything in the local deleted-ids suppress list so cloud can't resurrect them
               const delIds=_getDelIds();
               const cleaned=p.appts.filter(a=>!isApptDeleted(a,delIds));
+              // ═══ GHOST-BUSTER: if the blocklist dropped rows, the cloud row is stale. Do NOT suppress
+              // the next push — we want the write-through to run and reconcile cloud back to the cleaned state.
+              // Set lastApptsHash to the (stale) cloud hash so the local state diff triggers a push.
+              const _filtered=cleaned.length<p.appts.length;
+              _liveSyncRef.current.lastApptsHash=newHash; // cloud hash; will differ from hash(cleaned) if filtered
+              if(!_filtered)_liveSyncRef.current.suppressNextPush=true;
               setAppointments(cleaned);
-              DBG('[LiveSync] applied',cleaned.length,'appointments from cloud');
+              DBG('[LiveSync] applied',cleaned.length,'appointments from cloud'+(_filtered?' (blocklist dropped '+(p.appts.length-cleaned.length)+', will reconcile)':''));
             }
           }
         }
@@ -3521,12 +3543,13 @@ function App(){
               if(p&&Array.isArray(p.appts)){
                 const newHash=_hashAppts(p.appts);
                 if(newHash!==_liveSyncRef.current.lastApptsHash){
-                  _liveSyncRef.current.lastApptsHash=newHash;
-                  _liveSyncRef.current.suppressNextPush=true;
                   const delIds=_getDelIds();
                   const cleaned=p.appts.filter(a=>!isApptDeleted(a,delIds));
+                  const _filtered=cleaned.length<p.appts.length;
+                  _liveSyncRef.current.lastApptsHash=newHash;
+                  if(!_filtered)_liveSyncRef.current.suppressNextPush=true;
                   setAppointments(cleaned);
-                  DBG('[LiveSync] RT pushed',cleaned.length,'appointments');
+                  DBG('[LiveSync] RT pushed',cleaned.length,'appointments'+(_filtered?' (blocklist dropped '+(p.appts.length-cleaned.length)+')':''));
                 }
               }
             }
@@ -5127,25 +5150,45 @@ function App(){
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
           {role!=='admin'&&isManageMode&&<button onClick={async()=>{toast('↻ Pulling admin appts…','info');const n=await pullAdminAppts();toast(n>0?'✅ '+n+' new appt'+(n===1?'':'s'):'Up to date')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,border:'1px solid rgba(99,102,241,.2)'}}>↻ Pull Admins</button>}
-          {role!=='admin'&&appointments.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
+          {role!=='admin'&&appointments.length>0&&<button onClick={async()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
               // ═══ Delete Google Calendar events so they stop blocking calendar slots ═══
               const _calIds=new Set(appointments.map(a=>a.calEventId).filter(Boolean));
               if(window.gCal){_calIds.forEach(id=>{gCal.del(id).catch(()=>{})})}
               // Remove from local weekEvents cache so Cal tab updates without refresh
               if(_calIds.size)setWeekEvents(prev=>prev.filter(ev=>!_calIds.has(ev.id)));
-              // Track all IDs as deleted so sync never brings them back
-              const allIds=[];appointments.forEach(a=>{allIds.push(String(a.id||''));allIds.push(a.phone+'_'+(a.createdAt||''));allIds.push(a.phone+'_'+(a.apptDate||''))});
+              // ═══ GHOST-BUSTER: track ALL possible ID patterns so isApptDeleted catches any resurrection
+              // Bare phone is a permanent catch-all — matches any appt with that phone regardless of id/date/createdAt drift
+              const allIds=[];appointments.forEach(a=>{
+                allIds.push(String(a.id||''));
+                allIds.push(a.phone+'_'+(a.createdAt||''));
+                allIds.push(a.phone+'_'+(a.apptDate||''));
+                if(a.phone)allIds.push(a.phone); // ← bare phone catch-all
+              });
               const uniq=[...new Set(allIds.filter(Boolean))].slice(-500);localStorage.setItem('_deletedApptIds',JSON.stringify(uniq));
               if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(uniq)},{onConflict:'admin_email'}).catch(function(){});
               setAppointments([]);save('appts',[]);cloudSave('appts',[]);
               // ═══ Also reset dailySets + session.sets counter so the points/bar don't keep showing stale "first blood" etc
               _resetDailySets();
               setSession(p=>p?{...p,sets:0}:p);
-              // Clear shared appointment keys for all admins
+              // ═══ HARD-SYNC WIPE: immediately upsert empty payloads to all appointment cloud keys so the next
+              // reload/pull can't resurrect anything. Reset lastApptsHash so the write-through isn't short-circuited.
+              try{_liveSyncRef.current.lastApptsHash=''}catch(_e){}
+              if(_SB&&_user){
+                const _me=(_user.email||'').toLowerCase();
+                const _emptyLive={appts:[],hash:'0',count:0,ts:Date.now(),devId:window._devId};
+                const _emptyShared={data:[],ts:Date.now(),devId:window._devId};
+                try{await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+_me,biz_name:JSON.stringify(_emptyLive)},{onConflict:'admin_email'})}catch(_e){}
+                try{await _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+_me,biz_name:JSON.stringify(_emptyShared)},{onConflict:'admin_email'})}catch(_e){}
+                try{await _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+_me,biz_name:'[]'},{onConflict:'admin_email'})}catch(_e){}
+              }
+              // Clear shared appointment keys for all admins (legacy + new)
               if(_SB&&role!=='admin'){Object.keys(adminConfigs).forEach(email=>{
-                _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+email.toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})});
-
-                _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+(_user?.email||'').toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})};toast('All appointments cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
+                const _el=email.toLowerCase();
+                _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+_el,biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){});
+                _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+_el,biz_name:JSON.stringify({data:[],ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(function(){});
+                _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+_el,biz_name:JSON.stringify({appts:[],hash:'0',count:0,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(function(){});
+              })}
+              toast('All appointments cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
 
         </div>
       </div>
@@ -7499,7 +7542,10 @@ function App(){
               if(invites.length){setSavedInvitees(p=>{const s=new Set([...p,...invites]);return[...s].slice(0,20)})}
               DB.saveAppt({admin:myEmail,name:lead?.name,phone:lead?.phone,apptDate,apptTime,duration:dur,calEventId:evt?.id||'',inviteEmails:apptInvite,location:apptLocation,shaky:apptShaky},_user?.id);
               DB.notify(null,'appt_set','Appt set: '+myEmail,(lead?.name||'')+' on '+apptDate+' at '+apptTime+(apptLocation?' @ '+apptLocation:''),{leadName:lead?.name,apptDate,apptTime});
-              if(appStateRef.current._lastUndo&&appStateRef.current._lastUndo.status==='set'){appStateRef.current._lastUndo.calEventId=evt?.id||'';appStateRef.current._lastUndo.apptId=lead?.phone}
+              // ═══ Stash calEventId + apptId in a pending ref so the useEffect that builds _lastUndo
+              // (which fires AFTER showAppt flips false) can merge them in. The earlier approach of
+              // patching _lastUndo directly here was a no-op because _lastUndo.status!=='set' yet at this point.
+              appStateRef.current._pendingSetCalEventId={calEventId:evt?.id||'',apptId:lead?.phone||''};
               if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs,shaky:apptShaky}:a));
               // Invalidate picker cache so the new booking shows up on next open
               pickerEventsCacheRef.current={key:'',ts:0,data:null};
