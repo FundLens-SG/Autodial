@@ -1304,7 +1304,7 @@ function getRank(monthlyAppts,thresholds){
 function getNextRank(monthlyAppts,thresholds){
   var t=thresholds||[0,5,10,15,25,35,50];
   for(let i=0;i<ML_RANKS.length;i++){var cs=t[i]||ML_RANKS[i].cumStars;if(monthlyAppts<cs)return{...ML_RANKS[i],idx:i,cumStars:cs}}return null}
-function getMonthlyAppts(appointments,email){const now=new Date(),y=now.getFullYear(),m=now.getMonth();return appointments.filter(a=>{const d=new Date(a.createdAt);return d.getFullYear()===y&&d.getMonth()===m&&(!email||(a.admin||'').toLowerCase()===email.toLowerCase())}).length}
+function getMonthlyAppts(appointments,email){const now=new Date(),y=now.getFullYear(),m=now.getMonth();const delIds=_getDelIds();return appointments.filter(a=>{if(isApptDeleted(a,delIds))return false;const d=new Date(a.createdAt);return d.getFullYear()===y&&d.getMonth()===m&&(!email||(a.admin||'').toLowerCase()===email.toLowerCase())}).length}
 // ═══ TIMEZONE-SAFE DATE KEY: returns YYYY-MM-DD in LOCAL time (not UTC) ═══
 // Fixes the "event on wrong day" bug caused by .toISOString().slice(0,10) which is UTC-based.
 function localDateKey(d){if(!d)return'';const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dd=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dd}
@@ -1995,25 +1995,36 @@ function App(){
   const[histF,setHistF]=useState('all');
   const[showCb,setShowCb]=useState(false);const[cbDate,setCbDate]=useState('');const[cbTime,setCbTime]=useState('');
   const[showAppt,setShowAppt]=useState(false);const[setDone,setSetDone]=useState(false);
-  // Ref to the 3s auto-advance timer so doUndo can cancel it
+  // Ref to the auto-advance timer so doUndo can cancel it
   const autoAdvanceTimerRef=useRef(null);
-  // Auto-advance 3s after appointment modal closes (Set flow)
+  // Ref to track whether a post-appt advance is pending (waiting for WA modal to close)
+  const _advanceAfterWARef=useRef(null);
+  // Auto-advance immediately after the Set flow (appt modal closes → maybe WA modal → then dial next)
   useEffect(()=>{if(!showAppt&&setDone&&running){
     setSetDone(false);
-    // Store undo info for Set
-    const li=showPostCall?.leadIdx??curIdx;
+    // Store undo info for Set — uses current lead since post-call card is gone
+    const li=curIdx;
     appStateRef.current._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now()};
     setUndoInfo({leadIdx:li,name:leads[li]?.name||'',status:'set',ts:Date.now()});
-    // Auto-advance after 3 seconds — timer stored in ref so doUndo can cancel it
-    const nextIdx=nextLeadRef.current;
-    const timer=setTimeout(()=>{
+    // If the WhatsApp modal is open, defer the advance until the user closes it.
+    // Otherwise advance immediately.
+    const _advance=()=>{
       autoAdvanceTimerRef.current=null;
-      setShowPostCall(null);
+      setShowPostCall(null);setShowNextPreview(false);
+      const nextIdx=nextLeadRef.current;
       if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
       else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},400)}
-    },3000);
-    autoAdvanceTimerRef.current=timer;
-    return()=>{clearTimeout(timer);if(autoAdvanceTimerRef.current===timer)autoAdvanceTimerRef.current=null}}},[showAppt,setDone,running]);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
+    };
+    if(showWA){
+      // Wait for WA modal to close — handled by the useEffect below that watches showWA
+      _advanceAfterWARef.current=_advance;
+    }else{
+      // Small 400ms delay so the user sees the green ✓ and undo bar appear before the next dial fires
+      const timer=setTimeout(_advance,400);
+      autoAdvanceTimerRef.current=timer;
+      return()=>{clearTimeout(timer);if(autoAdvanceTimerRef.current===timer)autoAdvanceTimerRef.current=null};
+    }
+  }},[showAppt,setDone,running]);const[apptLead,setApptLead]=useState(null);const[apptDate,setApptDate]=useState('');const[apptTime,setApptTime]=useState('');const[apptInvite,setApptInvite]=useState('');
   const[apptLocation,setApptLocation]=useState('');const[apptObs,setApptObs]=useState('');
   const[savedInvitees,setSavedInvitees]=useState(load('invitees')||[]);
   // ═══ Appointment Date Picker (shows multi-week free slots before form) ═══
@@ -2045,8 +2056,11 @@ function App(){
       const _byAdmin={};
       await Promise.all(_adminEmails.map(async em=>{
         const k=em.toLowerCase();
-        try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+k).single();
-          if(r.data?.biz_name){const list=JSON.parse(r.data.biz_name);_byAdmin[k]=Array.isArray(list)?list.map(a=>({...a,admin:a.admin||em})):[]}
+        try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+k).single();
+          if(r.data?.biz_name){const parsed=JSON.parse(r.data.biz_name);
+            // New sharedappt_ payload shape is {data:[...], ts, devId}; fall back to raw array for legacy rows.
+            const list=Array.isArray(parsed?.data)?parsed.data:(Array.isArray(parsed)?parsed:[]);
+            _byAdmin[k]=list.map(a=>({...a,admin:a.admin||em}))}
           else _byAdmin[k]=[];
         }catch(_e){_byAdmin[k]=[]}
       }));
@@ -2107,7 +2121,8 @@ function App(){
   const[achievements,setAchievements]=useState(load('achievements')||[]);
   const[showAchievement,setShowAchievement]=useState(null);
   useEffect(()=>{save('bestStreak',bestStreak);save('achievements',achievements);
-    if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'gamify_'+_user.email.toLowerCase(),biz_name:JSON.stringify({bestStreak,achievements,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}},[bestStreak,achievements]);
+    // Legacy gamify_ Supabase push removed — now embedded in the unified live_ payload and max-field merged on apply.
+  },[bestStreak,achievements]);
 
   useEffect(()=>{save('activeSession',session)},[session]);
 
@@ -2143,6 +2158,28 @@ function App(){
   const[sessSuppress,setSessSuppress]=useState(()=>{try{return new Set(load('ssup')||[])}catch(e){return new Set()}});
   const _suppKey=(em,st)=>(em||'').toLowerCase()+'|'+st;
   const _filterSuppressed=(em,list)=>{const k=em.toLowerCase();return(list||[]).filter(s=>!sessSuppress.has(_suppKey(k,s.startTime)))};
+  // ═══ dailySets as React state — single source of truth for the gamified bar.
+  // Previously the bar read `getDailySets()` directly from localStorage on every render,
+  // which meant cross-device sync could update localStorage but the bar wouldn't re-render,
+  // and the two devices could show different values. Now it's real state, synced via live sync.
+  const[dailySetsState,setDailySetsStateR]=useState(()=>getDailySets());
+  // Wrapper: inc both localStorage AND React state, and push to cloud
+  const _incDailySets=()=>{
+    const n=window.incDailySets();
+    setDailySetsStateR(n);
+    if(_SB&&_user&&window._cloudReady){
+      _SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify({date:getTodaySGT(),count:n,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(()=>{})
+    }
+    return n;
+  };
+  // Wrapper: reset both localStorage, React state, and cloud
+  const _resetDailySets=()=>{
+    window.setDailySetsCount(0);
+    setDailySetsStateR(0);
+    if(_SB&&_user&&window._cloudReady){
+      _SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify({date:getTodaySGT(),count:0,ts:Date.now(),devId:window._devId,reset:true})},{onConflict:'admin_email'}).catch(()=>{})
+    }
+  };
   const[editingAdmin,setEditingAdmin]=useState(null);const[newAdminEmail,setNewAdminEmail]=useState('');
   const[showInvoice,setShowInvoice]=useState(null);
   const[showPaymentDetail,setShowPaymentDetail]=useState(null);
@@ -2182,6 +2219,15 @@ function App(){
   const[callLog,setCallLog]=useState([]);     // Current session replay
   const[apptDuration,setApptDuration]=useState(()=>{const v=load('apptDur');return(v&&v>=15&&v<=480)?v:60}); // default mins
   const[showWA,setShowWA]=useState(null);     // WhatsApp template modal
+  // Fire pending advance (from Set flow) when the WhatsApp modal closes
+  useEffect(()=>{
+    if(!showWA&&_advanceAfterWARef.current){
+      const fn=_advanceAfterWARef.current;
+      _advanceAfterWARef.current=null;
+      // Small delay so the user sees the undo bar for a beat before the next dial fires
+      setTimeout(fn,400);
+    }
+  },[showWA]);
   const[newWA,setNewWA]=useState({name:'',template:'',category:'appointment'});
   const[showReplay,setShowReplay]=useState(null); // Session replay modal
   const[rawSheet,setRawSheet]=useState(null); // {headers,rows} for re-analysis
@@ -2203,10 +2249,10 @@ function App(){
         try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{})}catch(e){}
         return next})}
   }},[geminiKeyVal]);
-  // ═══ Claude key: persist to localStorage + sync to Supabase (same pattern as Gemini) ═══
+  // ═══ Claude key: persist to localStorage + embedded in live_ payload for cross-device sync ═══
   useEffect(()=>{
     if(claudeKeyVal){localStorage.setItem('autodial_claude_key',claudeKeyVal);
-      if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'claude_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:claudeKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})
+      // Legacy claude_<email> Supabase push removed — Main now embeds the key in its live_ payload and admins read it from applyRemoteLive.
       if(role==='main'&&mainMode==='manage'&&_SB&&window._cloudReady){
         setCfg(s=>{if(s.sharedClaudeKey===claudeKeyVal)return s;const next={...s,sharedClaudeKey:claudeKeyVal};
           try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(next)},{onConflict:'admin_email'}).then(()=>{},()=>{})}catch(e){}
@@ -2294,9 +2340,13 @@ function App(){
       setSession(p=>p?{...p,sets:Math.max(0,(p.sets||1)-1)}:p);
       setTotalSets(p=>Math.max(0,p-1));
       setSetDone(false); // Re-enable Set button
-      // Decrement daily sets counter
+      // Decrement daily sets counter (localStorage + React state + cloud)
       var _ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');
-      if(_ds.date===getTodaySGT()&&_ds.count>0){_ds.count--;localStorage.setItem('autodial_daily_sets',JSON.stringify(_ds))}
+      if(_ds.date===getTodaySGT()&&_ds.count>0){
+        _ds.count--;localStorage.setItem('autodial_daily_sets',JSON.stringify(_ds));
+        setDailySetsStateR(_ds.count);
+        if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify({date:getTodaySGT(),count:_ds.count,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(()=>{})
+      }
       // Delete the Google Calendar event if one was created
       if(u.calEventId&&window.gCal){gCal.del(u.calEventId).then(ok=>{if(ok)DBG('[Undo] gCal event deleted')}).catch(()=>{})}
       // Remove the appointment — BUG FIX: appointments use .followUp, not .status
@@ -2379,17 +2429,19 @@ function App(){
   useEffect(()=>{save('rankStarsAwarded',rankStarsAwarded)},[rankStarsAwarded]);
 
   useEffect(()=>{save('promo',promotionLog);cloudSave('promo',promotionLog);
-    if(_SB&&_user&&window._cloudReady&&promotionLog.length)_SB.from('autodial_admin_config').upsert({admin_email:'promo_'+_user.email.toLowerCase(),biz_name:JSON.stringify(promotionLog)},{onConflict:'admin_email'}).catch(function(){})},[promotionLog]);
+    // Legacy promo_ Supabase push removed — handled by _useSyncedPush('promo',...) in the unified live sync layer.
+  },[promotionLog]);
 
   useEffect(()=>{save('slog',sessionLog);cloudSave('slog',sessionLog);
-    if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'slog_'+_user.email.toLowerCase(),biz_name:JSON.stringify(sessionLog.slice(-100))},{onConflict:'admin_email'}).catch(function(){})}
-
+    // Legacy slog_ Supabase push removed — handled by _useSyncedPush('slog',...).
   },[sessionLog]);
   useEffect(()=>{save('acfg',adminConfigs);cloudSave('acfg',adminConfigs);if(role!=='admin')publishAdminConfigs(adminConfigs);
-    if(_SB&&_user&&window._cloudReady&&Object.keys(adminConfigs).length)_SB.from('autodial_admin_config').upsert({admin_email:'acfg_'+_user.email.toLowerCase(),biz_name:JSON.stringify(adminConfigs)},{onConflict:'admin_email'}).catch(function(){})},[adminConfigs]);
+    // Legacy acfg_ Supabase push removed — handled by _useSyncedPush('acfg',...,role!=='admin').
+  },[adminConfigs]);
 
   useEffect(()=>{save('payh',paymentHistory);cloudSave('payh',paymentHistory);
-    if(_SB&&_user&&window._cloudReady&&paymentHistory.length)_SB.from('autodial_admin_config').upsert({admin_email:'payh_'+_user.email.toLowerCase(),biz_name:JSON.stringify(paymentHistory.slice(-200))},{onConflict:'admin_email'}).catch(function(){})},[paymentHistory]);
+    // Legacy payh_ Supabase push removed — handled by _useSyncedPush('payh',...).
+  },[paymentHistory]);
 
   // ═══ Periodic pull of admin appts while Main is on the Appts tab (every 45s)
   useEffect(()=>{
@@ -2440,8 +2492,8 @@ function App(){
   },[role,tab,myEmail]);
 
   useEffect(()=>{save('asess',adminSessions);
-    // ALWAYS push — even when cleared to {} — so "Clear All" actually persists and doesn't rehydrate from cloud
-    if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'asess_'+_user.email.toLowerCase(),biz_name:JSON.stringify(adminSessions)},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}},[adminSessions]);
+    // Legacy asess_ Supabase push removed — handled by _useSyncedPush('asess',...). Clear-to-{} still persists via LWW.
+  },[adminSessions]);
 
   // ═══ Persist sessSuppress (paid/cleared session keys) — prevents resurrection on pull-from-cloud
   useEffect(()=>{
@@ -2499,41 +2551,17 @@ function App(){
     return()=>{cancelled=true}
   },[tab,isManageMode]);
 
-  // ═══ Admin side: poll for payment notifications from Main (cross-device safety net) ═══
-  useEffect(()=>{
-    if(role!=='admin'||!_SB||!_user||!myEmail)return;
-    const check=async()=>{
-      try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','paynotif_'+myEmail).single();
-        if(r.data?.biz_name){const notif=JSON.parse(r.data.biz_name);
-          const seen=load('prcv_seen')||[];
-          if(notif&&notif.date&&seen.indexOf(notif.date)===-1){
-            setPaymentsReceived(p=>[{...notif,_receivedAt:Date.now()},...p]);
-            setSessionLog(p=>p.map(s=>s.paid?s:{...s,paid:true,paidDate:notif.date,paidBy:notif.fromMain}));
-            setIncentives(p=>p.map(x=>x.paid?x:{...x,paid:true,paidDate:notif.date,paidBy:notif.fromMain}));
-            toast('💰 $'+Number(notif.amount||0).toFixed(2)+' received from '+(notif.fromMain||'Main'),'info');
-            save('prcv_seen',[notif.date,...seen].slice(0,50))
-          }}}catch(e){}
-    };
-    check();const iv=setInterval(check,60000);return()=>clearInterval(iv)
-  },[role,myEmail]);
+  // ═══ Legacy paynotif_ 60s poll removed — payment notifications now flow through payevt_<admin> event log
+  // ═══ with realtime postgres_changes subscription + localStorage dedup (consumedPayEvts).
 
   useEffect(()=>{save('appts',appointments);cloudSave('appts',appointments);
-    // Hard sync appointments to Supabase
-    if(_SB&&_user&&window._cloudReady){
-      const myAppts=appointments.filter(a=>!a._deleted);
-      _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+_user.email.toLowerCase(),biz_name:JSON.stringify(myAppts.slice(-200))},{onConflict:'admin_email'}).catch(function(){});
-
-      // If Main, also publish per-admin appointments
-      if(role!=='admin'){
-        const byAdmin={};myAppts.forEach(a=>{const k=(a.admin||'').toLowerCase();if(k){if(!byAdmin[k])byAdmin[k]=[];byAdmin[k].push(a)}});
-        Object.entries(byAdmin).forEach(([email,appts])=>{
-          try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+email,biz_name:JSON.stringify(appts.slice(-200))},{onConflict:'admin_email'})}catch(_e){}
-
-        });
-      }
-    }},[appointments]);
+    // Legacy appts_<email> + shared_appts_<admin> Supabase pushes removed.
+    // Each user's own appointments now sync via apptlive_<email> (unified layer) and, for admins,
+    // also via sharedappt_<email> (_useSyncedPush('sharedappt',...)) so Main can aggregate them.
+  },[appointments]);
   useEffect(()=>{save('incv',incentives);cloudSave('incv',incentives);
-    if(_SB&&_user&&window._cloudReady&&incentives.length)_SB.from('autodial_admin_config').upsert({admin_email:'incv_'+_user.email.toLowerCase(),biz_name:JSON.stringify(incentives.slice(-200))},{onConflict:'admin_email'}).catch(function(){})},[incentives]);
+    // Legacy incv_ Supabase push removed — handled by _useSyncedPush('incv',...).
+  },[incentives]);
 
   // ═══ LIVE NOTIFY — when a new tip lands for me (via cloud sync from Main), celebrate it ═══
   const _seenIncentivesRef=useRef(null);
@@ -2660,7 +2688,8 @@ function App(){
   useEffect(()=>{save('mainMode',mainMode);cloudSave('mainMode',mainMode)},[mainMode]);
   useEffect(()=>{save('invitees',savedInvitees);cloudSave('invitees',savedInvitees)},[savedInvitees]);
   useEffect(()=>{save('learned',learnedPatterns);window._learnedPatterns=learnedPatterns;cloudSave('learned',learnedPatterns);
-    if(_SB&&_user&&window._cloudReady&&Object.keys(learnedPatterns).length)_SB.from('autodial_admin_config').upsert({admin_email:'learned_'+_user.email.toLowerCase(),biz_name:JSON.stringify(learnedPatterns)},{onConflict:'admin_email'}).catch(function(){})},[learnedPatterns]);
+    // Legacy learned_ Supabase push removed — handled by _useSyncedPush('learned',...).
+  },[learnedPatterns]);
 
   useEffect(()=>{save('starget',sessionTarget);cloudSave('starget',sessionTarget)},[sessionTarget]);
 
@@ -3084,7 +3113,7 @@ function App(){
     let _pullTimer=null,_verDebounce=null,_pulling=false;
     try{
     const me=myEmail;
-    const SYNC_KEYS=['gemini_','watpl_','acfg_','apptdur_','stars_','payh_','incv_','asess_','learned_','promo_','stabs_','gamify_','slog_','appts_','ts_'].map(k=>k+me);
+    const SYNC_KEYS=['gemini_','watpl_','apptdur_','stars_','stabs_','ts_','dappt_'].map(k=>k+me);
 
     // Debounced version bump: saves a version counter to Supabase + broadcasts "refresh"
     let _ver=Date.now();
@@ -3107,27 +3136,32 @@ function App(){
         const p=(key)=>{try{return map[key+me]?JSON.parse(map[key+me]):null}catch{return null}};
 
         const gk=p('gemini_');if(gk?.key){const cur=localStorage.getItem('autodial_gemini');if(gk.key!==cur){setGeminiKeyVal(gk.key);localStorage.setItem('autodial_gemini',gk.key)}}
-        const ck=p('claude_');if(ck?.key){const cur=localStorage.getItem('autodial_claude_key');if(ck.key!==cur){setClaudeKeyVal(ck.key);localStorage.setItem('autodial_claude_key',ck.key)}}
         // WA templates intentionally NOT pulled here — they're user-curated config, not append-only log.
         // Pulling them on every 60s cycle would resurrect deleted templates. Initial load (DB.getWATemplates)
         // handles cross-device sync when a device first opens the app.
-        const ac=p('acfg_');if(ac&&Object.keys(ac).length)setAdminConfigs(prev=>JSON.stringify(ac)!==JSON.stringify(prev)?ac:prev);
+        // ═══ Legacy handlers for acfg_, payh_, incv_, asess_, learned_, promo_, gamify_, slog_, claude_
+        // ═══ removed — these keys are now owned by the unified live-sync layer (_useSyncedPush + SYNCED_PULL_CONFIGS).
+        // ═══ Keeping the old monotonic-union merges here was resurrecting stale data after local clears.
         const ad=p('apptdur_');if(ad?.dur)setApptDuration(prev=>ad.dur!==prev?ad.dur:prev);
         const sr=p('stars_');if(sr?.stars)setTotalStars(prev=>sr.stars>prev?sr.stars:prev);
-        const ph=p('payh_');if(ph?.length)setPaymentHistory(prev=>ph.length>prev.length?ph:prev);
-        const iv=p('incv_');if(iv?.length)setIncentives(prev=>iv.length>prev.length?iv:prev);
-        const as2=p('asess_');if(as2&&Object.keys(as2).length)setAdminSessions(prev=>Object.keys(as2).length>Object.keys(prev).length?as2:prev);
-        const lp=p('learned_');if(lp&&Object.keys(lp).length)setLearnedPatterns(prev=>{if(Object.keys(lp).length>Object.keys(prev).length){window._learnedPatterns=lp;return lp}return prev});
-        const pl=p('promo_');if(pl?.length)setPromotionLog(prev=>pl.length>prev.length?pl:prev);
         const st=p('stabs_');if(st?.length)setSTabs(prev=>st.length>prev.length?st:prev);
-        const gf=p('gamify_');if(gf){if(gf.bestStreak)setBestStreak(prev=>gf.bestStreak>prev?gf.bestStreak:prev);if(gf.achievements?.length)setAchievements(prev=>gf.achievements.length>prev.length?gf.achievements:prev)}
-        const sl=p('slog_');if(sl?.length)setSessionLog(prev=>sl.length>prev.length?sl:prev);
-        const ap=p('appts_');if(ap?.length)setAppointments(prev=>{
-          const delIds=_getDelIds();
-          const filtered=ap.filter(a=>!isApptDeleted(a,delIds));
-          const localIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
-          const newFromCloud=filtered.filter(a=>!localIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds));
-          return newFromCloud.length?_dedupAppts([...prev,...newFromCloud]):prev});
+        // ═══ Legacy appts_ polling DISABLED — appointments now owned by the new unified live-sync layer
+        // (apptlive_<email>). Keeping the old monotonic-union merge here was resurrecting deleted rows.
+        // Instead, we pull dappt_<email> so cross-device deletions propagate within the 60s safety net.
+        const dap=p('dappt_');if(dap&&Array.isArray(dap)){
+          try{
+            const localDel=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+            let added=0;dap.forEach(id=>{if(!localDel.has(id)){localDel.add(id);added++}});
+            if(added>0){
+              const merged=[...localDel].slice(-500);
+              localStorage.setItem('_deletedApptIds',JSON.stringify(merged));
+              // Also strip any currently-loaded appointments that match the new del set
+              const ds=_getDelIds();
+              setAppointments(prev=>prev.filter(a=>!isApptDeleted(a,ds)));
+              DBG('[LiveSync] merged',added,'deleted appt IDs from cloud');
+            }
+          }catch(e){}
+        }
         const ts=p('ts_');if(ts?.ts)setTotalSets(prev=>ts.ts>prev?ts.ts:prev);
 
         appStateRef.current._lastPull=Date.now();
@@ -3159,19 +3193,74 @@ function App(){
   const _liveSyncRef=useRef({
     lastAppliedTs:0,       // ts of the most recent remote state we've applied
     lastLeadsHash:'',      // FNV-1a hash of the leads state we last pushed/applied
+    lastApptsHash:'',      // FNV-1a hash of the appointments state we last pushed/applied
     suppressNextPush:false,// flag set when applying remote; skips next push to avoid echo
     livePushTimer:null,    // 300ms debounce timer for session state push
     leadsPushTimer:null,   // 800ms debounce timer for leads push
+    apptsPushTimer:null,   // 800ms debounce timer for appointments push
     hasPulledOnce:false,   // gates the write-through so we never push before pulling cloud state once
   });
   // Visible sync status: 'idle' | 'pushing' | 'pulling' | 'synced' | 'offline'
   const[syncStatus,setSyncStatus]=useState('idle');
   const[lastSyncAt,setLastSyncAt]=useState(0);
+  // ═══ React state version of hasPulledOnce so push effects re-run after the initial pull lands.
+  // Previously this was a ref, which meant changing it didn't trigger React to re-run the effects —
+  // if a state change happened while the ref was false, the push would be blocked and never retried.
+  const[pullGate,setPullGate]=useState(false);
   // Tick every 3s so the "Xs ago" badge label refreshes without needing a real state change
   const[,setSyncTick]=useState(0);
   useEffect(()=>{const t=setInterval(()=>setSyncTick(x=>x+1),3000);return()=>clearInterval(t)},[]);
   // Cheap FNV-1a-ish hash of leads state (only the fields that matter for sync correctness)
   const _hashLeads=(ls)=>{if(!ls||!ls.length)return'0';let h=2166136261;for(let i=0;i<ls.length;i++){const l=ls[i];const s=(l.phone||'')+':'+(l.status||'')+':'+(l.npCount||0)+':'+(l.cbDate||'')+':'+(l.cbTime||'');for(let j=0;j<s.length;j++){h^=s.charCodeAt(j);h=Math.imul(h,16777619)}}return(h>>>0).toString(36)};
+  // Same hash function shape for appointments — keyed on fields that actually matter for rank/monthly counts
+  const _hashAppts=(as)=>{if(!as||!as.length)return'0';let h=2166136261;for(let i=0;i<as.length;i++){const a=as[i];const s=(a.id||'')+':'+(a.phone||'')+':'+(a.apptDate||'')+':'+(a.apptTime||'')+':'+(a.followUp||'')+':'+(a.admin||'')+':'+(a.createdAt||'');for(let j=0;j<s.length;j++){h^=s.charCodeAt(j);h=Math.imul(h,16777619)}}return(h>>>0).toString(36)};
+  // ═══ Generic FNV-1a-ish hash over any JSON-serializable value — powers the new multi-key live sync helper
+  const _hashAny=(v)=>{if(v==null)return'0';let s;try{s=typeof v==='string'?v:JSON.stringify(v)}catch(e){return'0'}let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+  // ═══ Custom hook: installs a hashed, pullGate-gated, debounced write-through push for ONE sync key.
+  // Called unconditionally in the same order on every render — hook order is stable.
+  // `enabled` can be set false to disable push entirely (e.g. acfg_ is Main-only push, sharedappt_ is admin-only push).
+  const _useSyncedPush=(shortKey,value,buildPayload,enabled)=>{
+    useEffect(()=>{
+      if(!_SB||!_user||!window._cloudReady)return;
+      if(!pullGate)return;
+      if(enabled===false)return;
+      const ref=_liveSyncRef.current;
+      const hashField='last_'+shortKey+'_Hash';
+      const timerField='_'+shortKey+'_PushTimer';
+      const newHash=_hashAny(value);
+      if(newHash===ref[hashField])return;
+      if(ref.suppressNextPush){ref.suppressNextPush=false;ref[hashField]=newHash;return}
+      clearTimeout(ref[timerField]);
+      ref[timerField]=setTimeout(async()=>{
+        try{
+          const me=(_user.email||'').toLowerCase();
+          ref[hashField]=newHash;
+          const payload=buildPayload(value,me,newHash);
+          await _SB.from('autodial_admin_config').upsert({admin_email:shortKey+'_'+me,biz_name:JSON.stringify(payload)},{onConflict:'admin_email'});
+          DBG('[LiveSync] push '+shortKey+' hash',newHash);
+        }catch(e){console.warn('[LiveSync '+shortKey+' push]',e?.message||e)}
+      },800);
+      return()=>clearTimeout(ref[timerField]);
+    },[value,pullGate,enabled]);
+  };
+  // ═══ Imperative push for payevt_<admin> — Main calls this when marking an admin paid.
+  // Event log with dedup (admin keeps a consumed-IDs Set in localStorage). Capped at last 100.
+  const _pushPayEvt=useCallback(async(adminEmail,evt)=>{
+    if(!_SB||!_user||!adminEmail)return;
+    try{
+      const key='payevt_'+adminEmail.toLowerCase();
+      const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',key).maybeSingle();
+      let existing=[];
+      if(r.data?.biz_name){try{const p=JSON.parse(r.data.biz_name);existing=Array.isArray(p?.events)?p.events:[]}catch(e){}}
+      const id=evt.id||('pe_'+Date.now()+'_'+Math.random().toString(36).slice(2,8));
+      const evtWithId={id,ts:Date.now(),...evt};
+      // Skip if same id already recorded in cloud (idempotent retries)
+      if(existing.some(e=>e.id===id))return;
+      const next=[evtWithId,...existing].slice(0,100);
+      await _SB.from('autodial_admin_config').upsert({admin_email:key,biz_name:JSON.stringify({events:next,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+      DBG('[LiveSync] pushed payevt to',adminEmail);
+    }catch(e){console.warn('[LiveSync payevt push]',e?.message||e)}
+  },[]);
 
   // Owns: session/curIdx/phase/running pull-and-subscribe
   useEffect(()=>{
@@ -3179,6 +3268,7 @@ function App(){
     const me=(_user.email||'').toLowerCase();
     const liveKey='live_'+me;
     const leadsKey='leads_'+me;
+    const apptsLiveKey='apptlive_'+me; // separate key from the legacy `appts_<email>` so the old format doesn't collide
     let _cancelled=false;
 
     const applyRemoteLive=(remote)=>{
@@ -3201,9 +3291,61 @@ function App(){
           save('activeSession',remote.session);
         }
       }
+      // ═══ Apply dailySets (only if it's from today — guards against midnight rollover mismatches)
+      if(typeof remote.dailySets==='number'&&remote.dailySetsDate===getTodaySGT()){
+        setDailySetsStateR(remote.dailySets);
+        window.setDailySetsCount(remote.dailySets);
+      }
+      // ═══ Apply totalSets
+      if(typeof remote.totalSets==='number'){
+        setTotalSets(remote.totalSets);
+      }
+      // ═══ Merge cross-device deletion IDs so clears on other devices propagate fast (2s)
+      if(Array.isArray(remote.delIds)&&remote.delIds.length){
+        try{
+          const local=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
+          let added=0;remote.delIds.forEach(id=>{if(!local.has(id)){local.add(id);added++}});
+          if(added>0){
+            const merged=[...local].slice(-500);
+            localStorage.setItem('_deletedApptIds',JSON.stringify(merged));
+            // Strip any currently-loaded appointments that now match the expanded del set
+            const ds=_getDelIds();
+            setAppointments(prev=>prev.filter(a=>!isApptDeleted(a,ds)));
+            DBG('[LiveSync] merged',added,'delIds from remote → stripped local appts');
+          }
+        }catch(e){}
+      }
+      // ═══ Apply embedded Claude API key (Main pushes, admins read)
+      if(typeof remote.claudeApiKey==='string'&&remote.claudeApiKey){
+        try{
+          const cur=localStorage.getItem('autodial_claude_key')||'';
+          if(remote.claudeApiKey!==cur){
+            setClaudeKeyVal(remote.claudeApiKey);
+            localStorage.setItem('autodial_claude_key',remote.claudeApiKey);
+            DBG('[LiveSync] applied remote Claude API key');
+          }
+        }catch(e){}
+      }
+      // ═══ Apply embedded gamify state (max-field merge — bestStreak=Math.max, achievements=union)
+      if(remote.gamify&&typeof remote.gamify==='object'){
+        if(typeof remote.gamify.bs==='number'&&remote.gamify.bs>0){
+          setBestStreak(prev=>remote.gamify.bs>prev?remote.gamify.bs:prev);
+        }
+        if(Array.isArray(remote.gamify.ach)&&remote.gamify.ach.length){
+          setAchievements(prev=>{
+            const s=new Set(prev);let grew=false;
+            remote.gamify.ach.forEach(a=>{if(!s.has(a)){s.add(a);grew=true}});
+            return grew?[...s]:prev;
+          });
+        }
+      }
       // If leads state on the other device has a different hash, pull the leads array too
       if(remote.leadsHash&&remote.leadsHash!==_liveSyncRef.current.lastLeadsHash){
         pullLeads();
+      }
+      // ═══ If appointments on the other device have a different hash, pull them too
+      if(remote.apptsHash&&remote.apptsHash!==_liveSyncRef.current.lastApptsHash){
+        pullAppts();
       }
       DBG('[LiveSync] applied remote from',remote.devId,'ts',remote.ts);
     };
@@ -3219,7 +3361,7 @@ function App(){
         }
         setSyncStatus('synced');setLastSyncAt(Date.now());
       }catch(e){setSyncStatus('offline');console.warn('[LiveSync pull]',e?.message||e)}
-      finally{_liveSyncRef.current.hasPulledOnce=true}
+      finally{_liveSyncRef.current.hasPulledOnce=true;setPullGate(g=>g?g:true)}
     };
 
     const pullLeads=async()=>{
@@ -3242,11 +3384,105 @@ function App(){
       }catch(e){console.warn('[LiveSync leads pull]',e?.message||e)}
     };
 
+    // ═══ Pull appointments from the new live-sync key (separate from legacy `appts_` which the old 60s poll uses)
+    const pullAppts=async()=>{
+      if(_cancelled)return;
+      try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',apptsLiveKey).maybeSingle();
+        if(r.data&&r.data.biz_name){
+          const p=JSON.parse(r.data.biz_name);
+          if(p&&p.devId===window._devId)return; // our own write
+          if(p&&Array.isArray(p.appts)){
+            const newHash=_hashAppts(p.appts);
+            if(newHash!==_liveSyncRef.current.lastApptsHash){
+              _liveSyncRef.current.lastApptsHash=newHash;
+              _liveSyncRef.current.suppressNextPush=true;
+              // Filter out anything in the local deleted-ids suppress list so cloud can't resurrect them
+              const delIds=_getDelIds();
+              const cleaned=p.appts.filter(a=>!isApptDeleted(a,delIds));
+              setAppointments(cleaned);
+              DBG('[LiveSync] applied',cleaned.length,'appointments from cloud');
+            }
+          }
+        }
+      }catch(e){console.warn('[LiveSync appts pull]',e?.message||e)}
+    };
+
+    // ═══ Expose pull functions so other code paths (e.g. button clicks) can trigger a manual pull
+    // ═══ MULTI-KEY SYNC — declarative config for the 8 additional keys + payevt.
+    // Each entry has: key (short name), apply(parsed, meEmail) → void, skipHash (optional — for event-log keys),
+    // enabled (optional — e.g. payevt pull is admin-only).
+    const _adminOnly=role==='admin';
+    const SYNCED_PULL_CONFIGS=[
+      {key:'asess', apply:(p)=>{if(p&&p.data&&typeof p.data==='object')setAdminSessions(p.data)}},
+      {key:'incv',  apply:(p)=>{if(Array.isArray(p?.data))setIncentives(prev=>p.data.length>prev.length?p.data:prev)}},
+      {key:'acfg',  apply:(p)=>{if(p?.data&&typeof p.data==='object'&&Object.keys(p.data).length)setAdminConfigs(p.data)}},
+      {key:'slog',  apply:(p)=>{if(Array.isArray(p?.data))setSessionLog(prev=>p.data.length>prev.length?p.data:prev)}},
+      {key:'promo', apply:(p)=>{if(Array.isArray(p?.data))setPromotionLog(prev=>p.data.length>prev.length?p.data:prev)}},
+      {key:'payh',  apply:(p)=>{if(Array.isArray(p?.data))setPaymentHistory(prev=>p.data.length>prev.length?p.data:prev)}},
+      {key:'learned',apply:(p)=>{if(p?.data&&typeof p.data==='object'&&Object.keys(p.data).length){setLearnedPatterns(p.data);window._learnedPatterns=p.data}}},
+      // Admin-side: pull own sharedappt_ to receive Main's write-backs (Met/Postponed/Closed on admin-owned appts)
+      {key:'sharedappt', enabled:_adminOnly, apply:(p)=>{
+        if(!Array.isArray(p?.data))return;
+        const delIds=_getDelIds();
+        const myLow=(_user.email||'').toLowerCase();
+        const fresh=p.data.filter(a=>!isApptDeleted(a,delIds)).map(a=>({...a,admin:a.admin||myLow}));
+        setAppointments(prev=>{
+          // Replace this user's own slice with the cloud version (last-writer-wins)
+          const _other=prev.filter(a=>a.admin&&a.admin.toLowerCase()!==myLow);
+          return _dedupAppts([..._other,...fresh]);
+        });
+      }},
+      // Admin-side only: payevt_ is an event log with local dedup, no hash check
+      {key:'payevt', enabled:_adminOnly, skipHash:true, apply:(p)=>{
+        if(!Array.isArray(p?.events))return;
+        let consumed;
+        try{consumed=new Set(JSON.parse(localStorage.getItem('consumedPayEvts')||'[]'))}catch(e){consumed=new Set()}
+        const freshEvts=p.events.filter(e=>e&&e.id&&!consumed.has(e.id));
+        if(!freshEvts.length)return;
+        // Apply oldest first so state mutations happen in event order
+        freshEvts.slice().reverse().forEach(d=>{
+          consumed.add(d.id);
+          setPaymentsReceived(prev=>[{...d,_receivedAt:Date.now()},...prev]);
+          setSessionLog(prev=>prev.map(s=>s.paid?s:{...s,paid:true,paidDate:d.date||new Date().toISOString(),paidBy:d.fromMain}));
+          setIncentives(prev=>prev.map(x=>x.paid?x:{...x,paid:true,paidDate:d.date||new Date().toISOString(),paidBy:d.fromMain}));
+          try{toast('💰 $'+Number(d.amount||0).toFixed(2)+' received from '+(d.fromMain||'Main')+' via '+(d.method||'PayNow'),'info')}catch(e){}
+          try{setConfetti(true);setTimeout(()=>setConfetti(false),3000)}catch(e){}
+        });
+        try{localStorage.setItem('consumedPayEvts',JSON.stringify([...consumed].slice(-500)))}catch(e){}
+      }},
+    ];
+
+    // Generic pull: handles hash-check, devId echo-skip, suppressNextPush, and invokes cfg.apply.
+    const pullSyncedKey=async(cfg)=>{
+      if(_cancelled)return;
+      if(cfg.enabled===false)return;
+      try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email',cfg.key+'_'+me).maybeSingle();
+        if(r.data&&r.data.biz_name){
+          const p=JSON.parse(r.data.biz_name);
+          if(p&&p.devId===window._devId)return; // our own write
+          const ref=_liveSyncRef.current;
+          const hashField='last_'+cfg.key+'_Hash';
+          if(!cfg.skipHash){
+            const newHash=_hashAny(p?.data);
+            if(newHash===ref[hashField])return;
+            ref[hashField]=newHash;
+          }
+          ref.suppressNextPush=true;
+          cfg.apply(p);
+          DBG('[LiveSync] pulled '+cfg.key);
+        }
+      }catch(e){console.warn('[LiveSync '+cfg.key+' pull]',e?.message||e)}
+    };
+    // Pull all configured keys in parallel
+    const pullAllSynced=()=>{SYNCED_PULL_CONFIGS.forEach(c=>{pullSyncedKey(c)})};
+
     // Expose pull functions so other code paths (e.g. button clicks) can trigger a manual pull
-    window._liveSyncPull=()=>{pullLive();pullLeads()};
+    window._liveSyncPull=()=>{pullLive();pullLeads();pullAppts();pullAllSynced()};
 
     // Initial pull on mount — wait a moment for cloud to bootstrap
-    const _initialDelay=setTimeout(()=>{pullLive();pullLeads()},800);
+    const _initialDelay=setTimeout(()=>{pullLive();pullLeads();pullAppts();pullAllSynced()},800);
 
     // ═══ Postgres realtime subscription — instant push when any row updates
     let _pgChannel=null;
@@ -3276,6 +3512,51 @@ function App(){
             }
           }catch(e){}
         })
+        .on('postgres_changes',{event:'*',schema:'public',table:'autodial_admin_config',filter:'admin_email=eq.'+apptsLiveKey},(payload)=>{
+          try{
+            const row=payload.new||payload.record;
+            if(row&&row.biz_name){
+              const p=JSON.parse(row.biz_name);
+              if(p&&p.devId===window._devId)return;
+              if(p&&Array.isArray(p.appts)){
+                const newHash=_hashAppts(p.appts);
+                if(newHash!==_liveSyncRef.current.lastApptsHash){
+                  _liveSyncRef.current.lastApptsHash=newHash;
+                  _liveSyncRef.current.suppressNextPush=true;
+                  const delIds=_getDelIds();
+                  const cleaned=p.appts.filter(a=>!isApptDeleted(a,delIds));
+                  setAppointments(cleaned);
+                  DBG('[LiveSync] RT pushed',cleaned.length,'appointments');
+                }
+              }
+            }
+          }catch(e){}
+        });
+      // ═══ Install realtime branches for all multi-key sync configs
+      SYNCED_PULL_CONFIGS.forEach(cfg=>{
+        if(cfg.enabled===false)return;
+        _pgChannel=_pgChannel.on('postgres_changes',
+          {event:'*',schema:'public',table:'autodial_admin_config',filter:'admin_email=eq.'+cfg.key+'_'+me},
+          (payload)=>{
+            try{
+              const row=payload.new||payload.record;
+              if(!row||!row.biz_name)return;
+              const p=JSON.parse(row.biz_name);
+              if(p&&p.devId===window._devId)return;
+              const ref=_liveSyncRef.current;
+              const hashField='last_'+cfg.key+'_Hash';
+              if(!cfg.skipHash){
+                const newHash=_hashAny(p?.data);
+                if(newHash===ref[hashField])return;
+                ref[hashField]=newHash;
+              }
+              ref.suppressNextPush=true;
+              cfg.apply(p);
+              DBG('[LiveSync] RT '+cfg.key);
+            }catch(e){}
+          });
+      });
+      _pgChannel=_pgChannel
         .subscribe((status,err)=>{
           if(status==='SUBSCRIBED'){console.info('%c[LiveSync] ✅ Realtime connected — instant push enabled','color:#22c55e;font-weight:bold');setSyncStatus('synced');setLastSyncAt(Date.now())}
           else if(status==='CHANNEL_ERROR'){console.warn('[LiveSync] ⚠ Realtime channel error — falling back to 2s polling',err||'');setSyncStatus('offline')}
@@ -3291,9 +3572,9 @@ function App(){
     },2000);
 
     // ═══ Visibility/focus/online handlers — pull immediately when user comes back
-    const onVis=()=>{if(document.visibilityState==='visible'){pullLive();pullLeads()}};
-    const onFocus=()=>{pullLive()};
-    const onOnline=()=>{pullLive();pullLeads()};
+    const onVis=()=>{if(document.visibilityState==='visible'){pullLive();pullLeads();pullAppts();pullAllSynced()}};
+    const onFocus=()=>{pullLive();pullAppts();pullAllSynced()};
+    const onOnline=()=>{pullLive();pullLeads();pullAppts();pullAllSynced()};
     document.addEventListener('visibilitychange',onVis);
     window.addEventListener('focus',onFocus);
     window.addEventListener('online',onOnline);
@@ -3307,12 +3588,12 @@ function App(){
       window.removeEventListener('online',onOnline);
       if(_pgChannel){try{_SB.removeChannel(_pgChannel)}catch(e){}}
     };
-  },[_user?.id]);
+  },[_user?.id,role]);
 
   // ═══ Write-through: push session state to cloud on every change (300ms debounce)
   useEffect(()=>{
     if(!_SB||!_user||!window._cloudReady)return;
-    if(!_liveSyncRef.current.hasPulledOnce)return; // prevent pushing stale local state before first pull lands
+    if(!pullGate)return; // prevent pushing stale local state before first pull lands
     if(_liveSyncRef.current.suppressNextPush){_liveSyncRef.current.suppressNextPush=false;return}
     clearTimeout(_liveSyncRef.current.livePushTimer);
     _liveSyncRef.current.livePushTimer=setTimeout(async()=>{
@@ -3320,7 +3601,11 @@ function App(){
         const me=(_user.email||'').toLowerCase();
         const ts=Date.now();
         const leadsHash=_hashLeads(leadsRef.current);
+        const apptsHash=_hashAppts(appointments);
         _liveSyncRef.current.lastLeadsHash=leadsHash;
+        // Piggyback cross-device deletion IDs so other devices learn about clears within the 2s polling window
+        let _delIds=[];
+        try{_delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]').slice(-300)}catch(e){}
         const payload={
           session:session||null,
           curIdx:typeof curIdx==='number'?curIdx:-1,
@@ -3328,7 +3613,17 @@ function App(){
           running:!!running,
           leadsCount:(leadsRef.current||[]).length,
           leadsHash,
+          apptsHash, // nudge other devices to pullAppts when this changes
+          delIds:_delIds, // cross-device deletion propagation (capped at 300)
           currentLeadPhone:(curIdx>=0&&leadsRef.current[curIdx])?leadsRef.current[curIdx].phone:null,
+          // ═══ Also sync dailySets + totalSets so the progress bar stays in lockstep across devices
+          dailySets:dailySetsState,
+          dailySetsDate:getTodaySGT(),
+          totalSets:totalSets,
+          // ═══ Embedded: shared Claude API key (Main pushes; admins inherit). Empty when admin is pushing.
+          claudeApiKey:role!=='admin'?(localStorage.getItem('autodial_claude_key')||''):'',
+          // ═══ Embedded: gamify state — tiny, max-field merged on apply.
+          gamify:{bs:bestStreak||0,ach:Array.isArray(achievements)?achievements:[]},
           ts,
           devId:window._devId,
           email:(_user.email||'').toLowerCase()
@@ -3341,12 +3636,12 @@ function App(){
       }catch(e){setSyncStatus('offline');console.warn('[LiveSync session push]',e?.message||e)}
     },300);
     return()=>clearTimeout(_liveSyncRef.current.livePushTimer);
-  },[session,curIdx,phase,running]);
+  },[session,curIdx,phase,running,dailySetsState,totalSets,appointments,pullGate]);
 
   // ═══ Write-through: push leads array on every change (800ms debounce — bigger payload)
   useEffect(()=>{
     if(!_SB||!_user||!window._cloudReady)return;
-    if(!_liveSyncRef.current.hasPulledOnce)return; // prevent pushing stale local state before first pull lands
+    if(!pullGate)return; // prevent pushing stale local state before first pull lands
     const newHash=_hashLeads(leads);
     if(newHash===_liveSyncRef.current.lastLeadsHash)return; // no meaningful change
     if(_liveSyncRef.current.suppressNextPush){_liveSyncRef.current.suppressNextPush=false;_liveSyncRef.current.lastLeadsHash=newHash;return}
@@ -3361,7 +3656,113 @@ function App(){
       }catch(e){console.warn('[LiveSync leads push]',e?.message||e)}
     },800);
     return()=>clearTimeout(_liveSyncRef.current.leadsPushTimer);
-  },[leads]);
+  },[leads,pullGate]);
+
+  // ═══ Write-through: push appointments array on every change (800ms debounce — bigger payload)
+  useEffect(()=>{
+    if(!_SB||!_user||!window._cloudReady)return;
+    if(!pullGate)return;
+    const newHash=_hashAppts(appointments);
+    if(newHash===_liveSyncRef.current.lastApptsHash)return;
+    if(_liveSyncRef.current.suppressNextPush){_liveSyncRef.current.suppressNextPush=false;_liveSyncRef.current.lastApptsHash=newHash;return}
+    clearTimeout(_liveSyncRef.current.apptsPushTimer);
+    _liveSyncRef.current.apptsPushTimer=setTimeout(async()=>{
+      try{
+        const me=(_user.email||'').toLowerCase();
+        _liveSyncRef.current.lastApptsHash=newHash;
+        // Cap at 1000 most-recent so we don't blow past row size limits; main use case is the current month
+        const capped=(appointments||[]).slice(-1000);
+        const payload={appts:capped,hash:newHash,count:capped.length,ts:Date.now(),devId:window._devId};
+        await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+me,biz_name:JSON.stringify(payload)},{onConflict:'admin_email'});
+        DBG('[LiveSync] push',capped.length,'appointments hash',newHash);
+      }catch(e){console.warn('[LiveSync appts push]',e?.message||e)}
+    },800);
+    return()=>clearTimeout(_liveSyncRef.current.apptsPushTimer);
+  },[appointments,pullGate]);
+
+  // ══════════════════════════════════════════════════════════════════════════════════
+  // ═══ MULTI-KEY LIVE SYNC — 8 additional state keys piggybacking on the unified
+  // ═══ sync layer. Each call below installs ONE useEffect via _useSyncedPush.
+  // ═══ Hook order is stable (unconditional, same order every render). Pulls and
+  // ═══ realtime subscriptions for these keys live inside the main sync useEffect above.
+  // ══════════════════════════════════════════════════════════════════════════════════
+  // Admin sessions — LWW, no cap. Self-scope (each user pushes their own).
+  _useSyncedPush('asess',adminSessions,(v)=>({data:v||{},ts:Date.now(),devId:window._devId}));
+  // Incentives — maxLen, cap 200.
+  _useSyncedPush('incv',incentives,(v)=>({data:(v||[]).slice(-200),ts:Date.now(),devId:window._devId}));
+  // Admin configs — LWW. Main-only push; admins read but never write.
+  _useSyncedPush('acfg',adminConfigs,(v)=>({data:v||{},ts:Date.now(),devId:window._devId}),role!=='admin');
+  // Session log — maxLen, cap 200.
+  _useSyncedPush('slog',sessionLog,(v)=>({data:(v||[]).slice(-200),ts:Date.now(),devId:window._devId}));
+  // Promotion log — maxLen.
+  _useSyncedPush('promo',promotionLog,(v)=>({data:v||[],ts:Date.now(),devId:window._devId}));
+  // Payment history — maxLen, cap 200.
+  _useSyncedPush('payh',paymentHistory,(v)=>({data:(v||[]).slice(-200),ts:Date.now(),devId:window._devId}));
+  // Learned patterns (AI loop) — LWW.
+  _useSyncedPush('learned',learnedPatterns,(v)=>({data:v||{},ts:Date.now(),devId:window._devId}));
+  // Shared appointments — admin-only push. Admin pushes their own appointments for Main to aggregate.
+  // Main's write-backs (mark Met/Postponed/Closed on an admin-owned appt) go through imperative writes
+  // at the mark sites, not through this state-driven write-through.
+  _useSyncedPush('sharedappt',appointments,(v,me)=>{
+    const mine=(v||[]).filter(a=>!a.admin||a.admin.toLowerCase()===me);
+    return{data:mine.slice(-500),ts:Date.now(),devId:window._devId};
+  },role==='admin');
+
+  // ══════════════════════════════════════════════════════════════════════════════════
+  // ═══ MAIN-SIDE sharedappt_ aggregation — subscribes to every managed admin's
+  // ═══ sharedappt_<admin> row via postgres_changes. On change, replaces that admin's
+  // ═══ slice of Main's appointments state. Also does a batch pull on mount/adminConfigs-change.
+  // ══════════════════════════════════════════════════════════════════════════════════
+  useEffect(()=>{
+    if(!_SB||!_user||role==='admin')return;
+    if(!pullGate)return;
+    const myLow=(_user.email||'').toLowerCase();
+    const adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myLow);
+    if(!adminEmails.length)return;
+    let _cancelled=false;
+    const applyRemoteAdmin=(adminEmail,p)=>{
+      if(_cancelled||!p||!Array.isArray(p.data))return;
+      const delIds=_getDelIds();
+      const emLow=adminEmail.toLowerCase();
+      const fresh=p.data.filter(a=>!isApptDeleted(a,delIds)).map(a=>({...a,admin:a.admin||adminEmail}));
+      setAppointments(prev=>{
+        // Keep Main's own appts + other admins' slices untouched; replace only this admin's slice
+        const _rest=prev.filter(a=>!a.admin||a.admin.toLowerCase()!==emLow);
+        return _dedupAppts([..._rest,...fresh]);
+      });
+      _liveSyncRef.current.suppressNextPush=true;
+      DBG('[LiveSync] main-aggregated',fresh.length,'appts from',adminEmail);
+    };
+    // Initial batch pull
+    (async()=>{
+      await Promise.all(adminEmails.map(async em=>{
+        try{
+          const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+em.toLowerCase()).maybeSingle();
+          if(!_cancelled&&r.data?.biz_name){
+            applyRemoteAdmin(em,JSON.parse(r.data.biz_name));
+          }
+        }catch(e){}
+      }));
+    })();
+    // Realtime per-admin channels
+    const channels=adminEmails.map(em=>{
+      try{
+        const ch=_SB.channel('sharedappt-'+em.toLowerCase().replace(/[^a-z0-9]/g,'_'))
+          .on('postgres_changes',{event:'*',schema:'public',table:'autodial_admin_config',filter:'admin_email=eq.sharedappt_'+em.toLowerCase()},(payload)=>{
+            try{
+              const row=payload.new||payload.record;
+              if(row&&row.biz_name){applyRemoteAdmin(em,JSON.parse(row.biz_name))}
+            }catch(e){}
+          })
+          .subscribe();
+        return ch;
+      }catch(e){return null}
+    });
+    return()=>{
+      _cancelled=true;
+      channels.forEach(c=>{if(c){try{_SB.removeChannel(c)}catch(e){}}});
+    };
+  },[role,adminConfigs,pullGate,_user?.id]);
 
   // Sync broadcast — legacy path used only for explicit user-intent events
   // (syncSend('start'), syncSend('pause'), syncSend('end'), etc). Active state sync
@@ -3380,15 +3781,8 @@ function App(){
     if(d.type==='end'){setSession(d.session);setRunning(false);setPhase('idle')}
     // Main receives admin session data
     if(d.type==='adminSession'&&role==='main'){setAdminSessions(p=>{const e=d.email||'unknown';return{...p,[e]:[...(p[e]||[]),d.session]}})}
-    // ═══ Admin receives payment notification from Main ═══
-    if(d.type==='paymentReceived'&&(d.toAdmin||'').toLowerCase()===myEmail.toLowerCase()){
-      setPaymentsReceived(p=>[{...d,_receivedAt:Date.now()},...p]);
-      // Also mark local sessionLog as paid if they match
-      setSessionLog(p=>p.map(s=>s.paid?s:{...s,paid:true,paidDate:d.date||new Date().toISOString(),paidBy:d.fromMain}));
-      setIncentives(p=>p.map(x=>x.paid?x:{...x,paid:true,paidDate:d.date||new Date().toISOString(),paidBy:d.fromMain}));
-      toast('💰 $'+Number(d.amount||0).toFixed(2)+' received from '+(d.fromMain||'Main')+' via '+(d.method||'PayNow'),'info');
-      setConfetti(true);setTimeout(()=>setConfetti(false),3000)
-    }
+    // ═══ Legacy onSync('paymentReceived') branch removed — replaced by payevt_<admin> realtime
+    // ═══ subscription with localStorage dedup (consumedPayEvts). See SYNCED_PULL_CONFIGS.
   });return unsub},[role]);
 
   // ═══ Session timer — depends only on startTime/ended, not the whole session object.
@@ -3597,7 +3991,7 @@ function App(){
       if(spd>=50&&s.dialed>=15)checkAchievement('speed50','Lightning Dialer!','⚡');
       if(spd>=80&&s.dialed>=20)checkAchievement('speed80','Hyperdrive!','🚀');
       if(status==='np')s.np++;if(status==='ni')s.ni++;if(status==='cb')s.cb++;
-      if(status==='set'){s.sets++;incDailySets();const nt=totalSets+1;setTotalSets(nt);
+      if(status==='set'){s.sets++;_incDailySets();const nt=totalSets+1;setTotalSets(nt);
         const _uName=(window._prof?.full_name||myEmail||'').split(/[\s@]/)[0];
         const _ds=getDailySets();
         if(_ds===1)toast('🩸 FIRST BLOOD — '+_uName+' draws first blood!');
@@ -3681,7 +4075,7 @@ function App(){
       return;
     }
     if(status==='set'){
-      setStreak(p=>{const ns=p+1;if(ns>bestStreak){setBestStreak(ns);save('bestStreak',ns);if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'gamify_'+_user.email.toLowerCase(),biz_name:JSON.stringify({bestStreak:ns,achievements})},{onConflict:'admin_email'}).catch(function(){})}}
+      setStreak(p=>{const ns=p+1;if(ns>bestStreak){setBestStreak(ns);save('bestStreak',ns)}
 
         if(ns>=3)checkAchievement('streak3','Hat Trick!','🎩');
         if(ns>=5)checkAchievement('streak5','On Fire!','🔥');
@@ -3705,18 +4099,21 @@ function App(){
       if(status==='cb')return{...l,status:'cb'};
       return l});
     nextLeadRef.current=getNextDialable(simulated,leadIdx,{...filters,npMax:n(myCfg.npMax,5),queuePriority:cfg.queuePriority});
-    // ═══ SMART AUTO-DIAL: NI/NP skip post-call, auto-advance ═══
-    if(status==='ni'||status==='np'){
+    // ═══ SMART AUTO-DIAL — every non-Set outcome auto-advances immediately.
+    // Set opens the appointment modal; auto-advance fires when that modal closes (see useEffect below).
+    if(status==='ni'||status==='np'||status==='cb'){
       // Store undo info before advancing
       appStateRef.current._lastUndo={leadIdx,status,prevStatus:leads[leadIdx]?.status||'pending',prevNpCount:leads[leadIdx]?.npCount||0,ts:Date.now()};
       setUndoInfo({leadIdx,name:leads[leadIdx]?.name||'',status,ts:Date.now()});
+      // Clear any lingering transition UI so nothing from the previous lead leaks
+      setShowPostCall(null);setShowNextPreview(false);setNextPreviewIdx(-1);setPostCallNote('');
       // Auto-advance to next lead immediately
       const nextIdx=nextLeadRef.current;
       if(nextIdx===-1){setRunning(false);setPhase('idle');setCurIdx(-1);toast('All leads done!','info')}
       else{setCurIdx(nextIdx);setPhase('calling');setTimeout(()=>{const l=leadsRef.current[nextIdx];if(l)dial(l.phone)},400)}
-    }else{
-      // CB/Set/Skip: show post-call remarks
-      setShowPostCall({leadIdx,status});setPostCallNote('')}
+    }
+    // Set case: the appt modal is open; when it closes, the useEffect at line ~2001 handles advance.
+    // Skip case ('pending'): already returned early at the top of this function.
     },[applyOutcome,curIdx,leads,filters,cfg,myCfg,bestStreak,session,dial]);
 
   const finishPostCall=useCallback(()=>{
@@ -4100,7 +4497,7 @@ function App(){
             </div>}
 
           // ═══ MAIN: ELECTRIFIED gamified milestone bar (DAILY, resets midnight SGT) ═══
-          const dailySets=getDailySets();
+          const dailySets=dailySetsState;
           const milestones=[
             {at:0,title:'READY TO DIAL',sub:'Set your first appointment!',color:'#94A3B8',emoji:'🎯',bg:'var(--bg)',glow:'none'},
             {at:1,title:'FIRST BLOOD',sub:'The hunt begins! 1 more to hit the bar!',color:'#EF4444',emoji:'🩸',bg:'linear-gradient(135deg,rgba(239,68,68,.08),rgba(239,68,68,.02))',glow:'0 0 20px rgba(239,68,68,.15)'},
@@ -4741,6 +5138,9 @@ function App(){
               const uniq=[...new Set(allIds.filter(Boolean))].slice(-500);localStorage.setItem('_deletedApptIds',JSON.stringify(uniq));
               if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(uniq)},{onConflict:'admin_email'}).catch(function(){});
               setAppointments([]);save('appts',[]);cloudSave('appts',[]);
+              // ═══ Also reset dailySets + session.sets counter so the points/bar don't keep showing stale "first blood" etc
+              _resetDailySets();
+              setSession(p=>p?{...p,sets:0}:p);
               // Clear shared appointment keys for all admins
               if(_SB&&role!=='admin'){Object.keys(adminConfigs).forEach(email=>{
                 _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+email.toLowerCase(),biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){})});
@@ -4866,29 +5266,33 @@ function App(){
                 localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
                 // Sync deleted IDs to Supabase so other devices respect deletions
                 if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(delIds.slice(-500))},{onConflict:'admin_email'}).catch(function(){});
-                // Also scrub this phone from the admin's shared_appts record so their device stops re-publishing it
+                // Also scrub this phone from the admin's sharedappt_ + apptlive_ records so their device stops re-publishing it
                 if(_SB&&a.admin&&a.phone){
                   (async()=>{try{
-                    const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_appts_'+a.admin.toLowerCase()).single();
+                    const adminLow=a.admin.toLowerCase();
+                    // sharedappt_<admin> — new key, shape {data:[...], ts, devId}
+                    const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+adminLow).maybeSingle();
                     if(r.data&&r.data.biz_name){
-                      const list=JSON.parse(r.data.biz_name)||[];
-                      const cleaned=list.filter(x=>x.phone!==a.phone);
+                      const parsed=JSON.parse(r.data.biz_name)||{};
+                      const list=Array.isArray(parsed.data)?parsed.data:(Array.isArray(parsed)?parsed:[]);
+                      const cleaned=list.filter(x=>x.phone!==a.phone&&String(x.id||'')!==String(a.id||''));
                       if(cleaned.length!==list.length){
-                        await _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+a.admin.toLowerCase(),biz_name:JSON.stringify(cleaned)},{onConflict:'admin_email'});
-                        DBG('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from '+a.admin);
+                        await _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+adminLow,biz_name:JSON.stringify({data:cleaned,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+                        DBG('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from sharedappt_'+adminLow);
                       }
                     }
-                    // ═══ Also scrub from the admin's OWN appts_<email> cloud record so the delete propagates to their device
-                    const r2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+a.admin.toLowerCase()).single();
+                    // apptlive_<admin> — unified live sync key, shape {appts:[...], hash, count, ts, devId}
+                    const r2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptlive_'+adminLow).maybeSingle();
                     if(r2.data&&r2.data.biz_name){
-                      const list2=JSON.parse(r2.data.biz_name)||[];
+                      const parsed2=JSON.parse(r2.data.biz_name)||{};
+                      const list2=Array.isArray(parsed2.appts)?parsed2.appts:[];
                       const cleaned2=list2.filter(x=>x.phone!==a.phone&&String(x.id||'')!==String(a.id||''));
                       if(cleaned2.length!==list2.length){
-                        await _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+a.admin.toLowerCase(),biz_name:JSON.stringify(cleaned2)},{onConflict:'admin_email'});
-                        DBG('[AutoDial] Scrubbed '+(list2.length-cleaned2.length)+' copies of '+a.phone+' from '+a.admin+'\'s own appts_');
+                        await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+adminLow,biz_name:JSON.stringify({appts:cleaned2,count:cleaned2.length,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+                        DBG('[AutoDial] Scrubbed '+(list2.length-cleaned2.length)+' copies of '+a.phone+' from apptlive_'+adminLow);
                       }
                     }
-                  }catch(e){console.warn('[AutoDial] shared_appts scrub failed',e?.message||e)}})();
+                  }catch(e){console.warn('[AutoDial] sharedappt scrub failed',e?.message||e)}})();
                 }
                 // Remove ALL copies of this phone from local state, not just the matched id
                 setAppointments(p=>p.filter(x=>x.phone!==a.phone))}}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
@@ -7576,10 +7980,8 @@ function App(){
         }
         setPaymentHistory(p=>[{date:_now,admin:em,amount:m.amount,sessions:m.sessCount||0,hours:m.totalHrs||0,incentives:m.incCount||0,invNum:m.invNum,cycleId:m._cycleId},...p]);
         if(cfg.sheetId&&localStorage.getItem('ad_gt')){try{gSheets.appendPay(cfg.sheetId,{admin:em,amount:m.amount,sessions:m.sessCount||0,hours:m.totalHrs||0,incentives:m.incCount||0})}catch(e){}}
-        // ═══ NOTIFY THE ADMIN: broadcast payment so their device shows it live ═══
-        try{syncSend('paymentReceived',{toAdmin:em,fromMain:myEmail,amount:m.amount,bizName:m.bizName,sessCount:m.sessCount||0,incCount:m.incCount||0,totalHrs:m.totalHrs||0,invNum:m.invNum,date:_now,method:'PayNow',cycleId:m._cycleId})}catch(e){}
-        // Persist admin-scoped payment notification to Supabase so admin sees it cross-device
-        if(_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'paynotif_'+em,biz_name:JSON.stringify({toAdmin:em,fromMain:myEmail,amount:m.amount,bizName:m.bizName,sessCount:m.sessCount||0,incCount:m.incCount||0,totalHrs:m.totalHrs||0,invNum:m.invNum,date:_now,method:'PayNow',cycleId:m._cycleId})},{onConflict:'admin_email'})}catch(e){}}
+        // ═══ NOTIFY THE ADMIN: push a durable payment event to payevt_<admin> (realtime + dedup by id)
+        try{_pushPayEvt(em,{toAdmin:em,fromMain:myEmail,amount:m.amount,bizName:m.bizName,sessCount:m.sessCount||0,incCount:m.incCount||0,totalHrs:m.totalHrs||0,invNum:m.invNum,date:_now,method:'PayNow',cycleId:m._cycleId})}catch(e){}
         toast('✓ '+(m.bizName||em)+' marked paid');
         // Advance queue or close
         if(isBatch&&m.queue&&m.queue.length>0){const next=m.queue[0];const rest=m.queue.slice(1);setPayQRModal({...next,queue:rest,queueTotal:m.queueTotal,queueIdx:(m.queueIdx||1)+1})}
