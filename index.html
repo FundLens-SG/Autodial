@@ -198,7 +198,7 @@ button:active{transform:scale(.97)}
   <div id="auth-login">
     <div style="margin-bottom:16px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Email</label><input type="email" id="auth-email" placeholder="you@example.com"></div>
     <div style="margin-bottom:16px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Password</label><input type="password" id="auth-pass" placeholder="••••••••"></div>
-    <div style="margin-bottom:20px">
+    <div style="margin-bottom:20px;display:none">
       <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Role</label>
       <div style="display:flex;gap:10px" id="role-pick">
         <button id="btn-admin" data-role="admin" style="flex:1;padding:14px;border-radius:14px;background:var(--adim);color:#f1f5f9;font-size:14px;font-weight:700;border:2px solid var(--accent);cursor:pointer">Admin</button>
@@ -206,6 +206,7 @@ button:active{transform:scale(.97)}
       </div>
       <p style="font-size:10px;color:var(--text3);margin-top:8px;text-align:center">New accounts require Creator approval</p>
     </div>
+    <p style="font-size:11px;color:var(--text3);text-align:center;margin-bottom:16px">New accounts require Creator approval</p>
     <button class="bp" id="btn-signin">Sign In</button>
     <button class="bs" id="btn-gosignup">Create Account</button>
     <div style="margin-top:16px;padding:12px;border-radius:12px;background:rgba(248,81,73,.05);border:1px solid rgba(248,81,73,.1)">
@@ -333,22 +334,21 @@ window.playTipSound=function(tier){
 };
 
 async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
-  if(!e||!p)return authMsg('Enter email and password');if(!window._role)return authMsg('Select a role');
+  if(!e||!p)return authMsg('Enter email and password');
   authMsg('Signing in…','i');
   try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);
-    _SB.auth.getSession().then(function(s){_user=s?.data?.session?.user||{email:e}});_prof={email:e,role:window._role};
-    if(isCreator(e)){authGrant();return}
-    // ═══ ENFORCE REGISTERED ROLE: user cannot swap between Main/Admin at login.
-    // Whatever they signed up as is what they stay as, unless the creator changes it from the Team panel.
+    _SB.auth.getSession().then(function(s){_user=s?.data?.session?.user||{email:e}});_prof={email:e,role:'admin'};
+    if(isCreator(e)){window._role='main';authGrant();return}
+    // ═══ DB IS AUTHORITATIVE: role comes from the profiles table, not the picker.
+    // Previously the login enforced that the user manually picked the right role, which broke
+    // when window._role was stale from a prior session and the user had no way to fix it.
     try{var sess=await _SB.auth.getSession();if(sess.data?.session?.user){
       var pr=await _SB.from('profiles').select('approved,autodial_role,role').eq('id',sess.data.session.user.id).single();
       if(pr.data){
         if(!pr.data.approved){authShow('pending');return}
-        var storedRole=pr.data.autodial_role||pr.data.role;
-        if(storedRole&&storedRole!==window._role){
-          return authMsg('This account is registered as '+(storedRole==='main'?'Main':'Admin')+'. Please select the correct role above and sign in again.')
-        }
-        if(storedRole){window._role=storedRole;_prof.role=storedRole}
+        var storedRole=(pr.data.autodial_role||pr.data.role||'admin').toLowerCase();
+        window._role=storedRole==='main'?'main':'admin';
+        _prof.role=window._role;
       }
     }}catch(pe){}
     authGrant()}catch(err){authMsg(err.message)}}
@@ -1118,6 +1118,9 @@ window.DB={
     try{_SB.removeChannel(_SB.channel('live-dashboard'))}catch(e){}
     return _SB.channel('live-dashboard').on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_call_log'},p=>{callback('call',p.new)})
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_appointments'},p=>{callback('appt',p.new)})
+      // ═══ DELETE listener so undo flows: when an admin undoes a Set, doUndo deletes the
+      // autodial_appointments row, this fires, and Main's liveFeed strips the matching entry.
+      .on('postgres_changes',{event:'DELETE',schema:'public',table:'autodial_appointments'},p=>{callback('appt_delete',p.old)})
       .on('postgres_changes',{event:'*',schema:'public',table:'autodial_sessions'},p=>{callback('session',p.new)})
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'autodial_notifications'},p=>{callback('notif',p.new)})
       .subscribe()}catch(e){console.warn('[Realtime]',e.message);return null}}
@@ -2130,6 +2133,7 @@ function App(){
   // cloud record loses it, and the next pull drops it from Main's view as well.
   const pullAdminAppts=useCallback(async()=>{
     if(role==='admin'||!_SB||!_user)return 0;
+    if(_liveSyncRef.current?.clearGuardUntil>Date.now()){DBG('[pullAdminAppts] skipped — clear in progress');return 0}
     try{
       const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
       if(!_adminEmails.length)return 0;
@@ -2162,6 +2166,119 @@ function App(){
       return _added;
     }catch(e){console.warn('[pullAdminAppts]',e?.message||e);return 0}
   },[role,myEmail,adminConfigs]);
+
+  // ═══════════════════════════════════════════════════════════════════════════════════
+  // ═══ COMPREHENSIVE APPT WIPE — used by Clear All + per-admin Clear buttons.
+  // ═══ Scope: list of email addresses (Main's own + each managed admin).
+  // ═══ Steps for each email:
+  // ═══   1. Pre-pull every appt cloud row to extract IDs into the local blocklist
+  // ═══   2. Delete attached Google Calendar events
+  // ═══   3. Wipe all appt cloud keys (apptlive_, sharedappt_, appts_, shared_appts_) in parallel
+  // ═══   4. Strip the local appointments state of those rows
+  // ═══ Suspends the sharedappt aggregation effect for 30s via _liveSyncRef.clearGuardUntil
+  // ═══ so the wipe doesn't race the realtime channel.
+  // ═══════════════════════════════════════════════════════════════════════════════════
+  const clearApptsForAdmins=useCallback(async(emails)=>{
+    if(!_SB||!emails||!emails.length)return 0;
+    const _emailsLow=emails.map(e=>(e||'').toLowerCase()).filter(Boolean);
+    const _emailSet=new Set(_emailsLow);
+    // Suspend pull/aggregate effects for 30s so the wipe is uncontested
+    _liveSyncRef.current.clearGuardUntil=Date.now()+30000;
+    let _wipeCount=0;
+    const _allIdsForBlocklist=[];
+    // Step 1+2: pull every cloud row for each scope, extract IDs, queue gCal deletes
+    await Promise.all(_emailsLow.flatMap(em=>[
+      // apptlive_ row (shape: {appts:[...], hash, count, ts, devId})
+      (async()=>{try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptlive_'+em).maybeSingle();
+        if(r.data?.biz_name){
+          const p=JSON.parse(r.data.biz_name)||{};
+          const list=Array.isArray(p.appts)?p.appts:[];
+          list.forEach(a=>{
+            if(a.id)_allIdsForBlocklist.push(String(a.id));
+            if(a.phone&&a.createdAt)_allIdsForBlocklist.push(a.phone+'_'+a.createdAt);
+            if(a.phone&&a.apptDate)_allIdsForBlocklist.push(a.phone+'_'+a.apptDate);
+            if(a.calEventId){_allIdsForBlocklist.push(String(a.calEventId));try{window.gCal&&gCal.del(a.calEventId).catch(()=>{})}catch(_e){}}
+            _wipeCount++;
+          });
+        }
+      }catch(_e){}})(),
+      // sharedappt_ row (shape: {data:[...], ts, devId})
+      (async()=>{try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+em).maybeSingle();
+        if(r.data?.biz_name){
+          const p=JSON.parse(r.data.biz_name)||{};
+          const list=Array.isArray(p.data)?p.data:[];
+          list.forEach(a=>{
+            if(a.id)_allIdsForBlocklist.push(String(a.id));
+            if(a.phone&&a.createdAt)_allIdsForBlocklist.push(a.phone+'_'+a.createdAt);
+            if(a.phone&&a.apptDate)_allIdsForBlocklist.push(a.phone+'_'+a.apptDate);
+            if(a.calEventId){_allIdsForBlocklist.push(String(a.calEventId));try{window.gCal&&gCal.del(a.calEventId).catch(()=>{})}catch(_e){}}
+          });
+        }
+      }catch(_e){}})(),
+      // legacy appts_ row (shape: raw array)
+      (async()=>{try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+em).maybeSingle();
+        if(r.data?.biz_name){
+          const list=JSON.parse(r.data.biz_name);
+          if(Array.isArray(list))list.forEach(a=>{
+            if(a.id)_allIdsForBlocklist.push(String(a.id));
+            if(a.phone&&a.createdAt)_allIdsForBlocklist.push(a.phone+'_'+a.createdAt);
+            if(a.phone&&a.apptDate)_allIdsForBlocklist.push(a.phone+'_'+a.apptDate);
+            if(a.calEventId){_allIdsForBlocklist.push(String(a.calEventId));try{window.gCal&&gCal.del(a.calEventId).catch(()=>{})}catch(_e){}}
+          });
+        }
+      }catch(_e){}})(),
+    ]));
+    // Also include IDs from current local state (anything Main is currently looking at that belongs to one of these emails)
+    (appointments||[]).forEach(a=>{
+      const _aem=(a.admin||'').toLowerCase();
+      if(_emailSet.has(_aem)||(_emailSet.has((_user?.email||'').toLowerCase())&&!_aem)){
+        if(a.id)_allIdsForBlocklist.push(String(a.id));
+        if(a.phone&&a.createdAt)_allIdsForBlocklist.push(a.phone+'_'+a.createdAt);
+        if(a.phone&&a.apptDate)_allIdsForBlocklist.push(a.phone+'_'+a.apptDate);
+        if(a.calEventId){_allIdsForBlocklist.push(String(a.calEventId));try{window.gCal&&gCal.del(a.calEventId).catch(()=>{})}catch(_e){}}
+      }
+    });
+    // Persist combined blocklist
+    try{
+      const _existing=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+      const _merged=[...new Set([..._existing,..._allIdsForBlocklist.filter(Boolean)])].slice(-2000);
+      localStorage.setItem('_deletedApptIds',JSON.stringify(_merged));
+      // Also push to dappt_ cloud row so other devices respect the blocklist
+      const _meLow=(_user?.email||'').toLowerCase();
+      if(_meLow)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_meLow,biz_name:JSON.stringify(_merged)},{onConflict:'admin_email'}).catch(()=>{});
+    }catch(_e){}
+    // Step 3: WIPE all cloud rows for these emails in parallel
+    const _emptyLive=()=>JSON.stringify({appts:[],hash:'0',count:0,ts:Date.now(),devId:window._devId});
+    const _emptyShared=()=>JSON.stringify({data:[],ts:Date.now(),devId:window._devId});
+    await Promise.all(_emailsLow.flatMap(em=>[
+      _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+em,biz_name:_emptyLive()},{onConflict:'admin_email'}),
+      _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+em,biz_name:_emptyShared()},{onConflict:'admin_email'}),
+      _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+em,biz_name:'[]'},{onConflict:'admin_email'}),
+      _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+em,biz_name:'[]'},{onConflict:'admin_email'}),
+    ].map(p=>p.then?p.then(()=>{},()=>{}):p)));
+    // Step 4: strip local state of any appt belonging to one of the wiped scopes
+    setAppointments(prev=>{
+      const _meLow=(_user?.email||'').toLowerCase();
+      return prev.filter(a=>{
+        const _aem=(a.admin||'').toLowerCase();
+        // Drop if owned by any wiped scope; "no admin" rows are Main's own (drop if Main's own email is in scope)
+        if(_aem&&_emailSet.has(_aem))return false;
+        if(!_aem&&_emailSet.has(_meLow))return false;
+        return true;
+      });
+    });
+    // Reset hash so next legitimate push isn't short-circuited
+    try{_liveSyncRef.current.lastApptsHash=''}catch(_e){}
+    // Strip weekEvents cache for any deleted gCal IDs
+    try{
+      const _calIds=new Set(_allIdsForBlocklist.filter(x=>x&&!String(x).includes('_')));
+      if(_calIds.size)setWeekEvents(prev=>prev.filter(ev=>!_calIds.has(ev.id)));
+    }catch(_e){}
+    return _wipeCount;
+  },[appointments]);
   const _openCalEdit=(ev)=>{
     if(!ev)return;
     const s=new Date(ev.start?.dateTime||ev.start?.date||0);
@@ -2232,7 +2349,14 @@ function App(){
   const[milestone,setMilestone]=useState(null);const[confetti,setConfetti]=useState(false);
   const[sessionLog,setSessionLog]=useState(load('slog')||[]);
   const[paymentHistory,setPaymentHistory]=useState(load('payh')||[]);
-  const[adminSessions,setAdminSessions]=useState(load('asess')||{}); // Main: {email:[sessions]}
+  const[adminSessions,setAdminSessions]=useState(()=>{
+    // ═══ Normalize on init: each per-email value MUST be an array.
+    // localStorage may contain stale object values from a previous bug; coerce them now.
+    const _raw=load('asess')||{};
+    if(typeof _raw!=='object'||Array.isArray(_raw))return{};
+    const _norm={};Object.entries(_raw).forEach(([k,v])=>{_norm[k]=Array.isArray(v)?v:[]});
+    return _norm;
+  }); // Main: {email:[sessions]}
   // ═══ RESURRECTION FIX: Track session keys that Main has paid/cleared/deleted.
   // Filtered out on every pull-from-cloud so they never come back. Keyed "<email>|<startTime>".
   const[sessSuppress,setSessSuppress]=useState(()=>{try{return new Set(load('ssup')||[])}catch(e){return new Set()}});
@@ -3001,7 +3125,10 @@ function App(){
         if(!load('totalStars'))_hsJobs.push(_hs('stars_'+myEmail,d=>{if(d.stars)setTotalStars(d.stars)}));
         if(!paymentHistory.length)_hsJobs.push(_hs('payh_'+myEmail,d=>{if(d?.length)setPaymentHistory(d)}));
         if(!incentives.length)_hsJobs.push(_hs('incv_'+myEmail,d=>{if(d?.length)setIncentives(d)}));
-        if(!Object.keys(adminSessions).length)_hsJobs.push(_hs('asess_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminSessions(d)}));
+        if(!Object.keys(adminSessions).length)_hsJobs.push(_hs('asess_'+myEmail,d=>{if(d&&Object.keys(d).length){
+          const _norm={};Object.entries(d).forEach(([k,v])=>{_norm[k]=Array.isArray(v)?v:[]});
+          setAdminSessions(_norm)
+        }}));
         if(sessSuppress.size===0)_hsJobs.push(_hs('ssup_'+myEmail,d=>{if(Array.isArray(d)&&d.length)setSessSuppress(new Set(d))}));
         if(!Object.keys(learnedPatterns).length)_hsJobs.push(_hs('learned_'+myEmail,d=>{if(d&&Object.keys(d).length){setLearnedPatterns(d);window._learnedPatterns=d}}));
         if(!promotionLog.length)_hsJobs.push(_hs('promo_'+myEmail,d=>{if(d?.length)setPromotionLog(d)}));
@@ -3143,6 +3270,15 @@ function App(){
     // Main: subscribe to live feed
     if(role==='main'){
       let sub=null;try{sub=DB.subscribeLive((type,data)=>{
+        // ═══ Bug 5 fix: when an appointment row is deleted (e.g. admin undoes a Set),
+        // strip the matching 'appt' entry from liveFeed so Main's view stays accurate.
+        if(type==='appt_delete'){
+          setLiveFeed(p=>p.filter(f=>!(f.type==='appt'&&f.data&&(
+            (data.id&&f.data.id===data.id)||
+            (data.lead_phone&&f.data.lead_phone===data.lead_phone&&f.data.admin_email===data.admin_email)
+          ))));
+          return;
+        }
         setLiveFeed(p=>[{type,data,ts:Date.now()},...p].slice(0,50));
         // Also update CB queue and notifications
         if(type==='appt')DB.getCBQueue().then(setCbQueue);
@@ -3322,6 +3458,7 @@ function App(){
     leadsPushTimer:null,   // 800ms debounce timer for leads push
     apptsPushTimer:null,   // 800ms debounce timer for appointments push
     hasPulledOnce:false,   // gates the write-through so we never push before pulling cloud state once
+    clearGuardUntil:0,     // timestamp until which appt pulls/aggregations are suppressed (set by Clear All flow)
   });
   // Visible sync status: 'idle' | 'pushing' | 'pulling' | 'synced' | 'offline'
   const[syncStatus,setSyncStatus]=useState('idle');
@@ -3519,6 +3656,7 @@ function App(){
           // state is strictly newer than cloud. Skip applying cloud data — we'd just clobber a
           // local edit the user just made. The pending push will reconcile cloud within 800ms.
           if(_liveSyncRef.current.apptsPushTimer){DBG('[LiveSync] pullAppts skipped — local push pending');return}
+          if(_liveSyncRef.current.clearGuardUntil>Date.now()){DBG('[LiveSync] pullAppts skipped — clear in progress');return}
           if(p&&Array.isArray(p.appts)){
             const newHash=_hashAppts(p.appts);
             if(newHash!==_liveSyncRef.current.lastApptsHash){
@@ -3545,7 +3683,12 @@ function App(){
     // enabled (optional — e.g. payevt pull is admin-only).
     const _adminOnly=role==='admin';
     const SYNCED_PULL_CONFIGS=[
-      {key:'asess', apply:(p)=>{if(p&&p.data&&typeof p.data==='object')setAdminSessions(p.data)}},
+      {key:'asess', apply:(p)=>{if(p&&p.data&&typeof p.data==='object'){
+        // ═══ DEFENSIVE NORMALIZATION: each per-email value MUST be an array. Stale cloud rows
+        // sometimes have object values (from a legacy bug) which crashed _adminEntries.filter.
+        const _norm={};Object.entries(p.data).forEach(([k,v])=>{_norm[k]=Array.isArray(v)?v:[]});
+        setAdminSessions(_norm)
+      }}},
       {key:'incv',  apply:(p)=>{if(Array.isArray(p?.data))setIncentives(prev=>p.data.length>prev.length?p.data:prev)}},
       {key:'acfg',  apply:(p)=>{if(p?.data&&typeof p.data==='object'&&Object.keys(p.data).length)setAdminConfigs(p.data)}},
       {key:'slog',  apply:(p)=>{if(Array.isArray(p?.data))setSessionLog(prev=>p.data.length>prev.length?p.data:prev)}},
@@ -3651,6 +3794,7 @@ function App(){
               if(p&&p.devId===window._devId)return;
               // Local-wins guard: unflushed push pending → skip apply
               if(_liveSyncRef.current.apptsPushTimer){DBG('[LiveSync] RT appts skipped — local push pending');return}
+              if(_liveSyncRef.current.clearGuardUntil>Date.now()){DBG('[LiveSync] RT appts skipped — clear in progress');return}
               if(p&&Array.isArray(p.appts)){
                 const newHash=_hashAppts(p.appts);
                 if(newHash!==_liveSyncRef.current.lastApptsHash){
@@ -3856,6 +4000,7 @@ function App(){
     let _cancelled=false;
     const applyRemoteAdmin=(adminEmail,p)=>{
       if(_cancelled||!p||!Array.isArray(p.data))return;
+      if(_liveSyncRef.current.clearGuardUntil>Date.now()){DBG('[LiveSync] aggregation skipped — clear in progress');return}
       const delIds=_getDelIds();
       const emLow=adminEmail.toLowerCase();
       const fresh=p.data.filter(a=>!isApptDeleted(a,delIds)).map(a=>({...a,admin:a.admin||adminEmail}));
@@ -4397,9 +4542,9 @@ function App(){
         </button>
       })()}
       {syncing&&<span className="pill" style={{background:'var(--adim)',color:'var(--accent2)',fontSize:10,padding:'2px 7px',animation:'pulse 1.5s infinite'}}>☁️ Syncing</span>}
-      <button onClick={()=>setShowHelp(true)} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:12,fontWeight:700}}>?</button>
-      <button onClick={()=>authLogout()} style={{width:30,height:30,borderRadius:8,background:'var(--bg3)',color:'var(--text3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      <button onClick={()=>setShowHelp(true)} title="Help" style={{width:30,height:30,borderRadius:8,background:'var(--adim)',color:'var(--accent2)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,fontSize:13,fontWeight:800,border:'1px solid rgba(99,102,241,.25)'}}>?</button>
+      <button onClick={()=>{if(confirm('Sign out of AutoDial?'))authLogout()}} title="Sign out" style={{width:32,height:32,borderRadius:8,background:'var(--rdim)',color:'var(--red)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0,border:'1px solid rgba(248,81,73,.3)'}}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       </button>
     </div>
 
@@ -5263,46 +5408,18 @@ function App(){
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{fontSize:10,color:'var(--text3)'}}>{(()=>{const _d=_getDelIds();const visible=appointments.filter(a=>!isApptDeleted(a,_d));return isCallMode?visible.filter(a=>!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase()).length:visible.length})() } total</span>
           {role!=='admin'&&isManageMode&&<button onClick={async()=>{toast('↻ Pulling admin appts…','info');const n=await pullAdminAppts();toast(n>0?'✅ '+n+' new appt'+(n===1?'':'s'):'Up to date')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600,border:'1px solid rgba(99,102,241,.2)'}}>↻ Pull Admins</button>}
-          {role!=='admin'&&appointments.length>0&&<button onClick={async()=>{if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis cannot be undone.'))return;
-              // ═══ Delete Google Calendar events so they stop blocking calendar slots ═══
-              const _calIds=new Set(appointments.map(a=>a.calEventId).filter(Boolean));
-              if(window.gCal){_calIds.forEach(id=>{gCal.del(id).catch(()=>{})})}
-              // Remove from local weekEvents cache so Cal tab updates without refresh
-              if(_calIds.size)setWeekEvents(prev=>prev.filter(ev=>!_calIds.has(ev.id)));
-              // ═══ Track instance-specific blocklist entries (NOT bare phone — that would permanently
-              // block those leads from getting new appointments later). Cloud row wipes (below) handle
-              // the case where instance IDs drift across devices.
-              const allIds=[];appointments.forEach(a=>{
-                allIds.push(String(a.id||''));
-                allIds.push(a.phone+'_'+(a.createdAt||''));
-                allIds.push(a.phone+'_'+(a.apptDate||''));
-                if(a.calEventId)allIds.push(String(a.calEventId));
-              });
-              const uniq=[...new Set(allIds.filter(Boolean))].slice(-500);localStorage.setItem('_deletedApptIds',JSON.stringify(uniq));
-              if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(uniq)},{onConflict:'admin_email'}).catch(function(){});
-              setAppointments([]);save('appts',[]);cloudSave('appts',[]);
-              // ═══ Also reset dailySets + session.sets counter so the points/bar don't keep showing stale "first blood" etc
-              _resetDailySets();
-              setSession(p=>p?{...p,sets:0}:p);
-              // ═══ HARD-SYNC WIPE: immediately upsert empty payloads to all appointment cloud keys so the next
-              // reload/pull can't resurrect anything. Reset lastApptsHash so the write-through isn't short-circuited.
-              try{_liveSyncRef.current.lastApptsHash=''}catch(_e){}
-              if(_SB&&_user){
-                const _me=(_user.email||'').toLowerCase();
-                const _emptyLive={appts:[],hash:'0',count:0,ts:Date.now(),devId:window._devId};
-                const _emptyShared={data:[],ts:Date.now(),devId:window._devId};
-                try{await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+_me,biz_name:JSON.stringify(_emptyLive)},{onConflict:'admin_email'})}catch(_e){}
-                try{await _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+_me,biz_name:JSON.stringify(_emptyShared)},{onConflict:'admin_email'})}catch(_e){}
-                try{await _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+_me,biz_name:'[]'},{onConflict:'admin_email'})}catch(_e){}
-              }
-              // Clear shared appointment keys for all admins (legacy + new)
-              if(_SB&&role!=='admin'){Object.keys(adminConfigs).forEach(email=>{
-                const _el=email.toLowerCase();
-                _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+_el,biz_name:'[]'},{onConflict:'admin_email'}).catch(function(){});
-                _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+_el,biz_name:JSON.stringify({data:[],ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(function(){});
-                _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+_el,biz_name:JSON.stringify({appts:[],hash:'0',count:0,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(function(){});
-              })}
-              toast('All appointments cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
+          {role!=='admin'&&appointments.length>0&&<button onClick={async()=>{
+              const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
+              const _scope=[myEmail,..._adminEmails];
+              if(!confirm('⚠️ Delete ALL '+appointments.length+' appointments?\n\nThis wipes Main + every managed admin ('+_adminEmails.length+' admins) and cannot be undone.'))return;
+              toast('🗑 Wiping all appointments…','info');
+              try{
+                const wiped=await clearApptsForAdmins(_scope);
+                _resetDailySets();
+                setSession(p=>p?{...p,sets:0}:p);
+                toast('✅ All appointments cleared ('+wiped+' wiped from cloud)');
+              }catch(e){toast('Clear failed: '+(e?.message||e),'err')}
+            }} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
 
         </div>
       </div>
@@ -5551,8 +5668,8 @@ function App(){
       // ═══ HARD FIX: filter out non-email keys (orphans from previous name-keyed Google Sheet imports) ═══
       const _adminEntries=Object.entries(adminSessions||{})
         .filter(([em])=>em&&em.includes('@')&&(em||'').toLowerCase()!==myEmail.toLowerCase())
-        .map(([em,ss])=>[em,(ss||[]).filter(s=>!s.cycleId)]);
-      const _allAdminSessions=_adminEntries.flatMap(([em,ss])=>(ss||[]).map(s=>({...s,_email:em})));
+        .map(([em,ss])=>[em,(Array.isArray(ss)?ss:[]).filter(s=>!s.cycleId)]);
+      const _allAdminSessions=_adminEntries.flatMap(([em,ss])=>(Array.isArray(ss)?ss:[]).map(s=>({...s,_email:em})));
       const _unpaidAdminSessions=_allAdminSessions.filter(s=>!s.paid);
       const _adminUnpaidPay=_unpaidAdminSessions.reduce((a,s)=>a+(s.pay||0),0);
       const _adminIncentives=incentives.filter(x=>(x.admin||'').toLowerCase()!==myEmail.toLowerCase()&&!x.cycleId);
@@ -6467,6 +6584,14 @@ function App(){
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{ac.bizName||em}</p>
             <div style={{display:'flex',gap:4}}>
               <Btn variant="primary" size="sm" weight={600} onClick={()=>setEditingAdmin(editingAdmin===em?null:em)}>{editingAdmin===em?'Close':'Edit'}</Btn>
+              <button title={"Wipe all of "+(ac.bizName||em)+"'s appointments from cloud"} onClick={async()=>{
+                if(!confirm('🗑 Wipe ALL appointments for '+(ac.bizName||em)+'?\n\nThis clears every cloud row (apptlive, sharedappt, appts) for this admin and removes them from your dashboard. Cannot be undone.'))return;
+                toast('Wiping '+(ac.bizName||em)+'…','info');
+                try{
+                  const wiped=await clearApptsForAdmins([em]);
+                  toast('✅ '+(ac.bizName||em)+' cleared ('+wiped+' appts wiped)');
+                }catch(e){toast('Clear failed: '+(e?.message||e),'err')}
+              }} style={{padding:'4px 8px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:700,border:'1px solid rgba(248,81,73,.25)',cursor:'pointer'}}>🗑 Appts</button>
               <Btn variant="danger" size="sm" weight={600} onClick={()=>{const c={...adminConfigs};delete c[em];setAdminConfigs(c)}}>×</Btn>
             </div>
           </div>
@@ -7457,7 +7582,9 @@ function App(){
                           setApptDate(d.key);
                           setApptTime(hh+':'+mm);
                           setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
-                          toast('Slot locked · scroll down to create','info');
+                          // ═══ Auto-scroll the modal to the form section so user sees they can fill location/remarks
+                          setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},100);
+                          toast('Slot locked · fill details below','info');
                         }} className="free-slot" style={{position:'absolute',left:1,right:1,top:top+1,height,borderRadius:4,padding:'2px 3px',fontSize:8,fontWeight:700,overflow:'hidden',cursor:'pointer',border:'1px solid '+(isSelectedSlot?'#22c55e':'rgba(34,197,94,.5)'),background:isSelectedSlot?'linear-gradient(135deg,#22c55e,#10b981)':undefined,color:isSelectedSlot?'#fff':'#86efac',boxShadow:isSelectedSlot?'0 0 10px rgba(34,197,94,.5)':'0 0 4px rgba(34,197,94,.18)'}}>
                           <div style={{fontSize:8,fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{hh}:{mm}</div>
                           {height>22&&<div style={{fontSize:7,opacity:.85}}>{s.hours.toFixed(1)}h</div>}
@@ -7559,7 +7686,8 @@ function App(){
                         setApptDate(d.key);
                         setApptTime(hh+':'+mm);
                         setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
-                        toast('Slot locked · scroll down to create','info');
+                        setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},100);
+                        toast('Slot locked · fill details below','info');
                       }} style={{padding:'5px 4px',borderRadius:6,background:isSelectedSlot?'linear-gradient(135deg,#22c55e,#10b981)':'linear-gradient(135deg,rgba(34,197,94,.25),rgba(16,185,129,.15))',border:'1px solid '+(isSelectedSlot?'#22c55e':'rgba(34,197,94,.5)'),color:isSelectedSlot?'#fff':'#22c55e',fontSize:8,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:isSelectedSlot?'0 0 10px rgba(34,197,94,.5)':'0 0 4px rgba(34,197,94,.18)'}}>
                         {hh}:{mm}–{eh}:{em}
                         <div style={{fontSize:7,fontWeight:600,opacity:.85,marginTop:1}}>{s.hours.toFixed(1)}h</div>
@@ -7581,7 +7709,8 @@ function App(){
                               setApptTime(hh+':'+mm);
                               setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
                               setPendingShakyKey(null);
-                              toast('Shaky slot locked','info');
+                              setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},100);
+                              toast('Shaky slot locked · fill details below','info');
                             }} style={{flex:1,padding:'3px 2px',borderRadius:4,background:'#22c55e',color:'#fff',fontSize:8,fontWeight:800,border:'none'}}>Yes</button>
                             <button onClick={(e)=>{e.stopPropagation();setPendingShakyKey(null)}} style={{flex:1,padding:'3px 2px',borderRadius:4,background:'var(--bg3)',color:'var(--text3)',fontSize:8,fontWeight:800,border:'none'}}>No</button>
                           </div>
@@ -7620,7 +7749,7 @@ function App(){
           </div>;
         })()}
         {/* ═══ FORM SECTION — manual date/time + all other fields ═══ */}
-        <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em'}}>{gOk?'Or adjust manually':'Date & Time'}</p>
+        <p id="appt-form-section" style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em'}}>{gOk?'✏️ Confirm details below before creating':'Date & Time'}</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
           <input type="date" value={apptDate} onChange={ev=>setApptDate(ev.target.value)} style={{colorScheme:'dark'}}/>
           <input type="time" value={apptTime} onChange={ev=>setApptTime(ev.target.value)} style={{colorScheme:'dark'}}/>
