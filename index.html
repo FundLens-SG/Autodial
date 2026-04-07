@@ -2118,6 +2118,11 @@ function App(){
   useEffect(()=>{save('pickerVM',pickerViewMode)},[pickerViewMode]);
   const[apptShaky,setApptShaky]=useState(false); // Shaky flag on new appointment
   const[pendingShakyKey,setPendingShakyKey]=useState(null); // "dayKey_HH:MM" for inline confirm
+  // ═══ Bug 3 fix: collapse the picker after a slot is clicked so the form fields become the
+  // primary focus. The previous scrollIntoView wasn't decisive enough on mobile — users still
+  // tapped Create Appointment without filling in location/remarks. Now the picker is REPLACED
+  // by a "✓ slot picked" summary card with a "Change slot" link.
+  const[pickerCollapsed,setPickerCollapsed]=useState(false);
   const[calViewMode,setCalViewMode]=useState(()=>load('calvm')||'list'); // 'list' | 'grid' for Cal tab
   // ═══ Cal tab click-to-edit state
   const[calEditEvent,setCalEditEvent]=useState(null); // raw Google Calendar event
@@ -4369,7 +4374,12 @@ function App(){
         if(s===1)checkAchievement('first_set','First Blood!','🩸');
         if(s===n(session.selectedSlot?.apptsBar||myCfg.mThresh,2))
         if(s===n(session.selectedSlot?.bonusBar||myCfg.nThresh,3)){checkAchievement('bonus_hit','Bonus Hunter!','💎')}
-      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);setApptShaky(false);setApptDate('');setApptTime('');setPickerWeekIdx(0);setShowAppt(true);setSetDone(true)}
+      }const lead=leadIdx>=0&&leadIdx<leads.length?{...leads[leadIdx]}:null;applyOutcome(status,extra);setApptLead(lead);
+      // ═══ Bug 4 fix: reset EVERY form field on each Set click so undo+set doesn't carry stale state
+      setApptShaky(false);setApptDate('');setApptTime('');setApptLocation('');setApptObs('');setApptInvite('');
+      setApptDuration(()=>{const v=load('apptDur');return(v&&v>=15&&v<=480)?v:60});
+      setPendingShakyKey(null);setPickerCollapsed(false);
+      setPickerWeekIdx(0);setShowAppt(true);setSetDone(true)}
     else{applyOutcome(status,extra)}
     // ═══ PRE-COMPUTE next lead by simulating status change ═══
     const simulated=leads.map((l,i)=>{
@@ -7474,13 +7484,13 @@ function App(){
         {apptDate&&apptTime&&<div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',marginBottom:12,borderRadius:12,background:'linear-gradient(135deg,rgba(34,197,94,.15),rgba(16,185,129,.08))',border:'1px solid rgba(34,197,94,.5)',boxShadow:'0 0 14px rgba(34,197,94,.18)'}}>
           <span style={{fontSize:18}}>✓</span>
           <div style={{flex:1,minWidth:0}}>
-            <p style={{margin:0,fontSize:12,fontWeight:800,color:'#22c55e'}}>Slot locked</p>
+            <p style={{margin:0,fontSize:12,fontWeight:800,color:'#22c55e'}}>Slot locked · adjust below</p>
             <p style={{margin:'2px 0 0',fontSize:11,color:'#86efac'}}>{(()=>{try{return fmtLongDay(apptDate+'T'+apptTime)+' · '+apptTime+' · '+(apptDuration||60)+' min'}catch(e){return apptDate+' '+apptTime}})()}</p>
           </div>
-          <button onClick={()=>{setApptDate('');setApptTime('')}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flexShrink:0}}>Change</button>
+          <button onClick={()=>{setApptDate('');setApptTime('');setPickerCollapsed(false)}} style={{padding:'6px 10px',borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:10,fontWeight:700,flexShrink:0}}>Change slot</button>
         </div>}
-        {/* ═══ PICKER SECTION — shown when gOk ═══ */}
-        {gOk&&(()=>{
+        {/* ═══ PICKER SECTION — shown when gOk AND not collapsed after a slot pick ═══ */}
+        {gOk&&!pickerCollapsed&&(()=>{
           const now=new Date();
           const todayMid=new Date(now.getFullYear(),now.getMonth(),now.getDate());
           const todayKey=localDateKey(todayMid);
@@ -7582,9 +7592,10 @@ function App(){
                           setApptDate(d.key);
                           setApptTime(hh+':'+mm);
                           setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
-                          // ═══ Auto-scroll the modal to the form section so user sees they can fill location/remarks
-                          setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},100);
-                          toast('Slot locked · fill details below','info');
+                          // ═══ Collapse the picker so the form fields become the primary focus
+                          setPickerCollapsed(true);
+                          setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},150);
+                          toast('Slot locked · adjust time/details below','info');
                         }} className="free-slot" style={{position:'absolute',left:1,right:1,top:top+1,height,borderRadius:4,padding:'2px 3px',fontSize:8,fontWeight:700,overflow:'hidden',cursor:'pointer',border:'1px solid '+(isSelectedSlot?'#22c55e':'rgba(34,197,94,.5)'),background:isSelectedSlot?'linear-gradient(135deg,#22c55e,#10b981)':undefined,color:isSelectedSlot?'#fff':'#86efac',boxShadow:isSelectedSlot?'0 0 10px rgba(34,197,94,.5)':'0 0 4px rgba(34,197,94,.18)'}}>
                           <div style={{fontSize:8,fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{hh}:{mm}</div>
                           {height>22&&<div style={{fontSize:7,opacity:.85}}>{s.hours.toFixed(1)}h</div>}
@@ -7686,8 +7697,9 @@ function App(){
                         setApptDate(d.key);
                         setApptTime(hh+':'+mm);
                         setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
-                        setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},100);
-                        toast('Slot locked · fill details below','info');
+                        setPickerCollapsed(true);
+                        setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},150);
+                        toast('Slot locked · adjust time/details below','info');
                       }} style={{padding:'5px 4px',borderRadius:6,background:isSelectedSlot?'linear-gradient(135deg,#22c55e,#10b981)':'linear-gradient(135deg,rgba(34,197,94,.25),rgba(16,185,129,.15))',border:'1px solid '+(isSelectedSlot?'#22c55e':'rgba(34,197,94,.5)'),color:isSelectedSlot?'#fff':'#22c55e',fontSize:8,fontWeight:800,cursor:'pointer',textAlign:'center',boxShadow:isSelectedSlot?'0 0 10px rgba(34,197,94,.5)':'0 0 4px rgba(34,197,94,.18)'}}>
                         {hh}:{mm}–{eh}:{em}
                         <div style={{fontSize:7,fontWeight:600,opacity:.85,marginTop:1}}>{s.hours.toFixed(1)}h</div>
@@ -7709,8 +7721,10 @@ function App(){
                               setApptTime(hh+':'+mm);
                               setApptDuration(prev=>{const saved=Number(prev)||60;return Math.min(saved,slotMins)});
                               setPendingShakyKey(null);
-                              setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},100);
-                              toast('Shaky slot locked · fill details below','info');
+                              setApptShaky(true); // shaky slot click implies shaky appointment
+                              setPickerCollapsed(true);
+                              setTimeout(()=>{document.getElementById('appt-form-section')?.scrollIntoView({behavior:'smooth',block:'start'})},150);
+                              toast('🟠 Shaky slot locked · adjust time/details below','info');
                             }} style={{flex:1,padding:'3px 2px',borderRadius:4,background:'#22c55e',color:'#fff',fontSize:8,fontWeight:800,border:'none'}}>Yes</button>
                             <button onClick={(e)=>{e.stopPropagation();setPendingShakyKey(null)}} style={{flex:1,padding:'3px 2px',borderRadius:4,background:'var(--bg3)',color:'var(--text3)',fontSize:8,fontWeight:800,border:'none'}}>No</button>
                           </div>
@@ -7749,7 +7763,7 @@ function App(){
           </div>;
         })()}
         {/* ═══ FORM SECTION — manual date/time + all other fields ═══ */}
-        <p id="appt-form-section" style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em'}}>{gOk?'✏️ Confirm details below before creating':'Date & Time'}</p>
+        <p id="appt-form-section" style={{margin:'0 0 8px',fontSize:11,color:'var(--accent2)',fontWeight:800,textTransform:'uppercase',letterSpacing:'.08em'}}>{apptDate&&apptTime?'✏️ Adjust time / fill location & notes':gOk?'✏️ Or set date & time manually':'Date & Time'}</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
           <input type="date" value={apptDate} onChange={ev=>setApptDate(ev.target.value)} style={{colorScheme:'dark'}}/>
           <input type="time" value={apptTime} onChange={ev=>setApptTime(ev.target.value)} style={{colorScheme:'dark'}}/>
