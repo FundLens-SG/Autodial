@@ -12,16 +12,62 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='108' fill='url(%23g)'/%3E%3Cpath d='M352 311v48a16 16 0 01-17 16 158 158 0 01-69-25 156 156 0 01-48-48 158 158 0 01-25-69A16 16 0 01209 216h24a16 16 0 0116 14c1 8 3 15 6 22a16 16 0 01-4 17l-10 10a128 128 0 0048 48l10-10a16 16 0 0117-4c7 3 15 5 22 6A16 16 0 01352 336z' fill='none' stroke='white' stroke-width='18' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%22%2C%22short_name%22%3A%22AutoDial%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22orientation%22%3A%22portrait%22%2C%22background_color%22%3A%22%2307080d%22%2C%22theme_color%22%3A%22%236366f1%22%7D">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- ═══ PERF: preconnect to CDNs so TLS handshakes happen in parallel with HTML parse ═══ -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://mgbxxwoasrwlraffcvab.supabase.co" crossorigin>
+<!-- ═══ CRITICAL PATH: Supabase synchronous (needed for inline auth scripts below) ═══ -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<!-- Google GSI loaded on demand --></script>
+<!-- ═══ DEFERRED: React + Babel load in parallel during HTML parse, execute in order after. ═══
+     Babel auto-compiles <script type="text/babel"> blocks on DOMContentLoaded which fires
+     AFTER these defer scripts execute, so React/ReactDOM are available by then. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<!-- ═══ LAZY: XLSX, Papaparse, jsPDF, jsPDF-autotable, QRCode are now loaded on-demand via
+     window._loadLib() only when the user actually uses file import / PDF / QR features.
+     This removes ~4MB from initial load on slow mobile connections. ═══ -->
+<script>
+// ═══ Lazy library loader — dynamically inserts a <script> on first use, caches the Promise.
+// Call: await window._loadLib('xlsx')  (then use XLSX.* globals as normal)
+window._libPromises={};
+window._loadLib=function(name){
+  if(window._libPromises[name])return window._libPromises[name];
+  var cfg={
+    xlsx:{src:'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',check:function(){return typeof XLSX!=='undefined'}},
+    papa:{src:'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js',check:function(){return typeof Papa!=='undefined'}},
+    jspdf:{src:'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',check:function(){return typeof jspdf!=='undefined'||typeof window.jspdf!=='undefined'}},
+    jspdf_autotable:{src:'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',deps:['jspdf']},
+    qrcode:{src:'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',check:function(){return typeof QRCode!=='undefined'}}
+  };
+  var d=cfg[name];
+  if(!d)return Promise.reject(new Error('Unknown lib: '+name));
+  if(d.check&&d.check())return Promise.resolve();
+  var depPromise=d.deps?Promise.all(d.deps.map(window._loadLib)):Promise.resolve();
+  window._libPromises[name]=depPromise.then(function(){
+    return new Promise(function(resolve,reject){
+      var s=document.createElement('script');
+      s.src=d.src;s.async=true;
+      s.onload=function(){resolve()};
+      s.onerror=function(e){delete window._libPromises[name];reject(new Error('Failed to load '+name))};
+      document.head.appendChild(s);
+    });
+  });
+  return window._libPromises[name];
+};
+// Convenience: load jsPDF + autotable together
+window._loadJspdf=function(){return window._loadLib('jspdf_autotable')};
+// ═══ Prefetch lazy libs after the app is interactive (idle time, non-blocking) ═══
+// This warms the cache so when the user actually imports a file, it's already downloaded.
+if('requestIdleCallback' in window){
+  window.addEventListener('load',function(){
+    requestIdleCallback(function(){
+      // Prefetch the most commonly-used libs in the background
+      try{window._loadLib('papa').catch(()=>{});window._loadLib('xlsx').catch(()=>{})}catch(e){}
+    },{timeout:5000});
+  });
+}
+</script>
 <script>
 if(!navigator.locks)navigator.locks={request:(n,o,c)=>{if(typeof o==='function')c=o;return Promise.resolve(c({name:n}))}};
 (function(){var w=console.warn;console.warn=function(){if(typeof(arguments[0])==='string'&&(arguments[0].includes('gotrue')||arguments[0].includes('lock:')))return;w.apply(console,arguments)}})();
@@ -1415,18 +1461,25 @@ function buildPayNowPayload(identifier,amount,refName,refMsg){
   payload+='6304';payload+=_crc16ccitt(payload);return payload
 }
 // Generate QR image dataURL from text (uses qrcodejs global)
-function generateQRDataURL(text,size){return new Promise(function(resolve){try{
-  if(!text||typeof QRCode==='undefined'){resolve(null);return}
-  var div=document.createElement('div');div.style.position='fixed';div.style.left='-9999px';div.style.top='0';document.body.appendChild(div);
-  new QRCode(div,{text:text,width:size||220,height:size||220,correctLevel:QRCode.CorrectLevel.M});
-  setTimeout(function(){try{
-    var canvas=div.querySelector('canvas');var img=div.querySelector('img');
-    var url=null;
-    if(canvas)url=canvas.toDataURL('image/png');
-    else if(img&&img.src)url=img.src;
-    document.body.removeChild(div);resolve(url)
-  }catch(e){try{document.body.removeChild(div)}catch(_){}resolve(null)}},80)
-}catch(e){resolve(null)}})}
+function generateQRDataURL(text,size){return new Promise(function(resolve){
+  if(!text){resolve(null);return}
+  // Lazy-load qrcodejs on first use, then proceed
+  var proceed=function(){try{
+    if(typeof QRCode==='undefined'){resolve(null);return}
+    var div=document.createElement('div');div.style.position='fixed';div.style.left='-9999px';div.style.top='0';document.body.appendChild(div);
+    new QRCode(div,{text:text,width:size||220,height:size||220,correctLevel:QRCode.CorrectLevel.M});
+    setTimeout(function(){try{
+      var canvas=div.querySelector('canvas');var img=div.querySelector('img');
+      var url=null;
+      if(canvas)url=canvas.toDataURL('image/png');
+      else if(img&&img.src)url=img.src;
+      document.body.removeChild(div);resolve(url)
+    }catch(e){try{document.body.removeChild(div)}catch(_){}resolve(null)}},80)
+  }catch(e){resolve(null)}};
+  if(typeof QRCode!=='undefined')proceed();
+  else if(window._loadLib)window._loadLib('qrcode').then(proceed,function(){resolve(null)});
+  else resolve(null);
+})}
 
 // Column detection + AI parsing
 // ═══ FUZZY STATUS MATCHING ═══
@@ -1777,6 +1830,29 @@ function isApptDeleted(a,delSet){
     if(delSet.has(a.phone))return true}
   return false}
 window.isApptDeleted=isApptDeleted;
+// ═══ ONE-TIME MIGRATION: strip bare-phone entries from _deletedApptIds.
+// An earlier version of Clear All pushed bare phones into the blocklist as a "ghost catch-all",
+// but that permanently blocked any future appointment for those leads — so when a user re-set a
+// cleared lead, pullAppts would filter the new appt out on the next sync and the dashboard would
+// show 0 while Google Calendar still had the event. This migration removes entries that look like
+// plain phone numbers (all digits, 6-15 chars, no separators). Idempotent — runs once per load.
+try{
+  const _d=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+  if(Array.isArray(_d)&&_d.length){
+    const _purged=_d.filter(x=>{
+      if(typeof x!=='string')return true;
+      // Keep anything that has separators (phone_createdAt, phone_apptDate, UUIDs, calEventIds)
+      if(x.indexOf('_')>=0||x.indexOf('-')>=0||x.indexOf('.')>=0||x.indexOf('@')>=0)return true;
+      // Drop anything that looks like a bare phone number (all digits, 6-15 chars)
+      if(/^\d{6,15}$/.test(x))return false;
+      return true;
+    });
+    if(_purged.length!==_d.length){
+      localStorage.setItem('_deletedApptIds',JSON.stringify(_purged));
+      console.info('[AutoDial] Purged '+(_d.length-_purged.length)+' bare-phone entries from _deletedApptIds (unblocking re-use of cleared leads)');
+    }
+  }
+}catch(_e){}
 window.detectBatches=detectBatches;
 
 const RE={first:/^(first[_\s]?name|fname|first)$/i,last:/^(last[_\s]?name|lname|last|surname)$/i,name:/^(full[_\s]?name|name|contact[_\s]?name|client|customer)$/i,phone:/^(phone|tel|mobile|cell|number|whatsapp|transaction\s*id|transaction)$/i,email:/^(email|e-?mail)$/i,age:/^(age)$/i,nric:/^(nric|ic|ic.?no|nric.?no|identification|id.?number)$/i,race:/^(race|ethnicity|residential)$/i,income:/^(income|salary)$/i,savings:/^(savings?)$/i,birthday:/^(birthday|dob|date.?of.?birth)$/i,company:/^(company|org|business)$/i,gender:/^(gender|sex|salutation)$/i,status:/^(status|result)$/i,remarks:/^(remarks?|notes?|comments?)$/i};
@@ -2722,120 +2798,148 @@ function App(){
     (async()=>{
       try{
         setSyncing(true);
-        const cloud=await CloudSync.loadAll();
-        // ═══ ADMIN GOOGLE — robust multi-path resolution (impersonates main via Worker, bypasses stale cache) ═══
+        // ═══ PERF: Fire CloudSync.loadAll in parallel with all the other bootstrap reads.
+        // The `cloud` variable is only consumed AFTER all the parallelized blocks below, so we
+        // start the request now and await its promise just before it's needed. This overlaps
+        // ~300ms of round-trip latency with the other reads.
+        const _cloudPromise=CloudSync.loadAll().catch(function(e){console.warn('[CloudSync]',e?.message||e);return{}});
+        // ═══ ADMIN GOOGLE — non-blocking. Fire-and-forget so the network round-trip doesn't gate
+        // the rest of the bootstrap. Local-fresh case is instant; refresh case completes in background.
         if(role==='admin'&&_SB){
           const _localTs=parseInt(localStorage.getItem('ad_gt_ts')||'0');
           const _localFresh=localStorage.getItem('ad_gt')&&(Date.now()-_localTs)<2700000;
           if(!_localFresh){
-            try{
-              const result=await window._adminEnsureGoogle(false);
+            window._adminEnsureGoogle(false).then(function(result){
               if(result&&result.ok){setGOk(true);DBG('[AutoDial] Admin Google ready via '+result.reason)}
-            }catch(e){console.warn('[AdminGoogle]',e.message||e)}
+            }).catch(function(e){console.warn('[AdminGoogle]',e?.message||e)});
           }else{setGOk(true)}
         }
-        // Admin: load own config published by Main
+        // Admin: load own config + global config + shared script + shared appts + session log + totalSets — ALL IN PARALLEL
+        // ═══ PERF: Previously these 6 reads ran serially (~6 × 300ms = ~1.8s of round-trip latency).
+        // ═══ Wrapping each block in an async IIFE inside Promise.all collapses it to one round-trip.
         if(role==='admin'&&_SB){
-          try{
-            const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).single();
-            if(r.data&&r.data.biz_name){
-              try{const myCfgFromMain=JSON.parse(r.data.biz_name);
-              setAdminConfigs(p=>({...p,[myEmail]:Object.assign({},p[myEmail]||{},myCfgFromMain)}));
-              DBG('[AutoDial] Loaded config from Main:',Object.keys(myCfgFromMain))}catch(pe){}
-            }
-          }catch(e){console.warn('[AdminCfg]',e.message||'no personal config')}
-          try{
-            const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').single();
-            if(gr.data&&gr.data.biz_name){
-              try{const globalCfg=JSON.parse(gr.data.biz_name);
-              // ═══ FIX: manager-owned keys ALWAYS overwrite (previous "only fill empty" logic meant stale values stuck around) ═══
-              const GLOBAL_OVERWRITE=['sharedGeminiKey','sharedClaudeKey','payRates','tierMins','sessionDur','mThresh','nThresh','bonusMult','metIncentive','starThresholds','npMax','cpl','delay','callingScript','refNotes'];
-              setCfg(p=>{const merged={...p};
-                Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});
-                GLOBAL_OVERWRITE.forEach(k=>{if(globalCfg[k]!==undefined)merged[k]=globalCfg[k]});
-                return merged});
-              if(globalCfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key'))window._sharedClaudeKey=globalCfg.sharedClaudeKey;
-              DBG('[AutoDial] Loaded global config')}catch(pe){}
-            }
-          }catch(e){console.warn('[AdminCfg]',e.message||'no global config')}
-          // Load shared script from Main
-          try{
-            const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_script').single();
-            if(sr.data&&sr.data.biz_name){const s=JSON.parse(sr.data.biz_name);
-              if(s.html){setCfg(p=>({...p,callingScript:s.html,refNotes:s.notes||p.refNotes||''}));DBG('[AutoDial] Loaded shared script from Main')}}
-          }catch(e){}
-        }
-        // Load shared appointments from Main
-        if(role==='admin'&&_SB){
-          try{const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_appts_'+myEmail).single();
-            if(ar.data&&ar.data.biz_name){const shared=JSON.parse(ar.data.biz_name);
-              if(shared.length){const delIds=_getDelIds();
-                setAppointments(prev=>{
-                const existIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
-                const newAppts=shared.filter(a=>{return!existIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds)});
-                if(newAppts.length)DBG('[AutoDial] Loaded '+newAppts.length+' shared appointments');
-                return newAppts.length?_dedupAppts([...prev,...newAppts]):prev})}}}catch(e){}
-          // Load session log from Supabase
-          try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
-            if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
-              if(sl.length&&!sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Loaded '+sl.length+' sessions from Supabase')}}}catch(e){}
-          // Load totalSets from Supabase
-          try{const tr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','ts_'+myEmail).single();
-            if(tr.data&&tr.data.biz_name){const td=JSON.parse(tr.data.biz_name);
-              if(td.ts>totalSets){setTotalSets(td.ts);DBG('[AutoDial] Loaded totalSets='+td.ts+' from Supabase')}}}catch(e){}
-        }
-        // Cross-device cfg sync from Supabase
-        if(_SB){
-          try{const uc=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','usercfg_'+myEmail).single();
-            if(uc.data&&uc.data.biz_name){const sc=JSON.parse(uc.data.biz_name);
-              if(sc._lastSync&&sc.sheetId){setCfg(p=>({...p,sheetId:sc.sheetId||p.sheetId,sheetTab:sc.sheetTab||p.sheetTab}));DBG('[AutoDial] Cross-device cfg loaded')}}}catch(e){}
-          // Cross-device gamification
-          try{const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gamify_'+myEmail).single();
-            if(gr.data&&gr.data.biz_name){const gd=JSON.parse(gr.data.biz_name);
-              if(gd.bestStreak>bestStreak)setBestStreak(gd.bestStreak);
-              if(gd.achievements?.length>achievements.length)setAchievements(gd.achievements)}}catch(e){}
-        }
-        // Also load own data from Supabase (cross-device for Main too)
-        if(role!=='admin'&&_SB){
-          try{const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+myEmail).single();
-            if(ar.data&&ar.data.biz_name){const myA=JSON.parse(ar.data.biz_name);
-              if(myA.length){const delIds=_getDelIds();
-                const filtered=myA.filter(a=>!isApptDeleted(a,delIds));
-                if(filtered.length>appointments.length){setAppointments(_dedupAppts(filtered));DBG('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}}catch(e){}
-          // ═══ AGGREGATE admin appointments — pull each admin's appts_<email> and merge into Main's dashboard
-          try{
-            const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
-            if(_adminEmails.length){
-              const _results=await Promise.all(_adminEmails.map(async em=>{
-                try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+em.toLowerCase()).single();
-                  if(r.data?.biz_name){const list=JSON.parse(r.data.biz_name);if(Array.isArray(list))return list.map(a=>({...a,admin:a.admin||em}))}}catch(_e){}
-                return[]
-              }));
-              const _merged=_results.flat();
-              if(_merged.length){
-                const _delIds=_getDelIds();
-                const _fresh=_merged.filter(a=>!isApptDeleted(a,_delIds));
-                if(_fresh.length){
+          await Promise.all([
+            // 1. shared_admincfg_<email> — own config published by Main
+            (async()=>{try{
+              const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_admincfg_'+myEmail).maybeSingle();
+              if(r.data&&r.data.biz_name){
+                try{const myCfgFromMain=JSON.parse(r.data.biz_name);
+                setAdminConfigs(p=>({...p,[myEmail]:Object.assign({},p[myEmail]||{},myCfgFromMain)}));
+                DBG('[AutoDial] Loaded config from Main:',Object.keys(myCfgFromMain))}catch(pe){}
+              }
+            }catch(e){console.warn('[AdminCfg]',e.message||'no personal config')}})(),
+            // 2. shared_globalcfg — manager-owned global config
+            (async()=>{try{
+              const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_globalcfg').maybeSingle();
+              if(gr.data&&gr.data.biz_name){
+                try{const globalCfg=JSON.parse(gr.data.biz_name);
+                const GLOBAL_OVERWRITE=['sharedGeminiKey','sharedClaudeKey','payRates','tierMins','sessionDur','mThresh','nThresh','bonusMult','metIncentive','starThresholds','npMax','cpl','delay','callingScript','refNotes'];
+                setCfg(p=>{const merged={...p};
+                  Object.keys(globalCfg).forEach(k=>{if(p[k]===undefined||p[k]===null||p[k]==='')merged[k]=globalCfg[k]});
+                  GLOBAL_OVERWRITE.forEach(k=>{if(globalCfg[k]!==undefined)merged[k]=globalCfg[k]});
+                  return merged});
+                if(globalCfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key'))window._sharedClaudeKey=globalCfg.sharedClaudeKey;
+                DBG('[AutoDial] Loaded global config')}catch(pe){}
+              }
+            }catch(e){console.warn('[AdminCfg]',e.message||'no global config')}})(),
+            // 3. shared_script — calling script + ref notes
+            (async()=>{try{
+              const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_script').maybeSingle();
+              if(sr.data&&sr.data.biz_name){const s=JSON.parse(sr.data.biz_name);
+                if(s.html){setCfg(p=>({...p,callingScript:s.html,refNotes:s.notes||p.refNotes||''}));DBG('[AutoDial] Loaded shared script from Main')}}
+            }catch(e){}})(),
+            // 4. shared_appts_<email> — legacy shared appointment list (kept for backwards compat with rows still in cloud)
+            (async()=>{try{
+              const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_appts_'+myEmail).maybeSingle();
+              if(ar.data&&ar.data.biz_name){const shared=JSON.parse(ar.data.biz_name);
+                if(shared.length){const delIds=_getDelIds();
                   setAppointments(prev=>{
-                    const _keyOf=(a)=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')));
-                    const _existing=new Set(prev.map(_keyOf));
-                    const _newOnes=_fresh.filter(a=>!_existing.has(_keyOf(a)));
-                    return _newOnes.length?_dedupAppts([...prev,..._newOnes]):prev;
-                  });
-                  DBG('[AutoDial] Aggregated '+_fresh.length+' admin appts from '+_adminEmails.length+' admins');
+                  const existIds=new Set(prev.map(a=>a.id||a.phone+'_'+(a.createdAt||'')));
+                  const newAppts=shared.filter(a=>{return!existIds.has(a.id||a.phone+'_'+(a.createdAt||''))&&!isApptDeleted(a,delIds)});
+                  if(newAppts.length)DBG('[AutoDial] Loaded '+newAppts.length+' shared appointments');
+                  return newAppts.length?_dedupAppts([...prev,...newAppts]):prev})}}
+            }catch(e){}})(),
+            // 5. slog_<email> — session log
+            (async()=>{try{
+              const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).maybeSingle();
+              if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
+                if(sl.length&&!sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Loaded '+sl.length+' sessions from Supabase')}}
+            }catch(e){}})(),
+            // 6. ts_<email> — totalSets counter
+            (async()=>{try{
+              const tr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','ts_'+myEmail).maybeSingle();
+              if(tr.data&&tr.data.biz_name){const td=JSON.parse(tr.data.biz_name);
+                if(td.ts>totalSets){setTotalSets(td.ts);DBG('[AutoDial] Loaded totalSets='+td.ts+' from Supabase')}}
+            }catch(e){}})(),
+          ]);
+        }
+        // ═══ PERF: Cross-device + Main-side reads — ALL IN PARALLEL via single Promise.all
+        // Previously these 5 reads ran serially (~5 × 300ms = ~1.5s of round-trip latency).
+        if(_SB){
+          await Promise.all([
+            // 1. usercfg_<email> — cross-device cfg (sheetId, sheetTab)
+            (async()=>{try{
+              const uc=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','usercfg_'+myEmail).maybeSingle();
+              if(uc.data&&uc.data.biz_name){const sc=JSON.parse(uc.data.biz_name);
+                if(sc._lastSync&&sc.sheetId){setCfg(p=>({...p,sheetId:sc.sheetId||p.sheetId,sheetTab:sc.sheetTab||p.sheetTab}));DBG('[AutoDial] Cross-device cfg loaded')}}
+            }catch(e){}})(),
+            // 2. gamify_<email> — cross-device gamification (legacy key still kept for backwards compat)
+            (async()=>{try{
+              const gr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','gamify_'+myEmail).maybeSingle();
+              if(gr.data&&gr.data.biz_name){const gd=JSON.parse(gr.data.biz_name);
+                if(gd.bestStreak>bestStreak)setBestStreak(gd.bestStreak);
+                if(gd.achievements?.length>achievements.length)setAchievements(gd.achievements)}
+            }catch(e){}})(),
+            // 3. appts_<email> — Main own data cross-device (legacy key)
+            (async()=>{if(role==='admin')return;try{
+              const ar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+myEmail).maybeSingle();
+              if(ar.data&&ar.data.biz_name){const myA=JSON.parse(ar.data.biz_name);
+                if(myA.length){const delIds=_getDelIds();
+                  const filtered=myA.filter(a=>!isApptDeleted(a,delIds));
+                  if(filtered.length>appointments.length){setAppointments(_dedupAppts(filtered));DBG('[AutoDial] Cross-device: loaded '+filtered.length+' appointments')}}}
+            }catch(e){}})(),
+            // 4. AGGREGATE admin appointments — pull each admin's appts_<email> in parallel and merge into Main's dashboard
+            (async()=>{if(role==='admin')return;try{
+              const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
+              if(_adminEmails.length){
+                const _results=await Promise.all(_adminEmails.map(async em=>{
+                  try{const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+em.toLowerCase()).maybeSingle();
+                    if(r.data?.biz_name){const list=JSON.parse(r.data.biz_name);if(Array.isArray(list))return list.map(a=>({...a,admin:a.admin||em}))}}catch(_e){}
+                  return[]
+                }));
+                const _merged=_results.flat();
+                if(_merged.length){
+                  const _delIds=_getDelIds();
+                  const _fresh=_merged.filter(a=>!isApptDeleted(a,_delIds));
+                  if(_fresh.length){
+                    setAppointments(prev=>{
+                      const _keyOf=(a)=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')));
+                      const _existing=new Set(prev.map(_keyOf));
+                      const _newOnes=_fresh.filter(a=>!_existing.has(_keyOf(a)));
+                      return _newOnes.length?_dedupAppts([...prev,..._newOnes]):prev;
+                    });
+                    DBG('[AutoDial] Aggregated '+_fresh.length+' admin appts from '+_adminEmails.length+' admins');
+                  }
                 }
               }
-            }
-          }catch(e){console.warn('[AutoDial] Admin appt aggregation failed',e?.message||e)}
-          try{const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).single();
-            if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
-              if(sl.length>sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}}catch(e){}
+            }catch(e){console.warn('[AutoDial] Admin appt aggregation failed',e?.message||e)}})(),
+            // 5. slog_<email> — Main own session log cross-device
+            (async()=>{if(role==='admin')return;try{
+              const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','slog_'+myEmail).maybeSingle();
+              if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
+                if(sl.length>sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Cross-device: loaded '+sl.length+' sessions')}}
+            }catch(e){}})(),
+          ]);
         }
         // Auto-set sheet ID and tab from synced admin config
         if(adminConfigs[myEmail]){
           const ac=adminConfigs[myEmail];
           if(ac.timesheetId)setCfg(p=>({...p,sheetId:ac.timesheetId,sheetTab:ac.sheetTab||p.sheetTab||''}));
         }
+        // ═══ PERF: Now await the CloudSync.loadAll promise that was kicked off at the top of the
+        // bootstrap. By this point its round-trip has overlapped with the parallelized read blocks
+        // above, so this await usually resolves instantly.
+        const cloud=await _cloudPromise;
         if(Object.keys(cloud).length>0){
           DBG('[CloudSync] Loaded '+Object.keys(cloud).length+' buckets from cloud');
           // Merge cloud data with localStorage (cloud wins for empty local)
@@ -2927,9 +3031,10 @@ function App(){
         }));
         await Promise.all(_hsJobs);
       }
-      // Auto-refresh Google via Worker (silent, no popup)
+      // Auto-refresh Google via Worker (silent, no popup) — fire-and-forget so it doesn't gate setSyncing(false)
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
-        try{const ok=await window._autoRefreshGoogle();if(ok)setGOk(true)}catch(e){}}
+        window._autoRefreshGoogle().then(function(ok){if(ok)setGOk(true)}).catch(function(){});
+      }
       setSyncing(false);
       cloudReady.current=true;window._cloudReady=true;
     // Restore daily sets from cloud
@@ -3410,6 +3515,10 @@ function App(){
         if(r.data&&r.data.biz_name){
           const p=JSON.parse(r.data.biz_name);
           if(p&&p.devId===window._devId)return; // our own write
+          // ═══ LOCAL-WINS GUARD: if we have an unflushed write-through timer pending, our local
+          // state is strictly newer than cloud. Skip applying cloud data — we'd just clobber a
+          // local edit the user just made. The pending push will reconcile cloud within 800ms.
+          if(_liveSyncRef.current.apptsPushTimer){DBG('[LiveSync] pullAppts skipped — local push pending');return}
           if(p&&Array.isArray(p.appts)){
             const newHash=_hashAppts(p.appts);
             if(newHash!==_liveSyncRef.current.lastApptsHash){
@@ -3540,6 +3649,8 @@ function App(){
             if(row&&row.biz_name){
               const p=JSON.parse(row.biz_name);
               if(p&&p.devId===window._devId)return;
+              // Local-wins guard: unflushed push pending → skip apply
+              if(_liveSyncRef.current.apptsPushTimer){DBG('[LiveSync] RT appts skipped — local push pending');return}
               if(p&&Array.isArray(p.appts)){
                 const newHash=_hashAppts(p.appts);
                 if(newHash!==_liveSyncRef.current.lastApptsHash){
@@ -3753,7 +3864,9 @@ function App(){
         const _rest=prev.filter(a=>!a.admin||a.admin.toLowerCase()!==emLow);
         return _dedupAppts([..._rest,...fresh]);
       });
-      _liveSyncRef.current.suppressNextPush=true;
+      // NOTE: do NOT set suppressNextPush here. The aggregation ADDS to local state — letting the
+      // write-through push the combined state is desirable (other Main devices stay in sync).
+      // Suppressing here was silently dropping Main's own legitimate edits queued at the same moment.
       DBG('[LiveSync] main-aggregated',fresh.length,'appts from',adminEmail);
     };
     // Initial batch pull
@@ -4231,12 +4344,12 @@ function App(){
       if(!geminiKey()&&!WORKER_URL)toast('Add AI for smarter analysis','info')
     }catch(e){toast(e.message,'err')}setSLoad(false)};
   const handleFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const ext=f.name.split('.').pop().toLowerCase();let h,r;
-    if(['csv','tsv','txt'].includes(ext)){const p=Papa.parse(await f.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}
-    else{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
+    if(['csv','tsv','txt'].includes(ext)){await window._loadLib('papa');const p=Papa.parse(await f.text(),{header:false,skipEmptyLines:true});h=p.data[0].map(String);r=p.data.slice(1)}
+    else{await window._loadLib('xlsx');const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});const d=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});h=d[0].map(String);r=d.slice(1)}
     setRawSheet({headers:h,rows:r});const ai=await aiParse(r,h);if(ai?.leads.length){let _hri=h.findIndex(x=>/^(remarks?|notes?|comments?)$/i.test(x.trim()));if(_hri===-1)_hri=h.findIndex(x=>/^status$/i.test(x.trim()));if(_hri===-1)_hri=h.findIndex(x=>x.trim().length<12&&/remarks|notes|comment/i.test(x.trim()));
     setLeads(p=>[...p,...validateStatuses(ai.leads,r,_hri)]);toast('✨ '+ai.count+' imported');return}
     const res=parseSheet(r,h);if(res.error)return toast(res.error,'err');setLeads(p=>[...p,...validateStatuses(res.leads,r,_hri)]);toast(res.count+' imported')}catch(err){toast(err.message,'err')}if(fileRef.current)fileRef.current.value=''};
-  const exportCSV=()=>{const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
+  const exportCSV=async()=>{await window._loadLib('papa');const csv=Papa.unparse(leads.map(l=>({Name:l.name,Phone:l.phone,Email:l.email,Status:l.status.toUpperCase(),NP:l.npCount,Called:l.calledAt||'',Notes:l.notes})));
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='autodial-'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
 
   const _showRank=true;
@@ -5156,13 +5269,14 @@ function App(){
               if(window.gCal){_calIds.forEach(id=>{gCal.del(id).catch(()=>{})})}
               // Remove from local weekEvents cache so Cal tab updates without refresh
               if(_calIds.size)setWeekEvents(prev=>prev.filter(ev=>!_calIds.has(ev.id)));
-              // ═══ GHOST-BUSTER: track ALL possible ID patterns so isApptDeleted catches any resurrection
-              // Bare phone is a permanent catch-all — matches any appt with that phone regardless of id/date/createdAt drift
+              // ═══ Track instance-specific blocklist entries (NOT bare phone — that would permanently
+              // block those leads from getting new appointments later). Cloud row wipes (below) handle
+              // the case where instance IDs drift across devices.
               const allIds=[];appointments.forEach(a=>{
                 allIds.push(String(a.id||''));
                 allIds.push(a.phone+'_'+(a.createdAt||''));
                 allIds.push(a.phone+'_'+(a.apptDate||''));
-                if(a.phone)allIds.push(a.phone); // ← bare phone catch-all
+                if(a.calEventId)allIds.push(String(a.calEventId));
               });
               const uniq=[...new Set(allIds.filter(Boolean))].slice(-500);localStorage.setItem('_deletedApptIds',JSON.stringify(uniq));
               if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(uniq)},{onConflict:'admin_email'}).catch(function(){});
@@ -5614,7 +5728,7 @@ function App(){
             {totalOwed>0&&<div style={{display:'flex',gap:6}}>
               <button onClick={async()=>{
                 // Generate PDF Invoice with PayNow QR
-                try{const doc=new jspdf.jsPDF();const bizName=adminConfigs[email]?.bizName||email;const payNow=adminConfigs[email]?.payNow||'';
+                try{await window._loadJspdf();const doc=new jspdf.jsPDF();const bizName=adminConfigs[email]?.bizName||email;const payNow=adminConfigs[email]?.payNow||'';
                   const invNum='AD-'+Date.now().toString(36).toUpperCase();const invDate=new Date().toLocaleDateString('en-SG',{day:'numeric',month:'long',year:'numeric'});
                   doc.setFontSize(24);doc.setFont('helvetica','bold');doc.text('INVOICE',20,25);
                   doc.setFontSize(10);doc.setFont('helvetica','normal');
@@ -5793,7 +5907,7 @@ function App(){
             :<button onClick={()=>{if(p.screenshotLink)window.open(p.screenshotLink,'_blank')}} style={{flex:1,padding:'8px',borderRadius:10,background:'var(--gdim)',color:'var(--green)',fontSize:10,fontWeight:700}}>📸 View Screenshot</button>}
             <button onClick={async()=>{
               // ═══ Regenerate full invoice PDF — mirrors the pre-payment layout and stamps PAID on top
-              try{const doc=new jspdf.jsPDF();const bizName=adminConfigs[p.admin]?.bizName||p.admin;const payNow=adminConfigs[p.admin]?.payNow||'';
+              try{await window._loadJspdf();const doc=new jspdf.jsPDF();const bizName=adminConfigs[p.admin]?.bizName||p.admin;const payNow=adminConfigs[p.admin]?.payNow||'';
                 const invNum=p.invNum||('AD-'+(new Date(p.date).getTime()).toString(36).toUpperCase());
                 const invDate=new Date(p.date).toLocaleDateString('en-SG',{day:'numeric',month:'long',year:'numeric'});
                 // Resolve sessions for this payment: prefer matching cycleId, else all paid sessions for admin up to paid date
@@ -7546,7 +7660,23 @@ function App(){
               // (which fires AFTER showAppt flips false) can merge them in. The earlier approach of
               // patching _lastUndo directly here was a no-op because _lastUndo.status!=='set' yet at this point.
               appStateRef.current._pendingSetCalEventId={calEventId:evt?.id||'',apptId:lead?.phone||''};
-              if(lead)setAppointments(p=>p.map(a=>a.phone===lead.phone&&!a.apptDate?{...a,apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs,shaky:apptShaky}:a));
+              // ═══ DEFENSIVE UPDATE: find the pending appt for this lead (by leadId or phone). If it
+              // exists, update it with apptDate/apptTime/calEventId. If it's MISSING (e.g. clobbered by
+              // a pullAppts race, or filtered out by an overzealous blocklist, or dedup misfire in
+              // applyOutcome), create a fresh complete appt so the dashboard always reflects the Set.
+              if(lead)setAppointments(p=>{
+                const idx=p.findIndex(a=>(a.leadId===lead.id||(a.phone===lead.phone&&a.phone))&&(!a.followUp||a.followUp==='pending')&&!a.apptDate);
+                if(idx>=0){
+                  const next=p.slice();
+                  next[idx]={...next[idx],apptDate,apptTime,calEventId:evt?.id||'',location:apptLocation,remarks:apptObs,shaky:apptShaky};
+                  return next;
+                }
+                // Pending appt missing → create a fresh complete one
+                return[...p,{id:Date.now()+Math.random(),leadId:lead.id,name:lead.name,phone:lead.phone,gender:lead.gender||'',age:lead.age||'',
+                  apptDate,apptTime,location:apptLocation,industry:'',remarks:apptObs,
+                  followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail,
+                  calEventId:evt?.id||'',shaky:apptShaky}];
+              });
               // Invalidate picker cache so the new booking shows up on next open
               pickerEventsCacheRef.current={key:'',ts:0,data:null};
               setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
