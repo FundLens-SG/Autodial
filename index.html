@@ -2772,6 +2772,37 @@ function App(){
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
 
+  // ═══ ONE-SHOT CLOUD BLOCKLIST MIGRATION ═══
+  // The broken legacy `appts_<admin>` reconciliation used to push bare phone numbers into the
+  // cloud `dappt_<admin>` row. Even though local _deletedApptIds is purged on load (migration at
+  // line 2117), the cloud row still contains them — and pullLatest would re-merge them back after
+  // the 6s localApptsGuardUntil window expired. This effect runs once per admin mount, reads the
+  // cloud dappt_ row, strips any bare-phone entries, and writes the cleaned list back.
+  useEffect(()=>{
+    if(role!=='admin'||!_SB||!_user)return;
+    const _t=setTimeout(async()=>{
+      try{
+        const _email=(_user.email||'').toLowerCase();
+        if(!_email)return;
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dappt_'+_email).maybeSingle();
+        if(!r?.data?.biz_name)return;
+        const cloud=JSON.parse(r.data.biz_name);
+        if(!Array.isArray(cloud))return;
+        const cleaned=cloud.filter(x=>{
+          if(typeof x!=='string')return true;
+          if(x.indexOf('_')>=0||x.indexOf('-')>=0||x.indexOf('.')>=0||x.indexOf('@')>=0)return true;
+          if(/^\d{6,15}$/.test(x))return false;
+          return true;
+        });
+        if(cleaned.length!==cloud.length){
+          await _SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_email,biz_name:JSON.stringify(cleaned)},{onConflict:'admin_email'});
+          console.info('[AutoDial] Scrubbed '+(cloud.length-cleaned.length)+' bare-phone entries from cloud dappt_'+_email);
+        }
+      }catch(_e){}
+    },2000);
+    return()=>clearTimeout(_t);
+  },[role]);
+
   // ═══ ADMIN PHANTOM totalSets RECONCILER ═══
   // Runs once on admin mount after initial pullAppts settles (3s delay). If the monotonic
   // `totalSets` counter exceeds the actual filtered appointments count for this admin, it
@@ -3100,45 +3131,24 @@ function App(){
     return()=>clearInterval(_id)
   },[role,tab,isManageMode,pullAdminAppts]);
 
-  // ═══ Admin side: poll own cloud appts_<email> every 45s to pick up Main-initiated deletions.
-  // When cloud is missing rows we have locally, reconcile down so the deletion propagates.
+  // ═══ DISABLED: Legacy admin-side reconciliation polling. ═══
+  // This previously polled `appts_<myEmail>` every 45s (and immediately on Appts tab mount)
+  // to pick up Main-initiated deletions by reconciling down any local row NOT present in cloud.
+  // But `appts_<admin>` is a LEGACY cloud key — no code path writes to it anymore. So cloud
+  // was always empty/stale, and every time the admin opened the Appts tab, THIS function
+  // would wipe every admin-owned row from local state within ~1 second of entering the tab.
+  // That was the root cause of "Bee Choo Tan flash-appears then vanishes".
+  //
+  // Main-initiated deletions now propagate via:
+  //   1. `dappt_<admin>` — delIds cloud row merged by pullLatest
+  //   2. `apptlive_<admin>` — Main's × delete handler scrubs this row directly
+  //   3. `delIds` embedded in the live_ payload — applyRemoteLive merges them
+  // All three paths are working, so this legacy polling is redundant and harmful.
   useEffect(()=>{
-    if(role!=='admin'||!_SB||!_user||tab!=='appts')return;
-    let _cancelled=false;
-    const _poll=async()=>{
-      try{
-        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','appts_'+myEmail.toLowerCase()).single();
-        if(_cancelled||!r.data?.biz_name)return;
-        const cloudList=JSON.parse(r.data.biz_name);
-        if(!Array.isArray(cloudList))return;
-        const cloudKeys=new Set(cloudList.map(a=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')))));
-        setAppointments(prev=>{
-          const _keyOf=(a)=>String(a.id||(a.phone+'_'+(a.apptDate||a.createdAt||'')));
-          // Only drop rows that exist locally but NOT in cloud AND belong to this admin
-          const _keep=prev.filter(a=>{
-            const _mine=!a.admin||a.admin.toLowerCase()===myEmail.toLowerCase();
-            if(!_mine)return true; // leave other-admin rows alone
-            return cloudKeys.has(_keyOf(a)); // drop ours if Main scrubbed them
-          });
-          if(_keep.length===prev.length)return prev;
-          // Also push the newly-dropped phones into the local suppress list so they don't come back
-          const _dropped=prev.filter(a=>!_keep.includes(a));
-          if(_dropped.length){
-            const _d=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
-            _dropped.forEach(a=>{if(a.phone)_d.push(a.phone);if(a.id)_d.push(String(a.id))});
-            localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(_d)].slice(-500)));
-            // Also scrub the Google Calendar event locally so the Cal tab updates
-            _dropped.forEach(a=>{if(a.calEventId)setWeekEvents(prev2=>prev2.filter(ev=>ev.id!==a.calEventId))});
-            DBG('[AutoDial] Admin: reconciled '+_dropped.length+' appts deleted by manager');
-          }
-          return _keep;
-        });
-      }catch(_e){}
-    };
-    _poll();
-    const _id=setInterval(_poll,45000);
-    return()=>{_cancelled=true;clearInterval(_id)}
-  },[role,tab,myEmail]);
+    if(role!=='admin')return;
+    // No-op — see comment above.
+    return;
+  },[role]);
 
   useEffect(()=>{save('asess',adminSessions);
     // Legacy asess_ Supabase push removed — handled by _useSyncedPush('asess',...). Clear-to-{} still persists via LWW.
