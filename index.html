@@ -1455,6 +1455,35 @@ function publishAdminConfigs(configs){
     try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_admincfg_'+email.toLowerCase(),biz_name:JSON.stringify(clean)},{onConflict:'admin_email'}).then(function(){},function(){})}catch(e){}
   });
 }
+// ═══════════════════════════════════════════════════════════════════════════════════
+// ═══ _sanitizeAdminCfgs — defensive unwrap + filter for adminConfigs.
+// ═══ Handles three legacy corruption patterns that showed up in production:
+// ═══   1. Envelope shape `{data:{...}, ts, devId}` from _useSyncedPush pushing the
+// ═══      full payload, then legacy _hs bootstrap reading it raw and calling
+// ═══      setAdminConfigs on the envelope directly — resulting in three phantom rows
+// ═══      keyed "data", "ts", "devId" in the UI.
+// ═══   2. Non-email keys from older buggy code paths that used display names as keys.
+// ═══   3. Non-object values (null, strings, arrays) that would crash downstream code
+// ═══      that expects adminConfigs[em] to be a config object.
+// ═══ Returns a clean `{email: cfg}` object with only email-keyed, object-valued entries.
+// ═══ Safe to call on any input — null/undefined/garbage all return {}.
+// ═══════════════════════════════════════════════════════════════════════════════════
+function _sanitizeAdminCfgs(raw){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))return{};
+  // Detect envelope shape: top-level has data/ts/devId and data is itself an object
+  var looksLikeEnvelope=raw.data&&typeof raw.data==='object'&&!Array.isArray(raw.data)&&('ts'in raw||'devId'in raw);
+  var actual=looksLikeEnvelope?raw.data:raw;
+  if(!actual||typeof actual!=='object'||Array.isArray(actual))return{};
+  var cleaned={};
+  Object.keys(actual).forEach(function(k){
+    var v=actual[k];
+    // Accept only: email-shaped key + object (non-array) value
+    if(typeof k==='string'&&k.indexOf('@')>0&&v&&typeof v==='object'&&!Array.isArray(v)){
+      cleaned[k.toLowerCase()]=v;
+    }
+  });
+  return cleaned;
+}
 const _cloudDebounceTimers={};
 const _cloudDebounce={};
 const cloudSave=(k,v)=>{if(!window._cloudReady)return;
@@ -2222,7 +2251,7 @@ function App(){
   // ═══ email, the last-writer wins on `shared_admincfg_<admin>`; this is an edge case
   // ═══ only relevant if you explicitly share an admin across Mains.
   // ═══════════════════════════════════════════════════════════════════════════════════
-  const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
+  const[adminConfigs,setAdminConfigs]=useState(()=>_sanitizeAdminCfgs(load('acfg')));
   const[isOffline,setIsOffline]=useState(!navigator.onLine);
   useEffect(()=>{const on=()=>setIsOffline(false);const off=()=>{setIsOffline(true);toast('📴 Offline — changes saved locally','info')};
     window.addEventListener('online',on);window.addEventListener('offline',off);
@@ -2705,9 +2734,9 @@ function App(){
   const[showApprovalModal,setShowApprovalModal]=useState(false);
   const[showHelp,setShowHelp]=useState(!localStorage.getItem('autodial_seen_help'));
   const[showMoreMenu,setShowMoreMenu]=useState(false);
-  const[settingsSubtab,setSettingsSubtab]=useState(role==='admin'?'prefs':'integr');
-  // If a main somehow lands on 'prefs' (which doesn't exist for mains), redirect to integr
-  useEffect(()=>{if(role!=='admin'&&settingsSubtab==='prefs')setSettingsSubtab('integr')},[role,settingsSubtab]);
+  const[settingsSubtab,setSettingsSubtab]=useState('prefs');
+  // Mains now have their own calling preferences in the 'prefs' subtab; redirect removed
+  useEffect(()=>{},[role,settingsSubtab]);
   const fileRef=useRef(null);const cdRef=useRef(null);const timerRef=useRef(null);
   const[elapsed,setElapsed]=useState(0);
   const[showPostCall,setShowPostCall]=useState(null);
@@ -2766,7 +2795,13 @@ function App(){
   const[sessionTarget,setSessionTarget]=useState(load('starget')||{type:'dials',count:50});
 
   const myEmail=(window._prof?.email||window._user?.email||'').toLowerCase();
-  const myCfg=role==='admin'&&adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg;
+  // ═══ myCfg: per-user effective config used by all calling logic
+  // ═══   - Admin: cfg + per-admin override from adminConfigs[myEmail] (Main's settings for them)
+  // ═══   - Main: cfg with npMax overridden by cfg.mainNpMax (Main's own self-call threshold,
+  // ═══     separate from cfg.npMax which is the default Main pushes to admins)
+  const myCfg=role==='admin'
+    ?(adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg)
+    :{...cfg,npMax:n(cfg.mainNpMax,cfg.npMax||5)};
   // Safe numeric accessor — config values may be '' (empty string) while user is typing
   const n=(v,def)=>{try{return v===''||v===null||v===undefined||isNaN(+v)?def:+v}catch(e){return def}};
 
@@ -3259,7 +3294,10 @@ function App(){
             const _cloudTs=cloud.leads._cfgTs||0,_localTs=stored._cfgTs||0;
             if(_cloudTs>_localTs||!stored.cfg)setCfg(prev=>({...prev,...cloud.leads.cfg}));
           }
-          if(cloud.adminConfigs&&!Object.keys(adminConfigs).length)setAdminConfigs(cloud.adminConfigs);
+          if(cloud.adminConfigs&&!Object.keys(adminConfigs).length){
+            const _cleaned=_sanitizeAdminCfgs(cloud.adminConfigs);
+            if(Object.keys(_cleaned).length)setAdminConfigs(_cleaned);
+          }
           if(cloud.sessions?.length&&!sessionLog.length)setSessionLog(cloud.sessions);
           if(cloud.appointments?.length&&!appointments.length){const _dIds=_getDelIds();
             const _filt=cloud.appointments.filter(a=>!isApptDeleted(a,_dIds));if(_filt.length)setAppointments(_dedupAppts(_filt))}
@@ -3290,7 +3328,13 @@ function App(){
         if(!Object.keys(calVisibility).length)_hsJobs.push(_hs('calvis_'+myEmail,d=>{if(d&&typeof d==='object')setCalVisibility(d)}));
         _hsJobs.push(_hs('calinv_'+myEmail,d=>{if(d){if(typeof d.showInvited==='boolean')setShowInvited(d.showInvited);if(typeof d.showDeclined==='boolean')setShowDeclined(d.showDeclined)}}));
         if(!waTemplates.length)_hsJobs.push(_hs('watpl_'+myEmail,d=>{if(d?.length)setWaTemplates(d)}));
-        if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length))_hsJobs.push(_hs('acfg_'+myEmail,d=>{if(d&&Object.keys(d).length)setAdminConfigs(d)}));
+        if(!Object.keys(adminConfigs).length||Object.values(adminConfigs).every(v=>!v||!Object.keys(v).length))_hsJobs.push(_hs('acfg_'+myEmail,d=>{
+          // ═══ Sanitize BEFORE setting state. The cloud row for acfg_<main> is written by
+          // _useSyncedPush with envelope shape {data, ts, devId}, which the legacy _hs path
+          // previously passed RAW to setAdminConfigs, producing phantom "data"/"ts"/"devId" rows.
+          const _cleaned=_sanitizeAdminCfgs(d);
+          if(Object.keys(_cleaned).length)setAdminConfigs(_cleaned);
+        }));
         if(!load('apptDur'))_hsJobs.push(_hs('apptdur_'+myEmail,d=>{if(d.dur&&d.dur!==60)setApptDuration(d.dur)}));
         // Deleted appointment IDs
         _hsJobs.push((async()=>{try{const dar=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dappt_'+myEmail).single();
@@ -3435,14 +3479,46 @@ function App(){
       setWaTemplates([]);
       waInitRef.current=true;
     }else{
-      DB.getWATemplates().then(t=>{
-          const dedup=(arr)=>{const seen=new Set();return(arr||[]).filter(x=>{const k=(x.name||'').toLowerCase();if(seen.has(k))return false;seen.add(k);return true})};
-          if(t&&t.length){setWaTemplates(dedup(t));waInitRef.current=true}
-          else if(role==='admin'&&_SB){_SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_wa_templates').single().then(r=>{
-            if(r.data&&r.data.biz_name){try{const shared=JSON.parse(r.data.biz_name);setWaTemplates(dedup(shared))}catch(e){}}
-            waInitRef.current=true})}
-          else{waInitRef.current=true}
-        });
+      // ═══ WA TEMPLATES PERSISTENCE FIX
+      // Primary source: watpl_<userEmail> config row (proven pattern, RLS-safe).
+      // Fallback: autodial_wa_templates table (legacy seed; insert sometimes fails silently
+      // due to RLS/unique constraints, which is why templates were resetting on each version
+      // update — local state was holding templates that never actually persisted to the table).
+      const _waLoad=async()=>{
+        const dedup=(arr)=>{const seen=new Set();return(arr||[]).filter(x=>{const k=(x.name||'').toLowerCase();if(seen.has(k))return false;seen.add(k);return true})};
+        try{
+          // 1. Try config row first
+          if(_SB&&_user){
+            const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','watpl_'+myEmail).maybeSingle();
+            if(r.data?.biz_name){
+              try{
+                const parsed=JSON.parse(r.data.biz_name);
+                if(Array.isArray(parsed)){
+                  // Empty array IS a valid state — user explicitly cleared all
+                  setWaTemplates(dedup(parsed));
+                  waInitRef.current=true;
+                  return;
+                }
+              }catch(_e){}
+            }
+          }
+          // 2. Fall back to legacy table (seeds + any insert that did succeed)
+          const t=await DB.getWATemplates();
+          if(t&&t.length){
+            const cleaned=dedup(t);
+            setWaTemplates(cleaned);
+            // ═══ MIGRATION: persist whatever the table returned to the config row so future
+            // loads bypass the unreliable table entirely
+            if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+myEmail,biz_name:JSON.stringify(cleaned)},{onConflict:'admin_email'}).catch(()=>{});
+          }else if(role==='admin'&&_SB){
+            // 3. Admin fallback: read shared_wa_templates that Main published
+            const sr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','shared_wa_templates').maybeSingle();
+            if(sr.data?.biz_name){try{const shared=JSON.parse(sr.data.biz_name);setWaTemplates(dedup(shared))}catch(e){}}
+          }
+        }catch(e){console.warn('[WA load]',e?.message||e)}
+        waInitRef.current=true;
+      };
+      _waLoad();
     }
     // Load notifications
     if(_user?.id)DB.getNotifs(_user.id).then(setNotifications);
@@ -3869,7 +3945,11 @@ function App(){
         setAdminSessions(_norm)
       }}},
       {key:'incv',  apply:(p)=>{if(Array.isArray(p?.data))setIncentives(prev=>p.data.length>prev.length?p.data:prev)}},
-      {key:'acfg',  apply:(p)=>{if(p?.data&&typeof p.data==='object'&&Object.keys(p.data).length)setAdminConfigs(p.data)}},
+      {key:'acfg',  apply:(p)=>{if(p?.data&&typeof p.data==='object'){
+        // Defensive sanitization: ensures no envelope artifacts or non-email keys slip through
+        const _cleaned=_sanitizeAdminCfgs(p.data);
+        if(Object.keys(_cleaned).length)setAdminConfigs(_cleaned);
+      }}},
       {key:'slog',  apply:(p)=>{if(Array.isArray(p?.data))setSessionLog(prev=>p.data.length>prev.length?p.data:prev)}},
       {key:'promo', apply:(p)=>{if(Array.isArray(p?.data))setPromotionLog(prev=>p.data.length>prev.length?p.data:prev)}},
       {key:'payh',  apply:(p)=>{if(Array.isArray(p?.data))setPaymentHistory(prev=>p.data.length>prev.length?p.data:prev)}},
@@ -4149,6 +4229,45 @@ function App(){
   _useSyncedPush('incv',incentives,(v)=>({data:(v||[]).slice(-200),ts:Date.now(),devId:window._devId}));
   // Admin configs — LWW. Main-only push; admins read but never write.
   _useSyncedPush('acfg',adminConfigs,(v)=>({data:v||{},ts:Date.now(),devId:window._devId}),role!=='admin');
+  // ═══════════════════════════════════════════════════════════════════════════════════
+  // ═══ ONE-SHOT CLOUD SCRUB for acfg_<mainEmail> — runs once per mount after cloudReady.
+  // ═══ Reads the live cloud row, detects envelope/non-email pollution, and rewrites it
+  // ═══ with the sanitized version. This is the ONLY way to clean up cloud rows already
+  // ═══ corrupted by the old legacy _hs bug, because _useSyncedPush only pushes on local
+  // ═══ state change — a pure-pull sanitization doesn't trigger a write-back.
+  // ═══════════════════════════════════════════════════════════════════════════════════
+  const _acfgScrubbedRef=useRef(false);
+  useEffect(()=>{
+    if(role==='admin'||!_SB||!_user||!window._cloudReady||_acfgScrubbedRef.current)return;
+    _acfgScrubbedRef.current=true;
+    (async()=>{
+      try{
+        const me=(_user.email||'').toLowerCase();
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','acfg_'+me).maybeSingle();
+        if(!r.data?.biz_name)return;
+        let parsed;try{parsed=JSON.parse(r.data.biz_name)}catch(_e){return}
+        // Determine what the sanitized set of admins should be
+        const cleanedAdmins=_sanitizeAdminCfgs(parsed);
+        // Detect pollution: envelope has non-data top-level keys, or data field itself has non-email keys
+        const rawActual=parsed&&typeof parsed==='object'&&parsed.data&&typeof parsed.data==='object'?parsed.data:parsed;
+        let isDirty=false;
+        if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed)){
+          Object.keys(rawActual||{}).forEach(k=>{
+            const v=rawActual[k];
+            if(!(typeof k==='string'&&k.indexOf('@')>0&&v&&typeof v==='object'&&!Array.isArray(v)))isDirty=true;
+          });
+        }
+        if(!isDirty){DBG('[acfg scrub] cloud row clean, no action');return}
+        // Rewrite cloud with clean envelope
+        const cleanEnvelope={data:cleanedAdmins,ts:Date.now(),devId:window._devId};
+        await _SB.from('autodial_admin_config').upsert({admin_email:'acfg_'+me,biz_name:JSON.stringify(cleanEnvelope)},{onConflict:'admin_email'});
+        // Also apply to local state so the UI refreshes immediately
+        setAdminConfigs(cleanedAdmins);
+        DBG('[acfg scrub] cleaned cloud row, '+Object.keys(cleanedAdmins).length+' real admins preserved');
+        toast('🧹 Cleaned up '+Object.keys(rawActual||{}).length+' corrupted admin entries','info');
+      }catch(e){console.warn('[acfg scrub]',e?.message||e)}
+    })();
+  },[role,_user?.id,syncing]);
   // Session log — maxLen, cap 200.
   _useSyncedPush('slog',sessionLog,(v)=>({data:(v||[]).slice(-200),ts:Date.now(),devId:window._devId}));
   // Promotion log — maxLen.
@@ -6724,13 +6843,14 @@ function App(){
     </div>}
 
     {tab==='settings'&&<div className='content-pad'>
-      {/* ═══ Settings subtabs: Prefs / Integrations / Team ═══ */}
-      <div style={{display:'flex',gap:4,marginBottom:14,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)'}}>
+      {/* ═══ Settings subtabs: Calling / Integrations / Team / Owner ═══ */}
+      <div style={{display:'flex',gap:4,marginBottom:14,background:'var(--bg3)',padding:4,borderRadius:12,border:'1px solid var(--border)',flexWrap:'wrap'}}>
         {[
-          ...(role==='admin'?[['prefs','⚙️','Prefs']]:[]),
+          ['prefs','📞','Calling'],
           ['integr','🔗','Integrations'],
-          ...(isManageMode?[['team','👥','Team']]:[])
-        ].map(([_k,_ic,_lbl])=><button key={_k} onClick={()=>setSettingsSubtab(_k)} style={{flex:1,padding:'9px 6px',borderRadius:8,background:settingsSubtab===_k?'var(--adim)':'transparent',color:settingsSubtab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}><span style={{fontSize:13}}>{_ic}</span>{_lbl}</button>)}
+          ...(isManageMode?[['team','👥','Team']]:[]),
+          ...(isCreatorUser?[['owner','👑','Owner']]:[])
+        ].map(([_k,_ic,_lbl])=><button key={_k} onClick={()=>setSettingsSubtab(_k)} style={{flex:'1 1 auto',minWidth:60,padding:'9px 6px',borderRadius:8,background:settingsSubtab===_k?'var(--adim)':'transparent',color:settingsSubtab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}><span style={{fontSize:13}}>{_ic}</span>{_lbl}</button>)}
       </div>
       {settingsSubtab==='team'&&isManageMode&&<>
       {isCreatorUser&&isManageMode&&<div className="card" style={{marginBottom:12}}>
@@ -6811,6 +6931,16 @@ function App(){
                 <input type="number" min="1" step="0.1" value={ac.bonusMult??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],bonusMult:e.target.value===''?'':parseFloat(e.target.value)||''}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
               <div><label style={{fontSize:10,color:'var(--amber)',fontWeight:700,display:'block',marginBottom:2}}>Met Incentive ($)</label>
                 <input type="number" value={ac.metIncentive??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],metIncentive:e.target.value===''?'':parseFloat(e.target.value)}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
+            </div>
+            {/* ═══ Per-admin NP→NI override (admin sees greyed/locked, Main edits) ═══ */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
+              <div><label style={{fontSize:10,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:2}}>NP → NI threshold</label>
+                <input type="number" min="1" max="20" value={ac.npMax??''} placeholder={(cfg.npMax||5)+' (default)'} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],npMax:e.target.value===''?'':Math.max(1,Math.min(20,+e.target.value))}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(99,102,241,.3)'}}/>
+                <p style={{margin:'2px 0 0',fontSize:8,color:'var(--text3)'}}>Auto-NI after N No Picks. Blank = use default ({cfg.npMax||5})</p>
+              </div>
+              <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>(Reserved)</label>
+                <input disabled value="" placeholder="—" style={{fontSize:12,textAlign:'center',padding:'8px',opacity:.4}}/>
+              </div>
             </div>
 
             <div style={{marginBottom:8}}>
@@ -7021,8 +7151,14 @@ function App(){
       </div>}
       </>}
 
-      {(isManageMode?settingsSubtab==='team':settingsSubtab==='prefs')&&<div className="card" style={{marginBottom:12}}>
-        {isManageMode?<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📊 Team Rules</h3><button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>☁️ Sync All</button></div>:<>
+      {isManageMode&&settingsSubtab==='team'&&<div className="card" style={{marginBottom:12}}>
+        {isManageMode?<div style={{marginBottom:8}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <h3 style={{fontSize:14,fontWeight:700,margin:0,color:'var(--accent2)'}}>📋 Admin Rules</h3>
+            <button onClick={async()=>{if(!_SB)return;try{await _SB.from('autodial_admin_config').upsert({admin_email:'shared_globalcfg',biz_name:JSON.stringify(cfg)},{onConflict:'admin_email'});publishAdminConfigs(adminConfigs);toast('☁️ All configs synced to admins!')}catch(e){toast('Sync failed','err')}}} style={{padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>☁️ Sync All</button>
+          </div>
+          <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>Rules YOU set for YOUR admins only · Each Main has their own private set</p>
+        </div>:<>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'var(--accent2)'}}>Call Rules</h3>
         {adminConfigs[myEmail]&&<div style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',border:'1px solid var(--border)',marginBottom:10}}>
           <p style={{fontSize:10,fontWeight:700,color:'var(--green)',margin:'0 0 4px'}}>☁️ SYNCED FROM MANAGER</p>
@@ -7032,6 +7168,7 @@ function App(){
             <span>🎯 {myCfg.nThresh||4} bonus bar</span>
             <span>💰 ×{myCfg.bonusMult||1.5} bonus</span>
             <span>🎁 ${myCfg.metIncentive||10} met incentive</span>
+            <span style={{opacity:.7}}>🔁 NP→NI @ {myCfg.npMax||cfg.npMax||5}</span>
             {<span>⛔ DNC {(cfg.dncEnd||9)>12?(cfg.dncEnd||9)-12+'PM':(cfg.dncEnd||9)+'AM'}–{(cfg.dncStart||21)>12?(cfg.dncStart||21)-12+'PM':(cfg.dncStart||21)+'AM'}</span>}
           </div>
           <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4,fontSize:10,color:'var(--text3)'}}>
@@ -7071,21 +7208,7 @@ function App(){
         <div style={{marginBottom:12,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)'}}>
           <p style={{margin:0,fontSize:11,color:'var(--text2)'}}>⛔ DNC: Calls allowed <b>{(()=>{const h=cfg.dncEnd||9;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> to <b>{(()=>{const h=cfg.dncStart||21;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> <span style={{fontSize:10,color:'var(--text3)'}}>(set by manager)</span></p>
         </div>}
-        {/* Queue Priority */}
-        <div style={{marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
-          <p style={{margin:'0 0 6px',fontSize:13,fontWeight:600,color:'#f1f5f9'}}>📋 Queue Priority</p>
-          <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Order in which leads are dialed</p>
-          <div style={{display:'flex',flexDirection:'column',gap:4}}>
-            {(cfg.queuePriority||['blank','cb_due','np_retry']).map((p,i)=>{
-              const labels={blank:'⬜ Blank/Pending first',cb_due:'🔵 CB Due (within 15min)',np_retry:'🟡 NP Retries',cb_all:'🔵 All Callbacks'};
-              return<div key={p} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)'}}>
-                <span className="mono" style={{fontSize:10,color:'var(--accent2)',fontWeight:700}}>{i+1}</span>
-                <span style={{flex:1,fontSize:11,color:'var(--text2)'}}>{labels[p]||p}</span>
-                {i>0&&<button onClick={()=>{const q=[...(cfg.queuePriority||['blank','cb_due','np_retry'])];[q[i-1],q[i]]=[q[i],q[i-1]];setCfg(s=>({...s,queuePriority:q}))}} style={{padding:'2px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↑</button>}
-                {i<(cfg.queuePriority||['blank','cb_due','np_retry']).length-1&&<button onClick={()=>{const q=[...(cfg.queuePriority||['blank','cb_due','np_retry'])];[q[i],q[i+1]]=[q[i+1],q[i]];setCfg(s=>({...s,queuePriority:q}))}} style={{padding:'2px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↓</button>}
-              </div>})}
-          </div>
-        </div>
+        {/* Queue Priority moved to Calling subtab — it's now per-user (Mains and Admins each have their own) */}
         {isManageMode&&isCreatorUser&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
             <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System {isCreatorUser&&'(Owner Edit)'}</p>
@@ -7125,7 +7248,7 @@ function App(){
         {isManageMode&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
           <div>
             <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-convert to NI after this many No Picks</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Default for admins (override per-admin in Team tab)</p>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:6}}>
             <button onClick={()=>setCfg(s=>({...s,npMax:Math.max(1,(s.npMax||5)-1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
@@ -7133,13 +7256,79 @@ function App(){
             <button onClick={()=>setCfg(s=>({...s,npMax:Math.min(20,(s.npMax||5)+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
           </div>
         </div>}
-        {isManageMode&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-          <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>Cost per lead</p><p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI in Analytics</p></div>
+      </div>}
+
+      {/* ═══ OWNER SETTINGS — Creator/owner only. Truly company-wide settings that affect everyone. ═══ */}
+      {settingsSubtab==='owner'&&isCreatorUser&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--gold)'}}>👑 Owner Settings</h3>
+        <p style={{margin:'0 0 12px',fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>Settings here affect ALL Mains and Admins across the entire account</p>
+
+        {/* Cost Per Lead — moved here from Admin Rules */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
+          <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>💰 Cost per lead</p>
+          <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI tracking in Analytics tab</p></div>
           <div style={{display:'flex',alignItems:'center',gap:4}}>
             <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
             <input type="number" min="0" step="0.01" value={cfg.cpl??''} onChange={e=>setCfg(s=>({...s,cpl:e.target.value===''?'':parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
           </div>
+        </div>
+
+        <p style={{margin:'0 0 6px',fontSize:11,fontWeight:700,color:'var(--text2)'}}>FUTURE OWNER-ONLY SETTINGS</p>
+        <p style={{margin:0,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>This section will house company-wide settings like brand defaults, global API keys, and cross-Main policies. More controls will be added here over time as we identify settings that should NOT be per-Main.</p>
+      </div>}
+      {settingsSubtab==='owner'&&!isCreatorUser&&<div className="card" style={{marginBottom:12,textAlign:'center',padding:24}}>
+        <p style={{fontSize:32,marginBottom:8}}>🔒</p>
+        <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--text2)'}}>Owner Only</p>
+        <p style={{margin:'4px 0 0',fontSize:11,color:'var(--text3)'}}>This section is restricted to the account owner.</p>
+      </div>}
+      {/* ═══ end Owner Settings ═══ */}
+
+      {/* ═══ MY CALLING PREFERENCES — per-user. Visible to everyone in the Calling subtab. ═══
+         ═══ Mains: NP→NI threshold for SELF-CALL (separate from cfg.npMax which they push to admins).
+         ═══ Admins: NP→NI shown read-only (greyed) — Main controls it via per-admin override.
+         ═══ Both: Queue Priority — fully per-user-editable (cfg is per-user, queuePriority not in GLOBAL_OVERWRITE).
+      */}
+      {settingsSubtab==='prefs'&&<div className="card" style={{marginBottom:12}}>
+        <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--accent2)'}}>📞 My Calling Preferences</h3>
+        <p style={{margin:'0 0 12px',fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>
+          {role==='main'?'Settings that apply when YOU make calls. Admin defaults are in Team → Admin Rules.':'Your personal calling preferences. NP→NI threshold is set by your manager.'}
+        </p>
+
+        {/* NP → NI threshold */}
+        {role==='main'?<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
+          <div>
+            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>🔁 NP → NI threshold (self-call)</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Auto-convert to NI after this many No Picks. Independent of admin defaults.</p>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <button onClick={()=>setCfg(s=>({...s,mainNpMax:Math.max(1,n(s.mainNpMax,s.npMax||5)-1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
+            <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:24,textAlign:'center'}}>{n(cfg.mainNpMax,cfg.npMax||5)}</span>
+            <button onClick={()=>setCfg(s=>({...s,mainNpMax:Math.min(20,n(s.mainNpMax,s.npMax||5)+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+          </div>
+        </div>:<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)',opacity:.55}}>
+          <div>
+            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>🔁 NP → NI threshold</p>
+            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>🔒 Set by your manager · {adminConfigs[myEmail]?.npMax?'Custom for you':'Team default'}</p>
+          </div>
+          <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--text2)',minWidth:36,textAlign:'center',padding:'4px 10px',borderRadius:8,background:'var(--bg3)',border:'1px solid var(--border)'}}>{myCfg.npMax||5}</span>
         </div>}
+
+        {/* Queue Priority — per-user, editable by everyone */}
+        <div style={{marginBottom:0}}>
+          <p style={{margin:'0 0 4px',fontSize:13,fontWeight:600,color:'#f1f5f9'}}>📋 Queue Priority</p>
+          <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text3)'}}>Order in which YOUR leads are dialed. Drag-style with arrows.</p>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>
+            {(cfg.queuePriority||['blank','cb_due','np_retry']).map((p,i)=>{
+              const labels={blank:'⬜ Blank/Pending first',cb_due:'🔵 CB Due (within 15min)',np_retry:'🟡 NP Retries',cb_all:'🔵 All Callbacks'};
+              const _q=cfg.queuePriority||['blank','cb_due','np_retry'];
+              return<div key={p} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)'}}>
+                <span className="mono" style={{fontSize:10,color:'var(--accent2)',fontWeight:700}}>{i+1}</span>
+                <span style={{flex:1,fontSize:11,color:'var(--text2)'}}>{labels[p]||p}</span>
+                {i>0&&<button onClick={()=>{const q=[..._q];[q[i-1],q[i]]=[q[i],q[i-1]];setCfg(s=>({...s,queuePriority:q}))}} style={{padding:'2px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↑</button>}
+                {i<_q.length-1&&<button onClick={()=>{const q=[..._q];[q[i],q[i+1]]=[q[i+1],q[i]];setCfg(s=>({...s,queuePriority:q}))}} style={{padding:'2px 8px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↓</button>}
+              </div>})}
+          </div>
+        </div>
       </div>}
 
       {settingsSubtab==='prefs'&&role==='admin'&&<div className="card" style={{marginBottom:12}}>
@@ -7237,8 +7426,28 @@ function App(){
           <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{t.name}</p>
             <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.template}</p></div>
           <div style={{display:'flex',gap:4,flexShrink:0}}>
-            <button onClick={()=>{setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Editing — make changes and save')}} style={{padding:'4px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Edit</button>
-            <Btn variant="danger" size="sm" weight={600} radius={6} style={{padding:'4px 8px'}} onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;setWaTemplates(p=>p.filter((_,j)=>j!==i));if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});toast('Deleted')}}>×</Btn>
+            <button onClick={()=>{
+              setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});
+              setWaTemplates(p=>{
+                const updated=p.filter((_,j)=>j!==i);
+                if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify(updated)},{onConflict:'admin_email'}).catch(()=>{});
+                if(role!=='admin'&&_SB)_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(updated)},{onConflict:'admin_email'}).catch(()=>{});
+                return updated;
+              });
+              if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});
+              toast('Editing — make changes and save')
+            }} style={{padding:'4px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Edit</button>
+            <Btn variant="danger" size="sm" weight={600} radius={6} style={{padding:'4px 8px'}} onClick={()=>{if(!confirm('Delete "'+t.name+'"?'))return;
+              setWaTemplates(p=>{
+                const updated=p.filter((_,j)=>j!==i);
+                // Persist the new state to the config row (primary)
+                if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify(updated)},{onConflict:'admin_email'}).catch(()=>{});
+                if(role!=='admin'&&_SB)_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(updated)},{onConflict:'admin_email'}).catch(()=>{});
+                return updated;
+              });
+              if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});
+              toast('Deleted')
+            }}>×</Btn>
           </div>
         </div>)}
         <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
@@ -7250,7 +7459,12 @@ function App(){
           <button onClick={()=>{if(!newWA.name||!newWA.template)return toast('Fill name and template','err');
             // Clear the "user cleared all" flag since they're adding templates again
             try{localStorage.removeItem('ad_wa_cleared_'+(_user?.email||''))}catch(e){}
-            DB.saveWATemplate(newWA,_user?.id);setWaTemplates(p=>{const updated=[...p,{...newWA,id:Date.now()}];
+            // Best-effort table insert (legacy, may fail silently due to RLS — that's why we ALSO write to the config row)
+            DB.saveWATemplate(newWA,_user?.id);
+            setWaTemplates(p=>{const updated=[...p,{...newWA,id:Date.now()}];
+              // ═══ PRIMARY persistence — write the full templates array to the config row.
+              // This is the only path guaranteed to survive across version updates.
+              if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'watpl_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify(updated)},{onConflict:'admin_email'}).catch(()=>{});
               if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(updated)},{onConflict:'admin_email'})}catch(e){}}
               return updated});setNewWA({name:'',template:'',category:'appointment'});toast('Template saved')
           }} style={{width:'100%',padding:'10px',borderRadius:10,background:'rgba(37,211,102,.15)',color:'#25d366',fontSize:12,fontWeight:700,border:'1px solid rgba(37,211,102,.2)'}}>+ Add Template</button>
