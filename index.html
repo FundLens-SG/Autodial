@@ -691,15 +691,72 @@ function _saveGToken(token){
 
 // ═══ WORKER REFRESH — silent, no popup, lasts forever ═══
 // HARD FIX: accepts optional override email so admin can impersonate main against the Worker.
+// ═══ Global worker diagnostics — inspectable from console via window._workerStats
+window._workerStats={attempts:0,successes:0,failures:0,lastError:null,lastErrorAt:null,lastSuccessAt:null,lastStatus:null,lastBody:null};
 window._workerRefresh=async function(overrideEmail){
   if(!WORKER_URL)return false;
   var email=overrideEmail||window._mainEmailForWorker||window._user?.email||window._prof?.email;
-  if(!email)return false;
-  try{
-    var r=await fetch(WORKER_URL+'/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})});
-    if(!r.ok){DBG('[Google Worker] refresh failed status='+r.status+' for '+email);return false}
-    var d=await r.json();if(d.access_token){_saveGToken(d.access_token);DBG('[Google] Token refreshed via Worker as '+email);return true}
-  }catch(e){console.warn('[Google Worker]',e.message)}return false};
+  if(!email){
+    window._workerStats.lastError='no-email';
+    window._workerStats.lastErrorAt=Date.now();
+    return false;
+  }
+  // ═══ Retry with exponential backoff: 3 attempts (0ms, 800ms, 2400ms) with per-attempt timeout
+  var _lastErr=null;
+  for(var _attempt=0;_attempt<3;_attempt++){
+    window._workerStats.attempts++;
+    if(_attempt>0){
+      var _delay=_attempt===1?800:2400;
+      await new Promise(function(res){setTimeout(res,_delay)});
+    }
+    try{
+      // Per-attempt timeout — abort after 8s so we don't hang the boot forever
+      var _ac=new AbortController();
+      var _timerId=setTimeout(function(){_ac.abort()},8000);
+      var r=await fetch(WORKER_URL+'/api/refresh',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email:email}),
+        signal:_ac.signal
+      });
+      clearTimeout(_timerId);
+      window._workerStats.lastStatus=r.status;
+      if(!r.ok){
+        var _body='';
+        try{_body=await r.text()}catch(_e){}
+        window._workerStats.lastBody=_body.slice(0,500);
+        _lastErr='http-'+r.status;
+        DBG('[Google Worker] attempt '+(_attempt+1)+'/3 failed status='+r.status+' body='+_body.slice(0,200)+' for '+email);
+        // Don't retry on 401/403/404 — these are permanent errors (bad email / no refresh token / revoked)
+        if(r.status===401||r.status===403||r.status===404){
+          window._workerStats.failures++;
+          window._workerStats.lastError=_lastErr+'-permanent';
+          window._workerStats.lastErrorAt=Date.now();
+          return false;
+        }
+        continue; // retry on 5xx / other
+      }
+      var d=await r.json();
+      if(d.access_token){
+        _saveGToken(d.access_token);
+        window._workerStats.successes++;
+        window._workerStats.lastSuccessAt=Date.now();
+        window._workerStats.lastError=null;
+        DBG('[Google] Token refreshed via Worker as '+email+' (attempt '+(_attempt+1)+')');
+        return true;
+      }
+      _lastErr='no-access-token-in-response';
+      window._workerStats.lastBody=JSON.stringify(d).slice(0,500);
+    }catch(e){
+      _lastErr=e.name==='AbortError'?'timeout-8s':(e.message||'fetch-failed');
+      console.warn('[Google Worker] attempt '+(_attempt+1)+'/3 error:',_lastErr);
+    }
+  }
+  window._workerStats.failures++;
+  window._workerStats.lastError=_lastErr||'unknown';
+  window._workerStats.lastErrorAt=Date.now();
+  return false;
+};
 
 // ═══ ADMIN ENSURE GOOGLE — resolves main's email, refreshes token directly via Worker (bypasses stale shared_gtoken cache) ═══
 window._adminEnsureGoogle=async function(verbose){
@@ -2409,6 +2466,28 @@ function App(){
   useEffect(()=>{save('pickerVM',pickerViewMode)},[pickerViewMode]);
   const[apptShaky,setApptShaky]=useState(false); // Shaky flag on new appointment
   const[pendingShakyKey,setPendingShakyKey]=useState(null); // "dayKey_HH:MM" for inline confirm
+  // ═══ RESCHEDULE MODE — when set, showAppt updates an existing appointment row + gCal event
+  // ═══ instead of creating a new one. Populated by the reschedule helper when user taps a
+  // ═══ postponed-no-date shimmering card or the "Set date & time" button on a dateless row.
+  const[rescheduleTargetAppt,setRescheduleTargetAppt]=useState(null);
+  // ═══ Helper: open showAppt in "reschedule" mode for an existing appointment row.
+  // ═══ Populates apptLead from the row, clears date/time (so picker starts fresh), pre-fills
+  // ═══ location/remarks/duration/shaky from the row, and opens the modal.
+  const _openRescheduleFlow=(a)=>{
+    if(!a)return;
+    setRescheduleTargetAppt(a);
+    setApptLead({id:a.leadId||a.id,name:a.name,phone:a.phone,email:a.email||'',age:a.age||'',gender:a.gender||'',race:a.race||'',notes:a.remarks||''});
+    setApptDate(''); // clear so picker shows — user must pick a new slot
+    setApptTime('');
+    setApptLocation(a.location||'');
+    setApptObs(a.remarks||'');
+    setApptInvite(a.inviteEmails||'');
+    setApptDuration(a.duration||60);
+    setApptShaky(!!a.shaky);
+    setPickerWeekIdx(0);
+    setPickerCollapsed(false);
+    setShowAppt(true);
+  };
   // ═══ Bug 3 fix: collapse the picker after a slot is clicked so the form fields become the
   // primary focus. The previous scrollIntoView wasn't decisive enough on mobile — users still
   // tapped Create Appointment without filling in location/remarks. Now the picker is REPLACED
@@ -2427,9 +2506,7 @@ function App(){
   const[calEditForm,setCalEditForm]=useState({summary:'',date:'',time:'',duration:60,location:''});
   const[calEditSaving,setCalEditSaving]=useState(false);
   // ═══ Dateless-appointment fix-up modal (Appts tab → "Set date & time" button)
-  const[fixDateAppt,setFixDateAppt]=useState(null); // the appointment row being fixed
-  const[fixDateForm,setFixDateForm]=useState({date:'',time:'',duration:60});
-  const[fixDateSaving,setFixDateSaving]=useState(false);
+  // fixDateAppt state removed — reschedule flow now uses showAppt in reschedule mode (_openRescheduleFlow)
   // ═══ Reusable: aggregate admin appointments into Main's dashboard
   // RECONCILES: reflects admin-side deletions too. Rebuilds the admin-scoped half of
   // `appointments` from the cloud on every call, so if an admin deletes a row their
@@ -2631,15 +2708,28 @@ function App(){
   // Shaky status derives solely from the Supabase `shaky` column on the appointment row.
   // Writes go through DB.updateApptShaky + optimistic setAppointments updates.
   const isApptShaky=(a)=>!!(a&&a.shaky);
-  // ═══ POSTPONED title prefix helpers
-  // ═══ "[POSTPONED: NO DATE]" — appointment postponed, no new date confirmed yet (shaky=true)
-  // ═══ "[POSTPONED]"          — appointment was postponed and rescheduled to a new date (shaky=false)
-  // ═══ Both prefixes are historical markers on the Google Calendar event title.
-  const _stripPostponedPrefix=(title)=>(title||'').replace(/^\[POSTPONED(?::\s*NO\s*DATE)?\]\s*/i,'');
-  const _withPostponedPrefix=(title,hasDate)=>{
-    const stripped=_stripPostponedPrefix(title);
-    return(hasDate?'[POSTPONED] ':'[POSTPONED: NO DATE] ')+stripped;
+  // ═══ STATUS TITLE PREFIX HELPERS
+  // ═══ Prefixes reflect the CURRENT appointment state on the Google Calendar event title:
+  // ═══   "[POSTPONED: NO DATE]" — postponed with no new date confirmed yet (shaky=true)
+  // ═══   "[POSTPONED]"          — postponed and rescheduled to a new date (historical marker)
+  // ═══   "[FLY KITE]"           — client no-show; event kept with tentative/cancelled status
+  // ═══   "[MET]"                — meeting happened, awaiting close
+  // ═══   "[CLOSED]"             — deal closed successfully
+  // ═══   (no prefix)            — pending / active appointment
+  // ═══ _stripStatusPrefix removes any existing prefix so we can cleanly re-apply a new one.
+  // ═══ _withStatusPrefix takes the new status + an optional hasDate flag for postponed.
+  const _stripStatusPrefix=(title)=>(title||'').replace(/^\[(?:POSTPONED(?::\s*NO\s*DATE)?|FLY\s*KITE|MET|CLOSED)\]\s*/i,'');
+  const _withStatusPrefix=(title,status,hasDate)=>{
+    const stripped=_stripStatusPrefix(title);
+    if(status==='postponed')return(hasDate?'[POSTPONED] ':'[POSTPONED: NO DATE] ')+stripped;
+    if(status==='flykite')return'[FLY KITE] '+stripped;
+    if(status==='met')return'[MET] '+stripped;
+    if(status==='closed')return'[CLOSED] '+stripped;
+    return stripped; // pending → no prefix
   };
+  // Legacy aliases (still used in a few places — delegate to the generalized versions)
+  const _stripPostponedPrefix=_stripStatusPrefix;
+  const _withPostponedPrefix=(title,hasDate)=>_withStatusPrefix(title,'postponed',hasDate);
   // 60s cache for picker events to avoid refetching on every modal open
   const pickerEventsCacheRef=useRef({key:'',ts:0,data:null});
   // ═══ Tracks which appointment IDs currently have an async gCal.create in-flight.
@@ -2651,6 +2741,40 @@ function App(){
   const[showFilters,setShowFilters]=useState(false);
   const[filters,setFilters]=useState({genderFilter:'all',ageFilter:false,ageMin:'',ageMax:'',skipAllNP:false,includeCB:false});
   const[gOk,setGOk]=useState(!!localStorage.getItem('ad_gt'));
+  // ═══ GOOGLE OAUTH RESILIENCE
+  // ═══ 1. Wire window._gOkCb to setGOk so silent worker refreshes (which update localStorage
+  // ═══    via _saveGToken) also update the React UI. Without this, the user sees "Not connected"
+  // ═══    even though a fresh token is sitting in localStorage.
+  // ═══ 2. Re-run _autoRefreshGoogle on visibility change (user comes back to the tab after a long
+  // ═══    idle period — token may have expired while away).
+  // ═══ 3. Periodic refresh every 30 minutes so the token never goes >60min stale.
+  // ═══ 4. Re-attempt on focus event for cases where visibilitychange doesn't fire.
+  useEffect(()=>{
+    window._gOkCb=setGOk;
+    let _stopped=false;
+    const _attempt=async(reason)=>{
+      if(_stopped)return;
+      try{
+        const _ok=await window._autoRefreshGoogle();
+        if(_ok&&!gOk)setGOk(true);
+        if(!_ok&&!localStorage.getItem('ad_gt')&&gOk)setGOk(false);
+        DBG('[Google] refresh attempt ('+reason+') → '+(_ok?'ok':'fail'));
+      }catch(_e){console.warn('[Google refresh '+reason+']',_e)}
+    };
+    const _onVis=()=>{if(document.visibilityState==='visible')_attempt('visibility')};
+    const _onFocus=()=>_attempt('focus');
+    document.addEventListener('visibilitychange',_onVis);
+    window.addEventListener('focus',_onFocus);
+    // Periodic refresh — every 30 min, well within Google's 60min token lifetime
+    const _periodicId=setInterval(()=>_attempt('periodic'),30*60*1000);
+    return()=>{
+      _stopped=true;
+      document.removeEventListener('visibilitychange',_onVis);
+      window.removeEventListener('focus',_onFocus);
+      clearInterval(_periodicId);
+      if(window._gOkCb===setGOk)window._gOkCb=null;
+    };
+  },[]);
   const[sTabs,setSTabs]=useState(load('stabs')||[]);
   useEffect(()=>{if(sTabs.length){save('stabs',sTabs);
     if(_SB&&_user&&window._cloudReady){_SB.from('autodial_admin_config').upsert({admin_email:'stabs_'+_user.email.toLowerCase(),biz_name:JSON.stringify(sTabs)},{onConflict:'admin_email'}).catch(function(){});window._bumpSyncVer&&window._bumpSyncVer()}}},[sTabs]);const[sLoad,setSLoad]=useState(false);
@@ -3648,7 +3772,15 @@ function App(){
             }
           }
         }));
-        await Promise.all(_hsJobs);
+        // ═══ PERF: Race the parallel hard-sync against a 6s ceiling. The jobs continue in
+        // ═══ background regardless — they update state via setX callbacks when they complete.
+        // ═══ This means the UI unblocks at most 6s after sign-in even if Supabase is slow,
+        // ═══ instead of the previous behavior where ONE slow request could hang the entire boot
+        // ═══ for 20+ seconds (the user's reported pain point).
+        await Promise.race([
+          Promise.allSettled(_hsJobs),
+          new Promise(resolve=>setTimeout(resolve,6000))
+        ]);
       }
       // Auto-refresh Google via Worker (silent, no popup) — fire-and-forget so it doesn't gate setSyncing(false)
       if(WORKER_URL&&(!localStorage.getItem('ad_gt')||Date.now()-parseInt(localStorage.getItem('ad_gt_ts')||'0')>2400000)){
@@ -3884,10 +4016,19 @@ function App(){
       finally{setCalRefreshing(false)}
     };
     loadWeekEvents();
-    // Auto-poll every 60s while on Calendar tab (so new events show up without manual refresh)
+    // ═══ AUTO-POLL WEEK EVENTS — runs on every tab, faster on Cal tab.
+    // ═══ Cal tab: 60s (user is actively viewing the calendar, needs fast feedback).
+    // ═══ Other tabs: 180s (background refresh so external Google Calendar drags get picked up
+    // ═══ by the reconciliation effect without requiring user to visit Cal tab).
+    // ═══ Paused when the tab is hidden (no work while backgrounded).
     let pollId=null;
-    if(tab==='cal')pollId=setInterval(loadWeekEvents,60000);
-    return()=>{if(pollId)clearInterval(pollId)};
+    const _pollMs=tab==='cal'?60000:180000;
+    const _startPoll=()=>{if(pollId)return;pollId=setInterval(()=>{if(!document.hidden)loadWeekEvents()},_pollMs)};
+    const _stopPoll=()=>{if(pollId){clearInterval(pollId);pollId=null}};
+    _startPoll();
+    const _onVisChange=()=>{if(document.hidden)_stopPoll();else{loadWeekEvents();_startPoll()}};
+    document.addEventListener('visibilitychange',_onVisChange);
+    return()=>{_stopPoll();document.removeEventListener('visibilitychange',_onVisChange)};
   },[gOk,role,adminConfigs,calShares,calList,myEmail,showAppt,calWeekOffset,tab,calRefreshTrigger,calVisibility,showInvited,showDeclined]);
 
   // ═══ LIVE SYNC — keep multiple devices in sync in real-time ═══
@@ -4676,6 +4817,13 @@ function App(){
     const _drifts=[];
     appointments.forEach(a=>{
       if(!a.calEventId)return;
+      // ═══ INTENTIONAL POSTPONED-NO-DATE STATE: skip reconciliation for these rows.
+      // ═══ The local state has apptDate='' on purpose (admin postponed without picking a new
+      // ═══ date yet). The gCal event still occupies the original time slot as a tentative
+      // ═══ "[POSTPONED: NO DATE]" placeholder. Without this skip, the reconciliation would
+      // ═══ overwrite the local apptDate from the gCal event's start time, destroying the
+      // ═══ "needs reschedule" state and pulling the row out of the shimmering top section.
+      if(a.followUp==='postponed'&&a.shaky&&!a.apptDate)return;
       const _ev=_evMap.get(a.calEventId);
       if(!_ev)return;
       const _dateChanged=a.apptDate!==_ev.apptDate;
@@ -5083,8 +5231,22 @@ function App(){
         setAppointments(p=>{
           // First, scrub any blocklisted entries from state so they stop haunting find() and the dedup layer
           const _scrubbed=p.filter(a=>!isApptDeleted(a,_delSet));
-          const existing=_scrubbed.find(a=>(a.leadId===u.id||(a.phone===u.phone&&a.phone))&&(!a.followUp||a.followUp==='pending'));
-          if(existing)return _scrubbed; // lead already has a LIVE open appointment — don't duplicate
+          // ═══ "Existing open" includes pending AND postponed rows. Postponed rows are awaiting
+          // ═══ reschedule, so when admin sets the same lead again, we want to RESET the existing
+          // ═══ row back to pending state (preserving the calEventId so the Create Appointment
+          // ═══ handler can update the existing gCal event) instead of creating a duplicate row.
+          const existingIdx=_scrubbed.findIndex(a=>(a.leadId===u.id||(a.phone===u.phone&&a.phone))&&(!a.followUp||a.followUp==='pending'||a.followUp==='postponed'));
+          if(existingIdx>=0){
+            const _ex=_scrubbed[existingIdx];
+            // If the existing row was postponed, reset it back to pending so the Create flow can update it
+            if(_ex.followUp==='postponed'){
+              const next=_scrubbed.slice();
+              next[existingIdx]={..._ex,followUp:'pending',followUpDate:null,apptDate:'',apptTime:'',shaky:false};
+              return next;
+            }
+            // Pending row already exists — no-op
+            return _scrubbed;
+          }
           return[..._scrubbed,{id:Date.now()+Math.random(),leadId:u.id,name:u.name,phone:u.phone,gender:u.gender||detectGender(u)||'',age:u.age||'',
             apptDate:'',apptTime:'',location:'',industry:'',remarks:'',
             followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail}];
@@ -6393,10 +6555,7 @@ function App(){
         const _isSelected=selectedAppts.has(a.id);
         // ═══ Postponed-no-date rows: white shimmer + tap to open the date picker
         const _needsReschedule=a.followUp==='postponed'&&!a.apptDate;
-        return<div key={a.id} className={"card"+(_needsReschedule?" postponed-needs-date":"")} onClick={_needsReschedule?()=>{
-          setFixDateForm({date:localDateKey(new Date()),time:'10:00',duration:n(apptDuration,60)||60});
-          setFixDateAppt(a);
-        }:undefined} style={{marginBottom:12,borderColor:_isSelected?'rgba(99,102,241,.6)':((statusColors[a.followUp]||'var(--border)')+'30'),background:_isSelected?'linear-gradient(135deg,rgba(99,102,241,.08),var(--bg2))':undefined,boxShadow:_isSelected?'0 0 0 1px rgba(99,102,241,.3)':undefined}}>
+        return<div key={a.id} className={"card"+(_needsReschedule?" postponed-needs-date":"")} onClick={_needsReschedule?()=>_openRescheduleFlow(a):undefined} style={{marginBottom:12,borderColor:_isSelected?'rgba(99,102,241,.6)':((statusColors[a.followUp]||'var(--border)')+'30'),background:_isSelected?'linear-gradient(135deg,rgba(99,102,241,.08),var(--bg2))':undefined,boxShadow:_isSelected?'0 0 0 1px rgba(99,102,241,.3)':undefined}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6,gap:8}}>
             {isManageMode&&a.followUp==='pending'&&<button onClick={(e)=>{e.stopPropagation();setSelectedAppts(prev=>{const n=new Set(prev);if(n.has(a.id))n.delete(a.id);else n.add(a.id);return n})}} style={{width:22,height:22,borderRadius:6,background:_isSelected?'var(--accent)':'var(--bg3)',border:'1px solid '+(_isSelected?'var(--accent)':'var(--border)'),color:'#fff',fontSize:13,fontWeight:800,padding:0,flexShrink:0,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>{_isSelected?'✓':''}</button>}
             <div style={{flex:1}}>
@@ -6416,10 +6575,7 @@ function App(){
           {/* ═══ Dateless appointment → prompt to set date & time right here.
                For postponed rows this is the "reschedule" CTA — labeled differently to
                make the intent obvious after Postpone clears the date. */}
-          {!a.apptDate&&a.followUp!=='met'&&a.followUp!=='closed'&&<button onClick={e=>{e.stopPropagation();
-            setFixDateForm({date:localDateKey(new Date()),time:'10:00',duration:n(apptDuration,60)||60});
-            setFixDateAppt(a);
-          }} style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'8px 12px',marginBottom:6,borderRadius:10,background:a.followUp==='postponed'?'linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,.04))':'linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.06))',border:'1px dashed '+(a.followUp==='postponed'?'rgba(255,255,255,.5)':'rgba(99,102,241,.4)'),color:a.followUp==='postponed'?'#fff':'var(--accent2)',fontSize:11,fontWeight:700}}>
+          {!a.apptDate&&a.followUp!=='met'&&a.followUp!=='closed'&&<button onClick={e=>{e.stopPropagation();_openRescheduleFlow(a);}} style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'8px 12px',marginBottom:6,borderRadius:10,background:a.followUp==='postponed'?'linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,.04))':'linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.06))',border:'1px dashed '+(a.followUp==='postponed'?'rgba(255,255,255,.5)':'rgba(99,102,241,.4)'),color:a.followUp==='postponed'?'#fff':'var(--accent2)',fontSize:11,fontWeight:700}}>
             <span style={{fontSize:13}}>{a.followUp==='postponed'?'⏸':'📅'}</span>
             <span>{a.followUp==='postponed'?'Tap to reschedule':'Set date & time'}</span>
             <span style={{marginLeft:'auto',fontSize:9,color:'var(--text3)',fontWeight:600}}>{a.followUp==='postponed'?'postponed · awaiting date':'⚠ no date set'}</span>
@@ -6444,27 +6600,25 @@ function App(){
               <button key={k} onClick={async()=>{
                 const now=new Date().toISOString();
                 try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
-                // ═══ Fly Kite: client no-show → DELETE the gCal event (slot truly freed)
-                // ═══ Postpone: needs reschedule → UPDATE the gCal event to tentative + [POSTPONED: NO DATE]
-                // ═══   prefix and mark shaky=true so AutoDial's free-slot picker offers the slot.
-                if(k==='flykite'&&a.calEventId&&window.gCal){
-                  try{const ok=await gCal.del(a.calEventId,myCfg.targetCalendarId||'primary');
-                    if(!ok)toast('⚠ Could not delete calendar event — check Google Calendar manually','err');
-                  }catch(_ge){}
-                  setWeekEvents(prev=>prev.filter(ev=>ev.id!==a.calEventId));
-                }
-                if(k==='postponed'&&a.calEventId&&window.gCal){
+                // ═══ STATUS CHANGE → UPDATE gCal event title with [STATUS] prefix.
+                // ═══ All four states (Met / Postponed / Fly Kite / Closed) now keep the event on
+                // ═══ the calendar with a prefix reflecting the current state. Postpone marks the
+                // ═══ event tentative; the others keep it confirmed. This lets anyone looking at
+                // ═══ Google Calendar see the outcome history without opening AutoDial.
+                if(a.calEventId&&window.gCal){
                   try{
-                    const _newTitle=_withPostponedPrefix('Appt: '+(a.name||'')+(a.location?' @ '+a.location:''),false);
-                    const _ok=await gCal.update(a.calEventId,{summary:_newTitle,status:'tentative'},myCfg.targetCalendarId||'primary');
+                    const _baseTitle='Appt: '+(a.name||'')+(a.location?' @ '+a.location:'');
+                    const _newTitle=_withStatusPrefix(_baseTitle,k,false);
+                    const _status=k==='postponed'?'tentative':'confirmed';
+                    const _ok=await gCal.update(a.calEventId,{summary:_newTitle,status:_status},myCfg.targetCalendarId||'primary');
                     if(!_ok)toast('⚠ Could not update calendar event','err');
-                    setWeekEvents(prev=>prev.map(ev=>ev.id===a.calEventId?{...ev,summary:_newTitle,status:'tentative'}:ev));
-                  }catch(_ge){console.warn('[Postpone gCal.update]',_ge)}
+                    setWeekEvents(prev=>prev.map(ev=>ev.id===a.calEventId?{...ev,summary:_newTitle,status:_status}:ev));
+                  }catch(_ge){console.warn('['+k+' gCal.update]',_ge)}
                 }
                 setAppointments(p=>p.map(x=>{
                   if(x.id!==a.id)return x;
                   if(k==='postponed')return{...x,followUp:'postponed',followUpDate:now,apptDate:'',apptTime:'',shaky:true};
-                  if(k==='flykite')return{...x,followUp:'flykite',followUpDate:now,calEventId:''};
+                  // Fly Kite / Met / Closed: keep the calEventId (event still exists on calendar)
                   return{...x,followUp:k,followUpDate:now};
                 }));
                 // ═══ Main → admin write-back: if this is an admin-owned row, push the update to
@@ -6473,7 +6627,6 @@ function App(){
                 if(a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase()){
                   const _updated={...a,followUp:k,followUpDate:now};
                   if(k==='postponed'){_updated.apptDate='';_updated.apptTime='';_updated.shaky=true}
-                  if(k==='flykite')_updated.calEventId='';
                   _mainWritebackAdminAppt(_updated);
                 }
                 // Write status update to Google Sheet "Appointments Set" tab
@@ -7940,10 +8093,32 @@ function App(){
       {role!=='admin'?<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google</h3>
         <p style={{fontSize:11,color:gOk?'var(--green)':'var(--text3)',fontWeight:600,marginBottom:8}}>{gOk?'✓ Connected':'Not connected'}</p>
-        <div style={{display:'flex',gap:8}}>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
           <button onClick={connectG} style={{padding:'10px 18px',borderRadius:10,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>{gOk?'Reconnect':'Connect'}</button>
           {gOk&&<button onClick={()=>{_gToken=null;localStorage.removeItem('ad_gt');localStorage.removeItem('ad_gt_ts');localStorage.removeItem('ad_g_ever');setGOk(false);toast('Google disconnected')}} style={{padding:'10px 18px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:600}}>Disconnect</button>}
+          <button onClick={async()=>{
+            toast('Testing worker refresh…','info');
+            const _ok=await window._workerRefresh();
+            const _s=window._workerStats;
+            if(_ok){
+              setGOk(true);
+              toast('✓ Worker refresh OK — '+_s.successes+' successes, '+_s.failures+' failures','info');
+            }else{
+              const _msg='Worker refresh FAILED: '+(_s.lastError||'unknown')+(_s.lastStatus?' (HTTP '+_s.lastStatus+')':'');
+              toast(_msg,'err');
+              console.warn('[Google Diagnostics]',_s);
+            }
+          }} style={{padding:'10px 18px',borderRadius:10,background:'var(--bg3)',color:'var(--text2)',fontSize:12,fontWeight:600,border:'1px solid var(--border)'}}>🩺 Test Connection</button>
         </div>
+        {/* Diagnostic info panel — shows worker stats when not connected or when there was a recent error */}
+        {(!gOk||(window._workerStats&&window._workerStats.lastError))&&<div style={{marginTop:10,padding:'8px 10px',borderRadius:8,background:'var(--bg)',border:'1px solid var(--border)',fontSize:10,fontFamily:'monospace',color:'var(--text3)',lineHeight:1.5}}>
+          <p style={{margin:'0 0 4px',fontWeight:700,color:'var(--text2)'}}>📊 Worker Diagnostics</p>
+          <p style={{margin:0}}>Attempts: {window._workerStats?.attempts||0} · Success: {window._workerStats?.successes||0} · Failures: {window._workerStats?.failures||0}</p>
+          {window._workerStats?.lastError&&<p style={{margin:'4px 0 0',color:'var(--red)'}}>Last error: {window._workerStats.lastError}{window._workerStats.lastStatus?' (HTTP '+window._workerStats.lastStatus+')':''}</p>}
+          {window._workerStats?.lastSuccessAt&&<p style={{margin:'2px 0 0',color:'var(--green)'}}>Last success: {new Date(window._workerStats.lastSuccessAt).toLocaleTimeString()}</p>}
+          {window._workerStats?.lastBody&&<p style={{margin:'2px 0 0',fontSize:9,wordBreak:'break-all'}}>Body: {window._workerStats.lastBody.slice(0,200)}</p>}
+          <p style={{margin:'4px 0 0',fontSize:9,color:'var(--text3)'}}>Worker URL: {WORKER_URL||'(not configured)'}</p>
+        </div>}
       </div>:
       <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:6}}>Google Sheets</h3>
@@ -8468,10 +8643,10 @@ WHERE p.id IS NULL;`;
         {/* Header */}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:8,position:'sticky',top:-16,background:'rgba(17,24,39,.92)',backdropFilter:'blur(8px)',padding:'8px 0',zIndex:2,margin:'-16px -14px 10px',paddingLeft:14,paddingRight:14}}>
           <div style={{flex:1,minWidth:0}}>
-            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'var(--green)'}}>📅 Set Appointment</h3>
+            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:rescheduleTargetAppt?'var(--amber)':'var(--green)'}}>{rescheduleTargetAppt?'⏸ Reschedule Appointment':'📅 Set Appointment'}</h3>
             <p style={{margin:'2px 0 0',fontSize:11,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>For <b style={{color:'#f1f5f9'}}>{apptLead?.name||'lead'}</b>{apptLead?.phone?' · '+apptLead.phone:''}</p>
           </div>
-          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('');setPendingShakyKey(null)}} style={{padding:'8px 14px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:14,fontWeight:800,flexShrink:0,minWidth:40}}>×</button>
+          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('');setPendingShakyKey(null);setRescheduleTargetAppt(null);setApptShaky(false)}} style={{padding:'8px 14px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:14,fontWeight:800,flexShrink:0,minWidth:40}}>×</button>
         </div>
         {/* Lead info card */}
         <div style={{padding:'10px 12px',borderRadius:10,background:'var(--bg)',marginBottom:12,border:'1px solid var(--border)'}}>
@@ -8792,11 +8967,87 @@ WHERE p.id IS NULL;`;
             <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.35}}>Lead may cancel or reschedule. Slot will still show as available (orange) in future calendar views.</p>
           </div>
         </label>
+        {/* ═══ "NO DATE YET" BUTTON — only shown in reschedule mode. Marks the existing
+             appointment as postponed-no-date + shaky + updates gCal event to tentative with
+             [POSTPONED: NO DATE] prefix. Used when the lead hasn't confirmed a new date yet. */}
+        {rescheduleTargetAppt&&<button onClick={async()=>{
+          const _target=rescheduleTargetAppt;
+          try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+          if(_target.calEventId&&window.gCal){
+            try{
+              const _baseTitle='Appt: '+(_target.name||'')+(_target.location?' @ '+_target.location:'');
+              const _newTitle=_withStatusPrefix(_baseTitle,'postponed',false);
+              await gCal.update(_target.calEventId,{summary:_newTitle,status:'tentative'},myCfg.targetCalendarId||'primary');
+              setWeekEvents(prev=>prev.map(ev=>ev.id===_target.calEventId?{...ev,summary:_newTitle,status:'tentative'}:ev));
+            }catch(_e){console.warn('[NoDate gCal.update]',_e)}
+          }
+          const _now=new Date().toISOString();
+          const _updated={..._target,followUp:'postponed',followUpDate:_now,apptDate:'',apptTime:'',shaky:true};
+          setAppointments(p=>p.map(x=>x.id===_target.id?_updated:x));
+          if(_target.admin&&_target.admin.toLowerCase()!==myEmail.toLowerCase()){
+            _mainWritebackAdminAppt(_updated);
+          }
+          toast(_target.name+' — postponed without date ⏸');
+          setShowAppt(false);setApptLocation('');setApptObs('');setRescheduleTargetAppt(null);setApptShaky(false);
+        }} style={{width:'100%',padding:'12px',marginBottom:10,borderRadius:12,background:'rgba(255,255,255,.04)',color:'#cbd5e1',fontSize:11,fontWeight:700,border:'1px dashed rgba(255,255,255,.35)'}}>⏸ Or mark as postponed-no-date (lead hasn't confirmed yet)</button>}
         {/* Actions */}
         <div style={{display:'flex',gap:8,position:'sticky',bottom:-32,background:'rgba(17,24,39,.92)',backdropFilter:'blur(8px)',padding:'12px 0',margin:'0 -14px -32px',paddingLeft:14,paddingRight:14}}>
-          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14,borderRadius:12,fontWeight:700}}>Skip</button>
+          <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('');setRescheduleTargetAppt(null);setApptShaky(false)}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14,borderRadius:12,fontWeight:700}}>Skip</button>
           <button disabled={!apptDate||!apptTime} onClick={async()=>{if(!apptDate||!apptTime)return toast('Pick a slot above or set date & time','err');
             const dur=apptDuration||60;const lead=apptLead;
+            // ═══ RESCHEDULE BRANCH ═══
+            // If rescheduleTargetAppt is set, we're updating an existing appointment row, NOT
+            // creating a new one. Update the existing gCal event (or create if missing), update
+            // the target row by id, keep admin attribution, and flip title prefix to [POSTPONED]
+            // if this is a reschedule from postponed-no-date. Then close and reset.
+            if(rescheduleTargetAppt){
+              try{
+                const _target=rescheduleTargetAppt;
+                const _isOwnedByMe=!_target.admin||_target.admin.toLowerCase()===myEmail.toLowerCase();
+                const _wasPostponed=_target.followUp==='postponed';
+                const _baseTitle='Appt: '+(_target.name||'')+(apptLocation?' @ '+apptLocation:'');
+                // If it was postponed, add [POSTPONED] as historical marker. Otherwise plain title.
+                const _newTitle=_wasPostponed?_withStatusPrefix(_baseTitle,'postponed',true):_baseTitle;
+                const s=new Date(apptDate+'T'+apptTime);
+                const end=new Date(s.getTime()+dur*60000);
+                let _evtId=_target.calEventId||'';
+                if(window.gCal&&gOk){
+                  if(_evtId){
+                    // Update existing event
+                    try{
+                      const _tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
+                      const _patch={summary:_newTitle,status:'confirmed',start:{dateTime:s.toISOString(),timeZone:_tz},end:{dateTime:end.toISOString(),timeZone:_tz}};
+                      const _res=await gCal.update(_evtId,_patch,myCfg.targetCalendarId||'primary');
+                      if(!_res)toast('⚠ Calendar update failed — state still saved','err');
+                    }catch(_e){console.warn('[Reschedule gCal.update]',_e)}
+                  }else if(_isOwnedByMe){
+                    // No existing event — create one
+                    try{
+                      const _desc=['Client: '+(_target.name||''),'Phone: '+(_target.phone||''),apptObs?'\nNotes: '+apptObs:'','(Rescheduled)'].filter(Boolean).join('\n');
+                      const _evt=await gCal.create(_newTitle,_desc,s.toISOString(),end.toISOString(),apptInvite?apptInvite.split(',').map(x=>x.trim()).filter(Boolean):null,myCfg.targetCalendarId||'primary');
+                      if(_evt?.id)_evtId=_evt.id;
+                    }catch(_e){console.warn('[Reschedule gCal.create]',_e)}
+                  }
+                  // Not owned + no event → auto-create useEffect on owner's device will handle it
+                }
+                try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+                // Update the target row by id (preserve admin / name / everything else)
+                const _updated={...( _target||{}),apptDate,apptTime,duration:dur,location:apptLocation,remarks:apptObs||_target.remarks,calEventId:_evtId,followUp:'pending',followUpDate:new Date().toISOString(),shaky:apptShaky};
+                setAppointments(prev=>prev.map(x=>x.id===_target.id?_updated:x));
+                // Push updated weekEvents entry for immediate Cal tab reflection
+                if(_evtId)setWeekEvents(prev=>[...prev.filter(e=>e.id!==_evtId),{id:_evtId,summary:_newTitle,start:{dateTime:s.toISOString()},end:{dateTime:end.toISOString()},_calId:myCfg.targetCalendarId||'primary'}]);
+                // Cross-device write-back
+                if(_target.admin&&_target.admin.toLowerCase()!==myEmail.toLowerCase()){
+                  _mainWritebackAdminAppt(_updated);
+                }
+                pickerEventsCacheRef.current={key:'',ts:0,data:null};
+                toast('✓ Rescheduled '+(_target.name||'appointment')+' to '+apptDate+' '+apptTime);
+                setShowAppt(false);setApptLocation('');setApptObs('');setRescheduleTargetAppt(null);setApptShaky(false);
+              }catch(_err){
+                toast('Reschedule failed: '+(_err?.message||_err),'err');
+              }
+              return;
+            }
             // ═══ BLOCKLIST UNSTICK ═══
             // Before creating the new appointment, purge any _deletedApptIds entries that mention
             // this lead's phone. The blocklist stores entries as `phone_apptDate`, `phone_createdAt`,
@@ -8882,7 +9133,7 @@ WHERE p.id IS NULL;`;
               const apptSheetId=myCfg.timesheetId||cfg.sheetId;
               if(apptSheetId&&localStorage.getItem('ad_gt')){
                 gSheets.appendAppt(apptSheetId,{name:lead?.name,phone:lead?.phone,apptDate,apptTime,location:apptLocation,duration:dur,remarks:apptObs},userName).catch(()=>{})}}catch(ev){toast(ev.message,'err')}
-            setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:(!apptDate||!apptTime)?'var(--bg3)':'linear-gradient(135deg,var(--green),#059669)',color:(!apptDate||!apptTime)?'var(--text3)':'#fff',fontSize:14,fontWeight:800,borderRadius:12,opacity:(!apptDate||!apptTime)?.5:1}}>📅 Create Appointment</button>
+            setShowAppt(false);setApptLocation('');setApptObs('')}} style={{flex:1,padding:'14px',background:(!apptDate||!apptTime)?'var(--bg3)':'linear-gradient(135deg,var(--green),#059669)',color:(!apptDate||!apptTime)?'var(--text3)':'#fff',fontSize:14,fontWeight:800,borderRadius:12,opacity:(!apptDate||!apptTime)?.5:1}}>{rescheduleTargetAppt?'⏸ Reschedule':'📅 Create Appointment'}</button>
         </div>
       </div>
     </Modal>
@@ -8917,12 +9168,26 @@ WHERE p.id IS NULL;`;
         })()}
         <div style={{display:'flex',gap:8}}>
           <button onClick={()=>setTipModal(null)} style={{flex:1,padding:'12px',borderRadius:12,background:'var(--bg3)',color:'var(--text3)',fontSize:13,fontWeight:700}}>Cancel</button>
-          <button onClick={()=>{
+          <button onClick={async()=>{
             const amt=parseFloat(tipAmountInput)||0;
             if(amt<=0){toast('Enter an amount','err');return}
             const a=tipModal.appt;const isMain=role==='main';const now=new Date().toISOString();
             const update=isMain?{efyc:amt,followUp:'closed',followUpDate:now}:{tip:amt,followUp:'closed',followUpDate:now};
+            // ═══ Update gCal event title to [CLOSED] so the calendar reflects the new state.
+            // ═══ Strips any previous prefix ([MET], [POSTPONED], etc.) and replaces with [CLOSED].
+            if(a.calEventId&&window.gCal){
+              try{
+                const _baseTitle='Appt: '+(a.name||'')+(a.location?' @ '+a.location:'');
+                const _newTitle=_withStatusPrefix(_baseTitle,'closed',false);
+                await gCal.update(a.calEventId,{summary:_newTitle,status:'confirmed'},myCfg.targetCalendarId||'primary');
+                setWeekEvents(prev=>prev.map(ev=>ev.id===a.calEventId?{...ev,summary:_newTitle}:ev));
+              }catch(_ge){console.warn('[Closed gCal.update]',_ge)}
+            }
             setAppointments(p=>p.map(x=>x.id===a.id?{...x,...update}:x));
+            // Cross-device write-back if Main is closing an admin-owned row
+            if(a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase()){
+              _mainWritebackAdminAppt({...a,...update});
+            }
             // If converting from Met, remove the old Met incentive (it'll be replaced by the EFYC/tip)
             if(tipModal.fromMet){
               setIncentives(p=>p.filter(inc=>!(inc.type==='met'&&inc.leadName===a.name&&(inc.admin||'').toLowerCase()===(a.admin||myEmail).toLowerCase())));
@@ -9179,97 +9444,6 @@ WHERE p.id IS NULL;`;
         </div>
   </Modal>})()}
 
-    {/* ═══ APPT TAB: "SET DATE & TIME" FIXER MODAL (for appointments created without a date) ═══ */}
-    {fixDateAppt&&<Modal show={true} onClose={()=>setFixDateAppt(null)} align="center" bg=".85" zIndex={101}>
-      <div style={{width:'100%',maxWidth:420,background:'var(--bg2)',borderRadius:20,padding:'18px 18px 14px',border:'1px solid var(--border2)'}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-          <h3 style={{margin:0,fontSize:16,fontWeight:800,color:'#f1f5f9'}}>📅 Set Date & Time</h3>
-          <button onClick={()=>setFixDateAppt(null)} style={{width:30,height:30,borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:16,border:'none'}}>×</button>
-        </div>
-        <p style={{margin:'0 0 12px',fontSize:11,color:'var(--text3)'}}>{fixDateAppt.name} <span className="mono" style={{color:'var(--text3)'}}>· {fixDateAppt.phone}</span></p>
-        <div style={{display:'flex',gap:8,marginBottom:10}}>
-          <div style={{flex:1}}>
-            <label style={{display:'block',fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:4,letterSpacing:'.04em'}}>DATE</label>
-            <input type="date" value={fixDateForm.date} onChange={e=>setFixDateForm(s=>({...s,date:e.target.value}))}/>
-          </div>
-          <div style={{width:110}}>
-            <label style={{display:'block',fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:4,letterSpacing:'.04em'}}>TIME</label>
-            <input type="time" value={fixDateForm.time} onChange={e=>setFixDateForm(s=>({...s,time:e.target.value}))}/>
-          </div>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{display:'block',fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:4,letterSpacing:'.04em'}}>DURATION (MINUTES)</label>
-          <div style={{display:'flex',gap:6}}>
-            {[30,60,90,120].map(d=><button key={d} onClick={()=>setFixDateForm(s=>({...s,duration:d}))} style={{flex:1,padding:'8px',borderRadius:8,background:fixDateForm.duration===d?'var(--adim)':'var(--bg3)',color:fixDateForm.duration===d?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'1px solid '+(fixDateForm.duration===d?'var(--accent)':'var(--border)')}}>{d}m</button>)}
-            <input type="number" value={fixDateForm.duration} onChange={e=>setFixDateForm(s=>({...s,duration:+e.target.value||60}))} style={{width:70,padding:'8px',fontSize:11,textAlign:'center'}}/>
-          </div>
-        </div>
-        <button disabled={fixDateSaving} onClick={async()=>{
-          if(!fixDateForm.date||!fixDateForm.time){toast('Date and time required','err');return}
-          setFixDateSaving(true);
-          // ═══ Guard: the reschedule flow writes locally + creates a GCal event. Without this,
-          // ═══ the next aggregation/pull cycle could wipe the new date within 2 seconds.
-          try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
-          try{
-            const [y,mo,da]=fixDateForm.date.split('-').map(Number);
-            const [h,mi]=fixDateForm.time.split(':').map(Number);
-            const startD=new Date(y,mo-1,da,h,mi,0);
-            const endD=new Date(startD.getTime()+fixDateForm.duration*60000);
-            // ═══ CALENDAR IDENTITY: if the row is owned by someone ELSE (e.g., Main rescheduling
-            // ═══ an admin's postponed appointment) AND there's no existing event, defer to the
-            // ═══ owner's device. If an event already exists (from a Postpone keeping the event),
-            // ═══ we can update it directly because both Main and admin write to the SAME shared
-            // ═══ calendar (Main owns the calendar, admin has shared write access).
-            const _isOwnedByMe=!fixDateAppt.admin||fixDateAppt.admin.toLowerCase()===myEmail.toLowerCase();
-            const _wasPostponed=fixDateAppt.followUp==='postponed';
-            // Strip any existing prefix and add the [POSTPONED] historical marker
-            const _baseTitle='Appt: '+(fixDateAppt.name||'')+(fixDateAppt.location?' @ '+fixDateAppt.location:'');
-            const _newTitle=_wasPostponed?_withPostponedPrefix(_baseTitle,true):_baseTitle;
-            let evt=null;
-            let calEventId=fixDateAppt.calEventId||'';
-            if(window.gCal&&gOk){
-              if(calEventId){
-                // ═══ UPDATE existing event (the common case after Postpone)
-                try{
-                  const _patch={
-                    summary:_newTitle,
-                    status:'confirmed',
-                    start:{dateTime:startD.toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},
-                    end:{dateTime:endD.toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}
-                  };
-                  const _res=await gCal.update(calEventId,_patch,myCfg.targetCalendarId||'primary');
-                  if(_res)evt={id:calEventId};
-                }catch(_e){console.warn('[fixDate] gCal.update failed',_e)}
-              }else if(_isOwnedByMe){
-                // ═══ CREATE new event (legacy postpone that deleted the event, OR a fresh dateless pending row)
-                try{evt=await gCal.create(_newTitle,'Follow-up appointment for '+fixDateAppt.name+(fixDateAppt.phone?' · '+fixDateAppt.phone:''),startD.toISOString(),endD.toISOString(),fixDateAppt.inviteEmails?String(fixDateAppt.inviteEmails).split(/[,;\s]/).filter(Boolean):null,myCfg.targetCalendarId||'primary')}catch(_e){console.warn('[fixDate] gCal.create failed',_e)}
-              }
-              // else: not owned by me + no event → defer to owner's auto-create useEffect
-            }
-            calEventId=evt?.id||calEventId||'';
-            const dateKey=fixDateForm.date;
-            const timeStr=fixDateForm.time;
-            // Update local state — if this row was postponed awaiting reschedule, flip it back
-            // to 'pending' now that a new date is assigned. shaky=false because the slot is now
-            // genuinely reserved (no longer "may or may not be a real booking").
-            setAppointments(prev=>prev.map(x=>x.id===fixDateAppt.id?{...x,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,followUp:x.followUp==='postponed'?'pending':x.followUp,followUpDate:x.followUp==='postponed'?new Date().toISOString():x.followUpDate,shaky:false}:x));
-            // ═══ Main → admin write-back: if Main is rescheduling an admin-owned row, push the
-            // ═══ new date + calEventId to the admin's cloud rows so the admin's device sees it.
-            if(fixDateAppt.admin&&fixDateAppt.admin.toLowerCase()!==myEmail.toLowerCase()){
-              const _updated={...fixDateAppt,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,followUp:fixDateAppt.followUp==='postponed'?'pending':fixDateAppt.followUp,followUpDate:fixDateAppt.followUp==='postponed'?new Date().toISOString():fixDateAppt.followUpDate,shaky:false};
-              _mainWritebackAdminAppt(_updated);
-            }
-            // Push the new event into weekEvents so Cal tab reflects it immediately
-            if(evt?.id)setWeekEvents(prev=>[...prev.filter(e=>e.id!==evt.id),{id:evt.id,summary:_newTitle,start:{dateTime:startD.toISOString()},end:{dateTime:endD.toISOString()},_calId:myCfg.targetCalendarId||'primary'}]);
-            // Cloud sync via DB.saveAppt so Main/Admin both see it
-            try{DB.saveAppt({...fixDateAppt,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,admin:fixDateAppt.admin||myEmail},_user?.id)}catch(_e){}
-            toast(_isOwnedByMe?'✓ Date set for '+fixDateAppt.name:'✓ Rescheduled — calendar event will be created on '+fixDateAppt.admin+'\'s device','info');
-            setFixDateAppt(null);
-          }catch(e){toast('Failed: '+(e.message||e),'err')}
-          setFixDateSaving(false);
-        }} style={{width:'100%',padding:'12px',borderRadius:10,background:'linear-gradient(135deg,var(--accent),#4f46e5)',color:'#fff',fontSize:13,fontWeight:800,border:'none',opacity:fixDateSaving?0.6:1}}>{fixDateSaving?'Saving…':'✓ Set Date & Time'}</button>
-      </div>
-    </Modal>}
 
     {/* ═══ CAL TAB: CLICK-TO-EDIT EVENT MODAL ═══ */}
     {calEditEvent&&<Modal show={true} onClose={()=>setCalEditEvent(null)} align="center" bg=".85" zIndex={101}>
@@ -9451,74 +9625,64 @@ WHERE p.id IS NULL;`;
         toast('🗑 Appointment deleted — count reversed');
         _close();
       };
-      // ═══ FLY KITE — client no-show. Keep the row (still counts as a set) but remove from calendar.
+      // ═══ FLY KITE — client no-show. Keep the gCal event with [FLY KITE] prefix so the
+      // ═══ calendar reflects the outcome. Row stays in the appointment list (count unchanged).
       const _doFlyKite=async()=>{
         try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
-        await _wipeCalEvent();
-        const _now=new Date().toISOString();
-        setAppointments(p=>p.map(x=>x.id===_a.id?{...x,followUp:'flykite',followUpDate:_now,calEventId:''}:x));
-        // Main → admin write-back if this is an admin-owned row
-        if(_a.admin&&_a.admin.toLowerCase()!==myEmail.toLowerCase()){
-          _mainWritebackAdminAppt({..._a,followUp:'flykite',followUpDate:_now,calEventId:''});
-        }
-        toast(_a.name+' — fly kite 🪁 (kept in list, slot freed)');
-        _close();
-      };
-      // ═══ POSTPONE — keep the gCal event but mark TENTATIVE with [POSTPONED: NO DATE] prefix.
-      // ═══ Sets shaky=true so AutoDial's free slot picker will offer this slot to new bookings,
-      // ═══ but the event stays visible on Google Calendar as a tentative placeholder. apptDate
-      // ═══ is cleared in local state so the AutoDial row floats to the top with white shimmer.
-      const _doPostpone=async()=>{
-        try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
-        // Update gCal event title + set tentative status (don't delete)
         if(_a.calEventId&&window.gCal){
           try{
-            const _newTitle=_withPostponedPrefix('Appt: '+(_a.name||'')+(_a.location?' @ '+_a.location:''),false);
-            const _ok=await gCal.update(_a.calEventId,{summary:_newTitle,status:'tentative'},_calId);
+            const _baseTitle='Appt: '+(_a.name||'')+(_a.location?' @ '+_a.location:'');
+            const _newTitle=_withStatusPrefix(_baseTitle,'flykite',false);
+            const _ok=await gCal.update(_a.calEventId,{summary:_newTitle,status:'confirmed'},_calId);
             if(!_ok)toast('⚠ Could not update calendar event','err');
-            // Reflect in local weekEvents cache so Cal tab updates immediately
-            setWeekEvents(prev=>prev.map(ev=>ev.id===_a.calEventId?{...ev,summary:_newTitle,status:'tentative'}:ev));
-          }catch(_ge){console.warn('[Postpone gCal.update]',_ge)}
+            setWeekEvents(prev=>prev.map(ev=>ev.id===_a.calEventId?{...ev,summary:_newTitle}:ev));
+          }catch(_ge){console.warn('[FlyKite gCal.update]',_ge)}
         }
         const _now=new Date().toISOString();
-        // Local state: clear date, mark shaky, keep calEventId so we can update it later on reschedule
-        setAppointments(p=>p.map(x=>x.id===_a.id?{...x,followUp:'postponed',followUpDate:_now,apptDate:'',apptTime:'',shaky:true}:x));
-        // Main → admin write-back if this is an admin-owned row
+        // Keep calEventId — the event still exists with the [FLY KITE] marker
+        setAppointments(p=>p.map(x=>x.id===_a.id?{...x,followUp:'flykite',followUpDate:_now}:x));
         if(_a.admin&&_a.admin.toLowerCase()!==myEmail.toLowerCase()){
-          _mainWritebackAdminAppt({..._a,followUp:'postponed',followUpDate:_now,apptDate:'',apptTime:'',shaky:true});
+          _mainWritebackAdminAppt({..._a,followUp:'flykite',followUpDate:_now});
         }
-        toast(_a.name+' — postponed ⏸ (slot freed via shaky · tap row to set new date)');
+        toast(_a.name+' — fly kite 🪁 (marked [FLY KITE] on calendar)');
+        _close();
+      };
+      // ═══ POSTPONE — open the full date picker (same flow as Create Appointment). User can
+      // ═══ either pick a new date/time or use the "no date yet" option inside the modal.
+      // ═══ Unifies the postpone UX with the appointment-set UX so admins see the same picker.
+      const _doPostpone=()=>{
+        _openRescheduleFlow(_a);
         _close();
       };
       return<Modal show={true} onClose={_close}>
-        <div style={{padding:4}}>
+        <div style={{width:'100%',maxWidth:440,background:'#0f172a',borderRadius:20,padding:'20px 18px 14px',border:'1px solid var(--border2)',boxShadow:'0 20px 60px rgba(0,0,0,.6)'}}>
           <h3 style={{margin:'0 0 6px',fontSize:16,fontWeight:800,color:'var(--text)'}}>What happened with {_a.name}?</h3>
           <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)',lineHeight:1.5}}>Choose an outcome. Each option has different effects on your appointment count and calendar slot.</p>
           {/* Fly Kite — keeps count */}
-          <button onClick={_doFlyKite} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'linear-gradient(135deg,rgba(248,81,73,.10),rgba(248,81,73,.04))',border:'1px solid rgba(248,81,73,.35)',textAlign:'left',cursor:'pointer'}}>
+          <button onClick={_doFlyKite} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'#1f1418',border:'1px solid rgba(248,81,73,.5)',textAlign:'left',cursor:'pointer'}}>
             <span style={{fontSize:24,lineHeight:1}}>🪁</span>
             <div style={{flex:1}}>
               <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--red)'}}>Fly Kite — client didn't show up</p>
-              <p style={{margin:'3px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Removes the Google Calendar slot but KEEPS the appointment in your list. <strong>Count stays the same</strong> — you still earned the set.</p>
+              <p style={{margin:'3px 0 0',fontSize:10,color:'#cbd5e1',lineHeight:1.4}}>Removes the Google Calendar slot but KEEPS the appointment in your list. <strong>Count stays the same</strong> — you still earned the set.</p>
             </div>
           </button>
           {/* Postpone — keeps count + allows reschedule */}
-          <button onClick={_doPostpone} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'linear-gradient(135deg,rgba(240,180,41,.10),rgba(240,180,41,.04))',border:'1px solid rgba(240,180,41,.35)',textAlign:'left',cursor:'pointer'}}>
+          <button onClick={_doPostpone} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'#1f1a10',border:'1px solid rgba(240,180,41,.5)',textAlign:'left',cursor:'pointer'}}>
             <span style={{fontSize:24,lineHeight:1}}>⏸</span>
             <div style={{flex:1}}>
-              <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--amber)'}}>Postpone — reschedule later</p>
-              <p style={{margin:'3px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Removes the Google Calendar slot and clears the date. The appointment moves to the top of your list (marked "date not set") so you can tap it later to pick a new date. <strong>Count stays the same</strong>.</p>
+              <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--amber)'}}>Postpone — pick new date or mark no-date</p>
+              <p style={{margin:'3px 0 0',fontSize:10,color:'#cbd5e1',lineHeight:1.4}}>Opens the date picker. Pick a new date/time, mark as <strong>shaky</strong> if the lead may cancel, or use the "no date yet" option to keep the slot freeable until the lead confirms. Count stays the same.</p>
             </div>
           </button>
           {/* Delete — decrements count */}
-          <button onClick={_doDelete} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'var(--bg3)',border:'1px solid var(--border)',textAlign:'left',cursor:'pointer'}}>
+          <button onClick={_doDelete} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'#1a1f2e',border:'1px solid var(--border2)',textAlign:'left',cursor:'pointer'}}>
             <span style={{fontSize:24,lineHeight:1}}>🗑</span>
             <div style={{flex:1}}>
-              <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--text2)'}}>Delete — I set this by mistake</p>
-              <p style={{margin:'3px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Removes the Google Calendar slot AND the appointment entirely. <strong>Appointment count is reversed by 1</strong>. Use this only if the set itself was wrong.</p>
+              <p style={{margin:0,fontSize:13,fontWeight:800,color:'#e2e8f0'}}>Delete — I set this by mistake</p>
+              <p style={{margin:'3px 0 0',fontSize:10,color:'#cbd5e1',lineHeight:1.4}}>Removes the Google Calendar slot AND the appointment entirely. <strong>Appointment count is reversed by 1</strong>. Use this only if the set itself was wrong.</p>
             </div>
           </button>
-          <button onClick={_close} style={{width:'100%',padding:'11px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:700,border:'1px solid var(--border)'}}>Cancel</button>
+          <button onClick={_close} style={{width:'100%',padding:'11px',borderRadius:10,background:'#1a1f2e',color:'#94a3b8',fontSize:12,fontWeight:700,border:'1px solid var(--border)'}}>Cancel</button>
         </div>
       </Modal>;
     })()}
