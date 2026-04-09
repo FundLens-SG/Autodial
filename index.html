@@ -2799,9 +2799,11 @@ function App(){
   // ═══   - Admin: cfg + per-admin override from adminConfigs[myEmail] (Main's settings for them)
   // ═══   - Main: cfg with npMax overridden by cfg.mainNpMax (Main's own self-call threshold,
   // ═══     separate from cfg.npMax which is the default Main pushes to admins)
+  // ═══ NOTE: inline the npMax fallback because the n() helper is declared LATER in the
+  // ═══ component and JavaScript const has no hoisting → temporal dead zone crash if we use n() here.
   const myCfg=role==='admin'
     ?(adminConfigs[myEmail]?{...cfg,...adminConfigs[myEmail]}:cfg)
-    :{...cfg,npMax:n(cfg.mainNpMax,cfg.npMax||5)};
+    :{...cfg,npMax:(cfg.mainNpMax&&+cfg.mainNpMax>0)?+cfg.mainNpMax:(cfg.npMax||5)};
   // Safe numeric accessor — config values may be '' (empty string) while user is typing
   const n=(v,def)=>{try{return v===''||v===null||v===undefined||isNaN(+v)?def:+v}catch(e){return def}};
 
