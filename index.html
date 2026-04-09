@@ -266,7 +266,7 @@ window.CREATOR=CREATOR;
 // ═══ APP VERSION — bumped on every build. Clients compare local vs cloud version
 // ═══ (shared_app_version row in Supabase) and prompt for refresh when stale.
 // ═══ Format: YYYY.MM.DD.HHMM — lexicographic compare works because zero-padded.
-window.APP_VERSION='2026.04.10.2000';
+window.APP_VERSION='2026.04.10.2100';
 // ═══ INVITE LINK: parse ?invite=TOKEN from URL, remember the inviting Main ═══
 (function parseInvite(){try{
   var qs=new URLSearchParams(window.location.search);var tok=qs.get('invite');
@@ -1531,6 +1531,8 @@ window.CloudSync={
 
 <script>
 //# sourceURL=autodial-app.js
+(function(){
+function __autodialBoot(){
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 const {
   useState,
@@ -6800,6 +6802,28 @@ function App() {
       }
     });
   }, [appointments, myCfg.targetCalendarId]);
+  useEffect(() => {
+    if (!window._cloudReady) return;
+    const _retry = () => {
+      setAppointments(p => p ? [...p] : p);
+      DBG('[OfflineQueue] Network/focus event — retrying any pending gCal creates');
+    };
+    const _onOnline = () => {
+      toast('🟢 Back online — syncing pending changes…', 'info');
+      _retry();
+    };
+    const _onOffline = () => {
+      toast('🔴 Offline — appointments will sync when reconnected', 'err');
+    };
+    window.addEventListener('online', _onOnline);
+    window.addEventListener('offline', _onOffline);
+    window.addEventListener('focus', _retry);
+    return () => {
+      window.removeEventListener('online', _onOnline);
+      window.removeEventListener('offline', _onOffline);
+      window.removeEventListener('focus', _retry);
+    };
+  }, []);
   useEffect(() => {
     if (!Array.isArray(weekEvents) || !weekEvents.length) return;
     if (!appointments || !appointments.length) return;
@@ -21911,6 +21935,39 @@ WHERE p.id IS NULL;`;
       } catch (_e) {}
       const desc = ['Client: ' + (lead?.name || ''), 'Phone: ' + (lead?.phone || ''), lead?.age ? 'Age: ' + lead.age : '', lead?.email ? 'Email: ' + lead.email : '', lead?.race ? 'Background: ' + lead.race : '', apptObs ? '\nFC Notes:\n' + apptObs : '', lead?.notes ? '\nSheet Remarks: ' + lead.notes : ''].filter(Boolean).join('\n');
       try {
+        const _newStart = new Date(apptDate + 'T' + apptTime).getTime();
+        const _newEnd = _newStart + dur * 60000;
+        const _conflicts = [];
+        (weekEvents || []).forEach(ev => {
+          if (!ev?.start) return;
+          if (ev.status === 'tentative') return;
+          const _evStart = new Date(ev.start.dateTime || ev.start.date || 0).getTime();
+          const _evEnd = new Date(ev.end?.dateTime || ev.end?.date || _evStart).getTime();
+          if (_evStart < _newEnd && _evEnd > _newStart) {
+            _conflicts.push((ev.summary || '(untitled)') + ' at ' + new Date(_evStart).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit'
+            }));
+          }
+        });
+        (appointments || []).forEach(ap => {
+          if (!ap.apptDate || !ap.apptTime) return;
+          if (ap.shaky || ap.followUp === 'postponed' || ap.followUp === 'flykite' || ap.followUp === 'closed') return;
+          if (ap.phone === lead?.phone) return;
+          const _apStart = new Date(ap.apptDate + 'T' + ap.apptTime).getTime();
+          const _apEnd = _apStart + (ap.duration || 60) * 60000;
+          if (_apStart < _newEnd && _apEnd > _newStart) {
+            _conflicts.push((ap.name || '(unknown)') + ' at ' + ap.apptTime);
+          }
+        });
+        if (_conflicts.length) {
+          const _msg = '⚠ Conflict — this slot overlaps:\n\n' + _conflicts.slice(0, 5).map(c => '• ' + c).join('\n') + (_conflicts.length > 5 ? '\n• ...and ' + (_conflicts.length - 5) + ' more' : '') + '\n\nCreate appointment anyway?';
+          if (!confirm(_msg)) return;
+        }
+      } catch (_ce) {
+        console.warn('[Conflict check]', _ce?.message || _ce);
+      }
+      try {
         const s = new Date(apptDate + 'T' + apptTime);
         const end = new Date(s.getTime() + dur * 60000);
         const invites = apptInvite ? apptInvite.split(',').map(s => s.trim()).filter(Boolean) : [];
@@ -25017,6 +25074,15 @@ function initApp() {
   }
 }
 window.initApp = initApp;
+}
+var __t=0;
+function __waitForReact(){
+  if(typeof React!=="undefined"&&typeof ReactDOM!=="undefined"){try{__autodialBoot()}catch(e){console.error("[AutoDial boot]",e);if(window.onerror)window.onerror(e.message||String(e))}}
+  else if(__t++<500){setTimeout(__waitForReact,20)}
+  else{console.error("[AutoDial] React failed to load after 10s");document.body&&(document.body.innerHTML="<div style=\"padding:40px;color:#fff;font-family:system-ui;text-align:center\"><h2>Loading failed</h2><p>React did not load. Check your network connection and try Hard Reload.</p><button onclick=\"location.reload(true)\" style=\"padding:10px 20px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:14px;font-weight:700;cursor:pointer\">↻ Hard Reload</button></div>")}
+}
+__waitForReact();
+})();
 </script>
 </body>
 </html>
