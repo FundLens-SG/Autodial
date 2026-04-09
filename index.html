@@ -1677,7 +1677,34 @@ function findFreeSlots(dayDate,events,bizStartHour,bizEndHour){
   if(cursor<dayEnd){const hours=(dayEnd-cursor)/3600000;if(hours>0.05)slots.push({start:new Date(cursor),end:new Date(dayEnd),hours})}
   return slots;
 }
-const StarRow=({filled,total,color})=><div style={{display:'flex',gap:3,justifyContent:'center'}}>{Array.from({length:Math.min(total,10)}).map((_,i)=><span key={i} style={{fontSize:16,filter:i<filled?'none':'grayscale(1) opacity(.3)',transition:'all .3s'}}>{i<filled?'⭐':'☆'}</span>)}</div>;
+// ═══ Smart StarRow — adapts to any threshold size without visual breakage.
+// ═══   - threshold ≤ 15  → 1 star per appointment (literal: 5 appts = 5 stars)
+// ═══   - threshold 16+   → 10 stars, each = ceil(threshold/10) appts
+//                             (e.g. 30 → 1⭐ = 3 appts; 90 → 1⭐ = 9 appts)
+// ═══   - isMax=true      → 10 fully-filled stars + "MAX RANK" label, no scaling math
+// ═══ A subtitle explains the scale when grouping is active so users aren't confused
+// ═══ ("Each ⭐ = 9 appts"). The progress bar below the chip continues to show the
+// ═══ exact "X / Y" count as the source of truth.
+const StarRow=({filled,total,color,isMax})=>{
+  if(isMax){
+    return<div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
+      <div style={{display:'flex',gap:3,justifyContent:'center'}}>
+        {Array.from({length:10}).map((_,i)=><span key={i} style={{fontSize:16}}>⭐</span>)}
+      </div>
+      <p style={{margin:0,fontSize:9,color:'rgba(255,255,255,.7)',fontWeight:700,letterSpacing:'.5px'}}>★ MAX RANK ★</p>
+    </div>;
+  }
+  const _useGroup=total>15;
+  const _starCount=_useGroup?10:Math.max(1,total);
+  const _per=_useGroup?Math.ceil(total/10):1;
+  const _filledStars=_useGroup?Math.min(_starCount,Math.floor(filled/_per)):Math.min(_starCount,filled);
+  return<div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
+    <div style={{display:'flex',gap:3,justifyContent:'center',flexWrap:'wrap',maxWidth:'100%'}}>
+      {Array.from({length:_starCount}).map((_,i)=><span key={i} style={{fontSize:16,filter:i<_filledStars?'none':'grayscale(1) opacity(.3)',transition:'all .3s'}}>{i<_filledStars?'⭐':'☆'}</span>)}
+    </div>
+    {_useGroup&&<p style={{margin:0,fontSize:9,color:'rgba(255,255,255,.55)',letterSpacing:'.3px'}}>Each ⭐ = {_per} appt{_per===1?'':'s'}</p>}
+  </div>;
+};
 // Keep old tier functions for manage mode pay config compatibility
 const TIER_META=[
   {key:'bronze',label:'Bronze',emoji:'🥉',color:'#cd7f32'},
@@ -5520,8 +5547,8 @@ function App(){
         <div style={{position:'absolute',inset:0,background:'radial-gradient(circle at 50% 30%,rgba(255,255,255,.08),transparent 70%)',pointerEvents:'none'}}/>
         <p style={{fontSize:64,margin:'0 0 4px',filter:'drop-shadow(0 4px 12px rgba(0,0,0,.3))',position:'relative'}}>{displayRank.emoji}</p>
         <h2 style={{fontSize:26,fontWeight:900,color:'#fff',margin:'0 0 6px',textShadow:'0 2px 10px rgba(0,0,0,.3)',position:'relative',letterSpacing:'-.02em'}}>{displayRank.label}</h2>
-        <StarRow filled={starsInTier} total={starsNeeded>10?10:starsNeeded} color={displayRank.color}/>
-        <p style={{margin:'8px 0 0',fontSize:11,color:'rgba(255,255,255,.7)',position:'relative'}}>{monthName} · {monthlyAppts} appointments</p>
+        <StarRow filled={starsInTier} total={starsNeeded} color={displayRank.color} isMax={!displayNext}/>
+        <p style={{margin:'8px 0 0',fontSize:11,color:'rgba(255,255,255,.7)',position:'relative'}}>{isAdminRank?(totalSets+' all-time appointments'):(monthName+' · '+monthlyAppts+' appointments')}</p>
       </div>
 
       {/* Progress to next rank */}
@@ -5554,8 +5581,15 @@ function App(){
 
       {/* Rank Roadmap */}
       <h3 style={{fontSize:13,fontWeight:700,color:'var(--text2)',marginBottom:8}}>🗺️ Rank Roadmap</h3>
-      {(isAdminRank?TIER_RANKS.filter((t,i)=>!myCfg.enabledTiers||myCfg.enabledTiers[i]!==false):ML_RANKS).map((r,i)=>{const isActive=isAdminRank?(tierRank.idx===i):(rank.idx===i),isPast=isAdminRank?(tierRank.idx>i):(rank.idx>i);
-        const tierMin=isAdminRank?((myCfg.tierMins||[0,30,60,100,150,200]).filter((m,j)=>!myCfg.enabledTiers||myCfg.enabledTiers[j]!==false)[i]||0):null;
+      {(()=>{
+        // Defensive: pad enabledTiers to TIER_RANKS.length so a stale 5-element array
+        // saved from an earlier build doesn't accidentally drop Platinum Elite. Missing
+        // indices default to enabled (true).
+        const _enabled=isAdminRank?(()=>{const e=[...(myCfg.enabledTiers||[])];while(e.length<TIER_RANKS.length)e.push(true);return e})():null;
+        const _activeRanks=isAdminRank?TIER_RANKS.filter((t,i)=>_enabled[i]!==false):ML_RANKS;
+        const _activeMins=isAdminRank?(()=>{const m=[...(myCfg.tierMins||[0,30,60,100,150,200])];while(m.length<TIER_RANKS.length)m.push(m[m.length-1]||0);return m.filter((_,i)=>_enabled[i]!==false)})():null;
+        return _activeRanks.map((r,i)=>{const isActive=isAdminRank?(tierRank.idx===i):(rank.idx===i),isPast=isAdminRank?(tierRank.idx>i):(rank.idx>i);
+        const tierMin=isAdminRank?(_activeMins[i]||0):null;
         return<div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:isPast?.5:1}}>
           <div style={{width:42,height:42,borderRadius:12,background:isActive?r.bg:'var(--bg3)',border:'2px solid '+(isActive?r.color:isPast?'var(--green)':'var(--border)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0,boxShadow:isActive?'0 0 16px '+r.glow:'none'}}>
             {isPast?'✓':r.emoji}
@@ -5574,7 +5608,8 @@ function App(){
           </div>
           {isActive&&<span className="pill" style={{background:r.color+'20',color:r.color}}>NOW</span>}
           {isPast&&<span className="pill" style={{background:'var(--gdim)',color:'var(--green)'}}>✓</span>}
-        </div>})}
+        </div>});
+      })()}
     </div>})()}
 
     {/* ═══ LIVE LEADERBOARD ═══ */}
