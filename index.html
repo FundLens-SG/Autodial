@@ -2374,7 +2374,7 @@ function App(){
     // ═══ Merge in calEventId + apptId that the Create Appointment handler stashed before the modal closed.
     // Without this merge, Undo has no calEventId to pass to gCal.del, so the Google Calendar event is orphaned.
     const _pending=appStateRef.current._pendingSetCalEventId||{};
-    appStateRef.current._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now(),calEventId:_pending.calEventId||'',apptId:_pending.apptId||''};
+    appStateRef.current._lastUndo={leadIdx:li,status:'set',prevStatus:'pending',prevNpCount:0,ts:Date.now(),calEventId:_pending.calEventId||'',apptId:_pending.apptId||'',calendarId:_pending.calendarId||'primary'};
     appStateRef.current._pendingSetCalEventId=null;
     setUndoInfo({leadIdx:li,name:leads[li]?.name||'',status:'set',ts:Date.now()});
     // If the WhatsApp modal is open, defer the advance until the user closes it.
@@ -2427,6 +2427,7 @@ function App(){
   const pullAdminAppts=useCallback(async()=>{
     if(role==='admin'||!_SB||!_user)return 0;
     if(_liveSyncRef.current?.clearGuardUntil>Date.now()){DBG('[pullAdminAppts] skipped — clear in progress');return 0}
+    if(_liveSyncRef.current?.localApptsGuardUntil>Date.now()){DBG('[pullAdminAppts] skipped — local appts guard active');return 0}
     try{
       const _adminEmails=Object.keys(adminConfigs||{}).filter(em=>em.includes('@')&&em.toLowerCase()!==myEmail.toLowerCase());
       if(!_adminEmails.length)return 0;
@@ -2945,6 +2946,12 @@ function App(){
   // Auto-clear undo after 10 seconds — but NOT for 'set' status (users want set undo to stick around)
   useEffect(()=>{if(!undoInfo)return;if(undoInfo.status==='set')return;const t=setTimeout(()=>setUndoInfo(null),10000);return()=>clearTimeout(t)},[undoInfo]);
   const doUndo=()=>{if(!undoInfo)return;const u=appStateRef.current._lastUndo;if(!u)return;
+    // ═══ GUARD: Suppress pullAppts for 6s after undo. Without this, the polling cycle
+    // ═══ could read stale cloud data between the local filter and the async cloud delete
+    // ═══ completing, resurrecting the undone appointment. Combined with the same guard
+    // ═══ on Create Appointment, this makes undo → re-set a clean 1→0→1 transition instead
+    // ═══ of the buggy 1→?→2 the user was experiencing.
+    try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
     // ═══ CANCEL any pending auto-advance timer FIRST so we don't advance mid-undo ═══
     if(autoAdvanceTimerRef.current){clearTimeout(autoAdvanceTimerRef.current);autoAdvanceTimerRef.current=null}
     setLeads(p=>p.map((l,i)=>i===u.leadIdx?{...l,status:u.prevStatus,npCount:u.prevNpCount}:l));
@@ -2960,8 +2967,15 @@ function App(){
         setDailySetsStateR(_ds.count);
         if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify({date:getTodaySGT(),count:_ds.count,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'}).catch(()=>{})
       }
-      // Delete the Google Calendar event if one was created
-      if(u.calEventId&&window.gCal){gCal.del(u.calEventId).then(ok=>{if(ok)DBG('[Undo] gCal event deleted')}).catch(()=>{})}
+      // Delete the Google Calendar event if one was created. Pass the SAME calendarId that was
+      // used at creation time — using 'primary' as default silently failed when the appt was
+      // on a non-primary target calendar, leaving ghost events on Google Calendar.
+      if(u.calEventId&&window.gCal){
+        gCal.del(u.calEventId,u.calendarId||'primary').then(ok=>{
+          if(ok)DBG('[Undo] gCal event deleted from',u.calendarId||'primary');
+          else toast('⚠ Could not delete calendar event — check Google Calendar manually','err');
+        }).catch(()=>{toast('⚠ Calendar delete failed — remove manually','err')});
+      }
       // ═══ Also strip from the local weekEvents cache so the Cal tab updates without a refresh
       if(u.calEventId)setWeekEvents(prev=>prev.filter(ev=>ev.id!==u.calEventId));
       // Remove the appointment — BUG FIX: appointments use .followUp, not .status
@@ -3166,13 +3180,21 @@ function App(){
       try{
         const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','asess_'+_user.email.toLowerCase()).single();
         if(cancelled||!r.data?.biz_name)return;
-        const cloudSess=JSON.parse(r.data.biz_name);
+        let cloudSess=JSON.parse(r.data.biz_name);
+        // ═══ Unwrap envelope format `{data, ts, devId}` from _useSyncedPush. Legacy format
+        // ═══ was the bare nested map. Without this unwrap, Object.entries iterates envelope
+        // ═══ keys (data/ts/devId) and tries to .filter() on them → crash.
+        if(cloudSess&&typeof cloudSess==='object'&&!Array.isArray(cloudSess)&&'data' in cloudSess&&('ts' in cloudSess||'devId' in cloudSess)){
+          cloudSess=cloudSess.data||{};
+        }
         if(cloudSess&&typeof cloudSess==='object'){
           // Merge by admin email + dedup by session startTime + filter out suppressed keys
           setAdminSessions(prev=>{const next={...prev};
             Object.entries(cloudSess).forEach(([em,ss])=>{
+              // Defensive: skip any value that isn't an array (envelope leakage, legacy corruption)
+              if(!Array.isArray(ss))return;
               const ex=new Set((next[em]||[]).map(s=>s.startTime));
-              const fresh=(ss||[]).filter(s=>!ex.has(s.startTime)&&!sessSuppress.has(_suppKey(em,s.startTime)));
+              const fresh=ss.filter(s=>!ex.has(s.startTime)&&!sessSuppress.has(_suppKey(em,s.startTime)));
               if(fresh.length||!next[em])next[em]=[...(next[em]||[]),...fresh].sort((a,b)=>(b.startTime||0)-(a.startTime||0))
             });
             return next
@@ -3928,6 +3950,7 @@ function App(){
     apptsPushTimer:null,   // 800ms debounce timer for appointments push
     hasPulledOnce:false,   // gates the write-through so we never push before pulling cloud state once
     clearGuardUntil:0,     // timestamp until which appt pulls/aggregations are suppressed (set by Clear All flow)
+    localApptsGuardUntil:0, // ═══ NEW: set when user creates/edits/undoes appt locally — suppresses pullAppts for ~5s so the async write-through has time to hit cloud before polling reads it back. Without this, pullAppts would read stale cloud data and overwrite the fresh local state, making new appointments "vanish" 2 seconds after Set.
   });
   // Visible sync status: 'idle' | 'pushing' | 'pulling' | 'synced' | 'offline'
   const[syncStatus,setSyncStatus]=useState('idle');
@@ -4139,6 +4162,7 @@ function App(){
           // local edit the user just made. The pending push will reconcile cloud within 800ms.
           if(_liveSyncRef.current.apptsPushTimer){DBG('[LiveSync] pullAppts skipped — local push pending');return}
           if(_liveSyncRef.current.clearGuardUntil>Date.now()){DBG('[LiveSync] pullAppts skipped — clear in progress');return}
+          if(_liveSyncRef.current.localApptsGuardUntil>Date.now()){DBG('[LiveSync] pullAppts skipped — local appts guard active');return}
           if(p&&Array.isArray(p.appts)){
             const newHash=_hashAppts(p.appts);
             if(newHash!==_liveSyncRef.current.lastApptsHash){
@@ -5138,7 +5162,14 @@ function App(){
 
     {/* ═══ HOME DASHBOARD (Main / Manage mode) ═══ */}
     {tab==='home'&&isManageMode&&(()=>{
-      const _adminEntriesH=Object.entries(adminSessions||{}).filter(([em])=>(em||'').toLowerCase()!==myEmail.toLowerCase());
+      // ═══ DEFENSIVE NORMALIZATION: coerce every per-email value to an array at construction.
+      // ═══ Stale cloud rows or legacy bugs can leave non-array values in adminSessions which
+      // ═══ crashed downstream `ss.filter` / `ss.some` / `ss.reduce` calls with
+      // ═══ "(ss || []).filter is not a function". Guarding here once means we don't need to
+      // ═══ guard at every consumer site.
+      const _adminEntriesH=Object.entries(adminSessions||{})
+        .filter(([em])=>(em||'').toLowerCase()!==myEmail.toLowerCase())
+        .map(([em,v])=>[em,Array.isArray(v)?v:[]]);
       const _todayKey=new Date().toDateString();
       const _oneDay=86400000;const _now=Date.now();
       // Admins owed money
@@ -6675,7 +6706,7 @@ function App(){
           {isCallMode&&role!=='admin'&&sessionLog.length>0&&<button onClick={()=>{if(!confirm('⚠️ Delete ALL '+sessionLog.length+' sessions?\n\nThis will reset pay history and cannot be undone.'))return;setSessionLog([]);save('slog',[]);cloudSave('slog',[]);toast('All sessions cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
           {isManageMode&&_allAdminSessions.length>0&&<button onClick={()=>{if(!confirm('⚠️ Clear ALL admin sessions from this view?\n\nThis only clears the cached list ('+_allAdminSessions.length+' sessions across '+_adminEntries.length+' admins). Admins keep their own copies.'))return;
             // ═══ Resurrection fix: add every visible session key to the suppress set so Pull from Cloud won't rehydrate them
-            const _keys=[];Object.entries(adminSessions).forEach(([em,list])=>{(list||[]).forEach(s=>{if(s.startTime)_keys.push(_suppKey(em,s.startTime))})});
+            const _keys=[];Object.entries(adminSessions).forEach(([em,list])=>{(Array.isArray(list)?list:[]).forEach(s=>{if(s.startTime)_keys.push(_suppKey(em,s.startTime))})});
             if(_keys.length)setSessSuppress(prev=>{const n=new Set(prev);_keys.forEach(k=>n.add(k));return n});
             setAdminSessions({});toast('Admin sessions cleared')}} style={{padding:'3px 8px',borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:600,border:'1px solid rgba(248,81,73,.2)'}}>🗑 Clear All</button>}
         </div>
@@ -8525,7 +8556,7 @@ WHERE p.id IS NULL;`;
               // ═══ Stash calEventId + apptId in a pending ref so the useEffect that builds _lastUndo
               // (which fires AFTER showAppt flips false) can merge them in. The earlier approach of
               // patching _lastUndo directly here was a no-op because _lastUndo.status!=='set' yet at this point.
-              appStateRef.current._pendingSetCalEventId={calEventId:evt?.id||'',apptId:lead?.phone||''};
+              appStateRef.current._pendingSetCalEventId={calEventId:evt?.id||'',apptId:lead?.phone||'',calendarId:myCfg.targetCalendarId||'primary'};
               // ═══ DEFENSIVE UPDATE: find the pending appt for this lead (by leadId or phone). If it
               // exists, update it with apptDate/apptTime/calEventId. If it's MISSING (e.g. clobbered by
               // a pullAppts race, or filtered out by an overzealous blocklist, or dedup misfire in
@@ -8543,6 +8574,9 @@ WHERE p.id IS NULL;`;
                   followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail,
                   calEventId:evt?.id||'',shaky:apptShaky}];
               });
+              // ═══ Set local guard so pullAppts doesn't overwrite the fresh state with stale cloud data.
+              // ═══ The async DB.saveAppt needs ~1-2s to propagate; we guard for 6s as a safety margin.
+              try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
               // Invalidate picker cache so the new booking shows up on next open
               pickerEventsCacheRef.current={key:'',ts:0,data:null};
               setShowWA({name:lead?.name,phone:lead?.phone,date:apptDate,time:apptTime});
