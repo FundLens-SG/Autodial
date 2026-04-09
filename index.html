@@ -565,15 +565,22 @@ async function authCheck(){try{
       var rev=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','revoked_'+(_user.email||'').toLowerCase()).maybeSingle();
       if(rev&&rev.data&&rev.data.biz_name){
         var rd=JSON.parse(rev.data.biz_name);
-        var lastSeen=parseInt(localStorage.getItem('_lastRevokedSeen')||'0');
-        if(rd.revokedAt&&rd.revokedAt>lastSeen){
-          console.warn('[Auth] Admin revoked at',new Date(rd.revokedAt).toISOString(),'by',rd.revokedBy);
-          // Wipe local app data immediately so even if they bypass the lock screen, nothing is left
-          try{
-            var keys=Object.keys(localStorage).filter(function(k){return k.startsWith('ad3_')||k==='ad_gt'||k==='ad_gt_ts'||k==='ad_g_ever'});
-            keys.forEach(function(k){try{localStorage.removeItem(k)}catch(_e){}});
-          }catch(_e){}
-          authShow('revoked');return;
+        // Guard 1: Main re-added → cleared flag set → skip revocation
+        if(rd&&rd._cleared){/* fall through to authGrant */}
+        // Guard 2: revokedAt must be > 0 AND newer than what this device has acknowledged
+        else if(rd&&rd.revokedAt&&rd.revokedAt>0){
+          var lastSeen=parseInt(localStorage.getItem('_lastRevokedSeen')||'0');
+          if(rd.revokedAt>lastSeen){
+            console.warn('[Auth] Admin revoked at',new Date(rd.revokedAt).toISOString(),'by',rd.revokedBy);
+            // Persist seen marker BEFORE wipe + re-save AFTER wipe so loops are impossible
+            try{localStorage.setItem('_lastRevokedSeen',String(rd.revokedAt))}catch(_e){}
+            try{
+              var keys=Object.keys(localStorage).filter(function(k){return k.startsWith('ad3_')||k==='ad_gt'||k==='ad_gt_ts'||k==='ad_g_ever'});
+              keys.forEach(function(k){try{localStorage.removeItem(k)}catch(_e){}});
+              localStorage.setItem('_lastRevokedSeen',String(rd.revokedAt));
+            }catch(_e){}
+            authShow('revoked');return;
+          }
         }
       }
     }catch(re){console.warn('[Auth] revoke check failed:',re?.message)}
@@ -2751,15 +2758,24 @@ function App(){
         const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','revoked_'+myEmail.toLowerCase()).maybeSingle();
         if(r&&r.data&&r.data.biz_name){
           let rd;try{rd=JSON.parse(r.data.biz_name)}catch(_e){return}
-          if(rd&&rd.revokedAt){
+          // ═══ Guard 1: explicit cleared flag (Main re-added the admin) — skip
+          if(rd&&rd._cleared)return;
+          // ═══ Guard 2: revokedAt must be a positive number (0/null/missing means cleared)
+          if(rd&&rd.revokedAt&&rd.revokedAt>0){
             const lastSeen=parseInt(localStorage.getItem('_lastRevokedSeen')||'0');
             if(rd.revokedAt>lastSeen){
               console.warn('[AdminRevoke] runtime revocation detected — locking out');
               _stopped=true;
+              // ═══ CRITICAL: persist the seen marker BEFORE wiping localStorage so the next login
+              // ═══ doesn't re-fire on the same revokedAt. Without this, an admin who Main re-adds
+              // ═══ but whose cloud row update propagates slowly would loop on every reload.
+              try{localStorage.setItem('_lastRevokedSeen',String(rd.revokedAt))}catch(_e){}
               // Wipe ALL local autodial state — Google tokens, leads cache, sessions, configs
+              // (preserve _lastRevokedSeen by re-saving after the wipe)
               try{
                 const keys=Object.keys(localStorage).filter(k=>k.startsWith('ad3_')||k==='ad_gt'||k==='ad_gt_ts'||k==='ad_g_ever'||k.startsWith('ad_'));
                 keys.forEach(k=>{try{localStorage.removeItem(k)}catch(_e){}});
+                localStorage.setItem('_lastRevokedSeen',String(rd.revokedAt));
               }catch(_e){}
               // Force sign-out, which redirects to auth-gate where authCheck will hit the lock screen
               toast('🔒 Your account has been removed by your manager','err');
@@ -7030,11 +7046,22 @@ function App(){
           </div>
           <button onClick={async()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
             setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:true,bizName:'',payNow:'',timesheetId:''}}));
-            // Clear the revocation flag if this admin was previously removed — re-adding restores access
+            // ═══ Clear the revocation flag if this admin was previously removed.
+            // ═══ DELETE often fails silently under Supabase RLS — UPSERT with cleared content
+            // ═══ is RLS-safe and the runtime poll's `if(rd && rd.revokedAt)` truthy check
+            // ═══ skips the lockout when revokedAt is 0/null/missing.
             if(_SB){
               try{
-                await _SB.from('autodial_admin_config').delete().eq('admin_email','revoked_'+em);
-              }catch(e){}
+                await _SB.from('autodial_admin_config').upsert({
+                  admin_email:'revoked_'+em,
+                  biz_name:JSON.stringify({revokedAt:0,clearedAt:Date.now(),clearedBy:myEmail,_cleared:true})
+                },{onConflict:'admin_email'});
+                // Also restore shared_admincfg (the previous revoke wiped it)
+                await _SB.from('autodial_admin_config').upsert({
+                  admin_email:'shared_admincfg_'+em,
+                  biz_name:JSON.stringify({})
+                },{onConflict:'admin_email'});
+              }catch(e){console.warn('[Re-add]',e?.message||e)}
             }
             setNewAdminEmail('');toast('Added '+em)}} style={{padding:'0 16px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Add</button>
         </div>
