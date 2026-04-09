@@ -16,11 +16,11 @@
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preconnect" href="https://mgbxxwoasrwlraffcvab.supabase.co" crossorigin>
-<!-- ═══ CRITICAL PATH: Supabase synchronous (needed for inline auth scripts below) ═══ -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<!-- ═══ DEFERRED: React + Babel load in parallel during HTML parse, execute in order after. ═══
-     Babel auto-compiles <script type="text/babel"> blocks on DOMContentLoaded which fires
-     AFTER these defer scripts execute, so React/ReactDOM are available by then. -->
+<!-- ═══ ALL CDN scripts now load via defer in parallel during HTML parse.
+     Supabase used to be synchronous which blocked the auth-gate from painting until it
+     downloaded (~400-2000ms on mobile). Inline body scripts now wait for window.supabase
+     via a polling helper before initializing _SB + authCheck. ═══ -->
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -221,12 +221,11 @@ button:active{transform:scale(.97)}
     <div style="margin-bottom:14px"><label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Password</label><input type="password" id="auth-spass" placeholder="Min 6 chars"></div>
     <div style="margin-bottom:16px">
       <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">Account Type</label>
-      <div style="display:flex;gap:6px" id="signup-role-pick">
-        <button type="button" data-sr="admin" id="sr-admin" style="flex:1;padding:12px 8px;border-radius:12px;background:var(--adim);color:#f1f5f9;font-size:12px;font-weight:700;border:2px solid var(--accent);cursor:pointer;text-align:center">Admin</button>
-        <button type="button" data-sr="main" id="sr-main" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">Main</button>
-        <button type="button" data-sr="both" id="sr-both" style="flex:1;padding:12px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:12px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">Both</button>
+      <div style="display:flex;gap:8px" id="signup-role-pick">
+        <button type="button" data-sr="admin" id="sr-admin" style="flex:1;padding:14px 8px;border-radius:12px;background:var(--adim);color:#f1f5f9;font-size:13px;font-weight:700;border:2px solid var(--accent);cursor:pointer;text-align:center">👤 Admin</button>
+        <button type="button" data-sr="main" id="sr-main" style="flex:1;padding:14px 8px;border-radius:12px;background:transparent;color:var(--text3);font-size:13px;font-weight:700;border:2px solid transparent;cursor:pointer;text-align:center">👔 Main</button>
       </div>
-      <p style="font-size:9px;color:var(--text3);margin-top:6px;text-align:center">Owner will review and approve your account</p>
+      <p style="font-size:9px;color:var(--text3);margin-top:8px;text-align:center">Owner will review and approve your account before access is granted</p>
     </div>
     <button class="bp" id="btn-signup">Create Account</button>
     <button class="bs" id="btn-goback">← Back</button>
@@ -279,9 +278,18 @@ window._setupCreator=function(email){localStorage.setItem('autodial_creator',ema
 function pickRole(r){window._role=r;var a=document.getElementById('btn-admin'),m=document.getElementById('btn-main');
   a.style.background=r==='admin'?'var(--adim)':'transparent';a.style.borderColor=r==='admin'?'var(--accent)':'transparent';a.style.color=r==='admin'?'#f1f5f9':'var(--text3)';
   m.style.background=r==='main'?'var(--adim)':'transparent';m.style.borderColor=r==='main'?'var(--accent)':'transparent';m.style.color=r==='main'?'#f1f5f9':'var(--text3)'}
-try{if(window.supabase)_SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'}})}catch(e){}
-// Polyfill: ensure Supabase builders have .catch() (UMD bundle may only have .then())
-if(_SB){try{var _origFrom=_SB.from.bind(_SB);_SB.from=function(){var builder=_origFrom.apply(this,arguments);var _origUpsert=builder.upsert;if(_origUpsert)builder.upsert=function(){var r=_origUpsert.apply(builder,arguments);if(r&&!r.catch&&typeof r.then==='function'){r.catch=function(fn){return r.then(null,fn)}}return r};return builder}}catch(e){console.warn('[Supabase polyfill]',e)}}
+// ═══ Supabase init is now deferred — see polling block at end of file. _SB starts null and
+// ═══ is populated by _initSupabaseClient() once the defer'd Supabase script finishes loading.
+function _initSupabaseClient(){
+  if(_SB)return true;
+  if(!window.supabase)return false;
+  try{
+    _SB=window.supabase.createClient(SB_URL,SB_KEY,{auth:{storageKey:'autodial-auth',autoRefreshToken:true,persistSession:true,detectSessionInUrl:false,flowType:'implicit'}});
+    // Polyfill: ensure Supabase builders have .catch() (UMD bundle may only have .then())
+    try{var _origFrom=_SB.from.bind(_SB);_SB.from=function(){var builder=_origFrom.apply(this,arguments);var _origUpsert=builder.upsert;if(_origUpsert)builder.upsert=function(){var r=_origUpsert.apply(builder,arguments);if(r&&!r.catch&&typeof r.then==='function'){r.catch=function(fn){return r.then(null,fn)}}return r};return builder}}catch(e){console.warn('[Supabase polyfill]',e)}
+    return true;
+  }catch(e){console.warn('[Supabase init]',e);return false}
+}
 
 
 function authMsg(t,type){var e=document.getElementById('auth-message');e.style.display='block';e.style.background=type==='i'?'var(--gdim)':'var(--rdim)';e.style.color=type==='i'?'var(--green)':'var(--red)';e.style.border='1px solid '+(type==='i'?'rgba(63,185,80,.2)':'rgba(248,81,73,.2)');e.textContent=t}
@@ -335,44 +343,141 @@ window.playTipSound=function(tier){
 
 async function authLogin(){authClear();var e=document.getElementById('auth-email').value.trim(),p=document.getElementById('auth-pass').value;
   if(!e||!p)return authMsg('Enter email and password');
+  // ═══ Make sure Supabase is ready before attempting auth (in case user clicks fast)
+  if(!_SB&&!_initSupabaseClient())return authMsg('Still loading… please try again in a moment');
   authMsg('Signing in…','i');
-  try{var r=await _SB.auth.signInWithPassword({email:e,password:p});if(r.error)return authMsg(r.error.message);
-    _SB.auth.getSession().then(function(s){_user=s?.data?.session?.user||{email:e}});_prof={email:e,role:'admin'};
-    if(isCreator(e)){window._role='main';authGrant();return}
-    // ═══ DB IS AUTHORITATIVE: role comes from the profiles table, not the picker.
-    // Previously the login enforced that the user manually picked the right role, which broke
-    // when window._role was stale from a prior session and the user had no way to fix it.
-    try{var sess=await _SB.auth.getSession();if(sess.data?.session?.user){
-      var pr=await _SB.from('profiles').select('approved,autodial_role,role').eq('id',sess.data.session.user.id).single();
-      if(pr.data){
-        if(!pr.data.approved){authShow('pending');return}
-        var storedRole=(pr.data.autodial_role||pr.data.role||'admin').toLowerCase();
-        window._role=storedRole==='main'?'main':'admin';
-        _prof.role=window._role;
+  try{
+    var r=await _SB.auth.signInWithPassword({email:e,password:p});
+    if(r.error)return authMsg(r.error.message);
+    // ═══ Use the session from signInWithPassword's response directly — no second getSession() round-trip
+    _user=r.data?.user||{email:e};
+    _prof={email:e,role:'admin'};
+    // Creator override — instant grant, no DB check needed
+    if(isCreator(e)){window._role='main';authMsg('Loading app…','i');authGrant();return}
+    // ═══ SECURITY: profile fetch with explicit DENY default. Approval is required.
+    authMsg('Verifying account…','i');
+    var pr;
+    try{pr=await _SB.from('profiles').select('approved,autodial_role,role,full_name').eq('id',_user.id).maybeSingle()}
+    catch(pe){return authMsg('Unable to verify account. Try again or contact the owner.')}
+    if(!pr||!pr.data){
+      // ═══ SELF-HEAL: user has auth.users row but no profiles row. Auto-create one with
+      // approved:false so the creator can see them in the pending list on next refresh.
+      // Common cause: user was added via Supabase dashboard directly, or signed up during
+      // an older version of the app where the profiles upsert didn't fire.
+      authMsg('First login — creating profile…','i');
+      try{
+        var _heal=await _SB.from('profiles').upsert({
+          id:_user.id,
+          email:e,
+          full_name:_user.user_metadata?.full_name||e.split('@')[0],
+          approved:false,
+          role:'admin',
+          autodial_role:'admin',
+          requested_role:'admin'
+        });
+        if(_heal&&_heal.error)throw _heal.error;
+      }catch(he){
+        console.warn('[Auth] self-heal upsert failed:',he);
+        try{await _SB.auth.signOut()}catch(_e){}
+        return authMsg('No profile found and could not create one: '+(he?.message||'unknown')+'. Contact the owner.')
       }
-    }}catch(pe){}
-    authGrant()}catch(err){authMsg(err.message)}}
+      // Profile now exists but is unapproved — show pending screen
+      try{await _SB.auth.signOut()}catch(_e){}
+      authShow('pending');return;
+    }
+    if(pr.data.approved!==true){
+      try{await _SB.auth.signOut()}catch(_e){}
+      authShow('pending');return;
+    }
+    var storedRole=(pr.data.autodial_role||pr.data.role||'').toLowerCase();
+    if(!storedRole){
+      try{await _SB.auth.signOut()}catch(_e){}
+      return authMsg('Account approved but no role assigned. Contact the owner.')
+    }
+    window._role=storedRole==='main'?'main':'admin';
+    _prof.role=window._role;
+    _prof.full_name=pr.data.full_name||e;
+    authMsg('Loading app…','i');
+    authGrant()
+  }catch(err){authMsg(err.message)}}
 
 async function authSignup(){authClear();var n=document.getElementById('auth-sname').value.trim(),e=document.getElementById('auth-semail').value.trim(),p=document.getElementById('auth-spass').value;
   if(!n||!e||!p)return authMsg('Fill all fields');if(p.length<6)return authMsg('6+ chars');
-  authMsg('Creating…','i');
-  try{var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});if(r.error)return authMsg(r.error.message);
-    // If no creator configured yet, first signup becomes creator
-    var firstUser=CREATOR.length===0||CREATOR[0]==='admin';
-    if(firstUser){window._setupCreator(e)}
+  if(!window._signupRole)return authMsg('Select Admin or Main above');
+  if(!_SB&&!_initSupabaseClient())return authMsg('Still loading… please try again in a moment');
+  authMsg('Creating account…','i');
+  try{
+    var r=await _SB.auth.signUp({email:e,password:p,options:{data:{full_name:n}}});
+    if(r.error)return authMsg(r.error.message);
+    if(!r.data?.user)return authMsg('Sign up failed — no user returned');
     var cr=isCreator(e);
     var _inviteFrom=localStorage.getItem('autodial_invite_from')||'';
-    if(r.data?.user){
-      var reqRole=window._signupRole||window._role||'admin';try{await _SB.from('profiles').upsert({id:r.data.user.id,email:e,full_name:n,approved:cr||firstUser||!!_inviteFrom,role:reqRole,autodial_role:reqRole,requested_role:reqRole,invited_by:_inviteFrom||null})}catch(ue){console.warn('Profile:',ue)}
-      // If invited, also write a lightweight hint record the Main can pick up to auto-init adminConfigs
-      if(_inviteFrom){try{await _SB.from('autodial_admin_config').upsert({admin_email:'invite_'+_inviteFrom.toLowerCase()+'_'+e.toLowerCase(),biz_name:JSON.stringify({invitee:e,invitee_name:n,main:_inviteFrom,ts:Date.now()})},{onConflict:'admin_email'})}catch(ue){}}
-      if(cr||firstUser||_inviteFrom){_user=r.data.user;_prof={email:e,full_name:n,approved:true,role:window._role,invited_by:_inviteFrom||null};authGrant();return}}
-    authMsg('Created! Awaiting approval.','i');setTimeout(function(){authShow('pending')},1500)}catch(err){authMsg(err.message)}}
+    var reqRole=window._signupRole==='main'?'main':'admin';
+    var _approved=cr; // ═══ SECURITY: only the creator is auto-approved. Invites do NOT bypass approval.
+    // ═══ SECURITY: profiles upsert MUST succeed. If it fails, sign the user out so they can't
+    // ═══ silently use the auth session without a profile record. Owner needs the row to manage them.
+    authMsg('Setting up your profile…','i');
+    try{
+      var _ur=await _SB.from('profiles').upsert({
+        id:r.data.user.id,
+        email:e,
+        full_name:n,
+        approved:_approved,
+        role:reqRole,
+        autodial_role:reqRole,
+        requested_role:reqRole,
+        invited_by:_inviteFrom||null
+      });
+      if(_ur&&_ur.error)throw _ur.error;
+    }catch(ue){
+      console.warn('[Auth] profiles upsert failed:',ue);
+      try{await _SB.auth.signOut()}catch(_e){}
+      return authMsg('Could not create profile: '+(ue?.message||'unknown error')+'. Contact the owner.')
+    }
+    // Optional: write the invite hint record so the inviting Main can pick this signup up automatically
+    if(_inviteFrom){try{await _SB.from('autodial_admin_config').upsert({admin_email:'invite_'+_inviteFrom.toLowerCase()+'_'+e.toLowerCase(),biz_name:JSON.stringify({invitee:e,invitee_name:n,main:_inviteFrom,ts:Date.now()})},{onConflict:'admin_email'})}catch(ue){}}
+    if(_approved){
+      // Creator only — instant grant
+      _user=r.data.user;
+      _prof={email:e,full_name:n,approved:true,role:reqRole};
+      window._role=reqRole;
+      authMsg('Loading app…','i');
+      authGrant();return;
+    }
+    // Everyone else — sign out, show pending
+    try{await _SB.auth.signOut()}catch(_e){}
+    authMsg('✓ Account created! Awaiting Owner approval.','i');
+    setTimeout(function(){authShow('pending')},1500)
+  }catch(err){authMsg(err.message||'Sign up failed')}}
 
 async function authLogout(){try{await _SB.auth.signOut()}catch(e){}_user=null;_prof=null;localStorage.removeItem('autodial_role');localStorage.removeItem('autodial_claude_key');window._mounted=false;document.getElementById('auth-gate').style.display='flex';document.getElementById('root').innerHTML='';authShow('login')}
 window.authLogout=authLogout;
 
-function authGrant(){document.getElementById('auth-gate').style.display='none';window._user=_user;window._prof=_prof;if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';
+function authGrant(){
+  // ═══ PERF: do NOT hide the auth-gate immediately. Babel takes 1-3s to compile the JSX block
+  // ═══ on slow devices, and during that window the user would see a black screen. Instead,
+  // ═══ swap the auth gate content to a loading spinner, and only hide when initApp is ready.
+  try{
+    var _gate=document.getElementById('auth-gate');
+    var _login=document.getElementById('auth-login');
+    var _signup=document.getElementById('auth-signup');
+    var _pending=document.getElementById('auth-pending');
+    if(_login)_login.style.display='none';
+    if(_signup)_signup.style.display='none';
+    if(_pending)_pending.style.display='none';
+    var _loader=document.getElementById('auth-loader');
+    if(!_loader){
+      _loader=document.createElement('div');
+      _loader.id='auth-loader';
+      _loader.style.cssText='text-align:center;padding:24px';
+      _loader.innerHTML='<div style="display:inline-block;width:48px;height:48px;border:4px solid rgba(99,102,241,.2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:14px"></div><p style="color:var(--accent2);font-weight:700;font-size:15px;margin:0">Loading app…</p><p id="auth-loader-detail" style="color:var(--text3);font-size:11px;margin-top:4px">Compiling interface</p>';
+      var _ac=_gate?_gate.querySelector('.ac'):null;
+      if(_ac)_ac.appendChild(_loader);else if(_gate)_gate.appendChild(_loader);
+    }
+    _loader.style.display='block';
+  }catch(e){}
+  window._user=_user;window._prof=_prof;
+  if(isCreator((_prof?.email||'').toLowerCase()))window._role='main';
   // ═══ HARD SYNC: Clear local data so cloud data takes priority ═══
   var _prevUser=localStorage.getItem('autodial_last_user');var _curUser=(_prof?.email||_user?.email||'').toLowerCase();
   if(_prevUser&&_prevUser!==_curUser){console.log('[AutoDial] Different user detected — clearing local data for cloud sync');
@@ -383,31 +488,86 @@ function authGrant(){document.getElementById('auth-gate').style.display='none';w
   var _mt=0;
   function tryMount(){
     _mt++;
+    // Update loader detail every 1s so user sees progress
+    if(_mt===20){try{var _d=document.getElementById('auth-loader-detail');if(_d)_d.textContent='Still compiling…'}catch(e){}}
+    if(_mt===60){try{var _d2=document.getElementById('auth-loader-detail');if(_d2)_d2.textContent='Almost there…'}catch(e){}}
     if(typeof window.initApp==='function'){
       DBG('[AutoDial] Mounting app');
+      // NOW hide the auth gate — app is actually ready
+      try{var _g=document.getElementById('auth-gate');if(_g)_g.style.display='none'}catch(e){}
       if(!window._mounted){window._mounted=true;window.initApp()}
       else{document.getElementById('root').innerHTML='';window.initApp()}
-    }else if(_mt>100){
-      console.error('[AutoDial] Babel failed to compile after 5s');
+    }else if(_mt>200){
+      console.error('[AutoDial] Babel failed to compile after 10s');
       document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center"><h2 style="color:#f87171">Loading Error</h2><p style="color:#8b949e">App failed to compile. Try hard refresh (Ctrl+Shift+R).</p><button onclick="localStorage.clear();location.reload()" style="margin-top:16px;padding:12px 24px;background:#6366f1;color:white;border:none;border-radius:10px;cursor:pointer;font-size:14px">Clear Cache & Reload</button></div>';
+      try{var _g2=document.getElementById('auth-gate');if(_g2)_g2.style.display='none'}catch(e){}
     }else{setTimeout(tryMount,50)}
   }
-  tryMount()}
+  tryMount()
+}
 
-async function authCheck(){try{if(!_SB){authGrant();return}var s=await _SB.auth.getSession();if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}
+async function authCheck(){try{
+  if(!_SB){authGrant();return}
+  var s=await _SB.auth.getSession();
+  if(!s.data?.session){document.getElementById('auth-gate').style.display='flex';return}
   _user=s.data.session.user;
-  // Always set _prof with auth email as fallback (profiles query may 403)
+  // ═══ SECURITY: profile fetch with explicit DENY default. Previously a failed query
+  // ═══ silently fell through to authGrant() — that was the unauthorized-access bypass.
   _prof={email:_user.email,full_name:_user.user_metadata?.full_name||_user.email,role:'admin'};
-  try{var p=await _SB.from('profiles').select('*').eq('id',_user.id).single();if(p.data){_prof=Object.assign({},_prof,p.data);if(!p.data.approved&&!isCreator(_user.email)){authShow('pending');return}}}catch(pe){console.warn('[Auth] Profile fetch failed, using session data')}
-  // Use PROFILE role from DB (authoritative), not stale localStorage
-  var dbRole=_prof?.autodial_role||_prof?.role||null;
-  var sr=localStorage.getItem('autodial_role');
-  if(isCreator((_prof?.email||_user?.email||'').toLowerCase())){window._role='main';authGrant()}
-  else if(dbRole){window._role=dbRole;authGrant()}
-  else if(sr){window._role=sr;authGrant()}
-  else{document.getElementById('auth-gate').style.display='flex'}}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
+  // Creator override: hardcoded creator email always grants, no DB check needed
+  if(isCreator((_user.email||'').toLowerCase())){window._role='main';authGrant();return}
+  var p;
+  try{p=await _SB.from('profiles').select('*').eq('id',_user.id).maybeSingle()}
+  catch(pe){console.warn('[Auth] profiles fetch failed:',pe?.message);
+    authMsg('Unable to verify your account. Please try again or contact the owner.','e');
+    document.getElementById('auth-gate').style.display='flex';return}
+  if(!p||!p.data){
+    // No profiles row exists — show pending instead of granting access
+    console.warn('[Auth] no profiles row for user; showing pending');
+    authShow('pending');return;
+  }
+  _prof=Object.assign({},_prof,p.data);
+  if(p.data.approved!==true){authShow('pending');return}
+  var dbRole=p.data.autodial_role||p.data.role||null;
+  if(!dbRole){
+    // Approved but no role assigned — owner needs to set one
+    authMsg('Account approved but no role assigned. Contact the owner.','e');
+    authShow('pending');return;
+  }
+  window._role=dbRole==='main'?'main':'admin';
+  authGrant();
+}catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
 
-if(_SB){try{authCheck().catch(function(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'})}catch(e){console.warn('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}else{document.getElementById('auth-gate').style.display='none';_user={id:'local'};_prof={full_name:'User'};var _mt2=0;function _tryMount(){_mt2++;if(typeof window.initApp==='function'){if(!window._mounted){window._mounted=true;window.initApp()}}else if(_mt2<100){setTimeout(_tryMount,50)}else{console.error('[AutoDial] Babel timeout')}}setTimeout(_tryMount,100)}
+// ═══ DEFERRED AUTH BOOTSTRAP — waits for the defer'd Supabase script to load before running authCheck.
+// Previously this block ran immediately at parse time when _SB was still null (because Supabase is
+// defer'd), which short-circuited into the local-only fallback path with NO auth checks. That bypass
+// is what allowed unapproved users to access the app.
+(function _bootAuth(){
+  // Make sure the auth gate is visible while we wait for Supabase to download
+  try{var _g=document.getElementById('auth-gate');if(_g)_g.style.display='flex'}catch(e){}
+  var _attempts=0;
+  var _maxAttempts=200; // 200 × 50ms = 10s budget
+  var _tick=function(){
+    _attempts++;
+    // Try to init Supabase; succeeds once the defer'd script has loaded
+    if(_initSupabaseClient()){
+      try{authCheck().catch(function(e){console.warn('[Auth]',e);try{document.getElementById('auth-gate').style.display='flex'}catch(_e){}})}
+      catch(e){console.warn('[Auth]',e);try{document.getElementById('auth-gate').style.display='flex'}catch(_e){}}
+      return;
+    }
+    if(_attempts>=_maxAttempts){
+      // Supabase failed to load within 10s — fall back to local-only mode and let the user reload
+      console.warn('[Auth] Supabase failed to load after 10s — falling back to local mode');
+      try{document.getElementById('auth-gate').style.display='none'}catch(e){}
+      _user={id:'local'};_prof={full_name:'User (offline)'};
+      var _mt2=0;function _tryMount(){_mt2++;if(typeof window.initApp==='function'){if(!window._mounted){window._mounted=true;window.initApp()}}else if(_mt2<100){setTimeout(_tryMount,50)}else{console.error('[AutoDial] Babel timeout')}}
+      setTimeout(_tryMount,100);
+      return;
+    }
+    setTimeout(_tick,50);
+  };
+  _tick();
+})();
 
 // Bind auth buttons
 document.addEventListener('DOMContentLoaded',function(){
@@ -2048,6 +2208,20 @@ function App(){
     return fixed;
   });
   const[cfg,setCfg]=useState(stored.cfg||{delay:10,sheetId:'',sheetTab:'',starThresholds:[0,5,10,15,25,35,50],payRates:[8,10,12,16,20,25],tierMins:[0,30,60,100,150,200],sessionDur:5,mThresh:2,nThresh:3,bonusMult:1.5,metIncentive:10,npMax:5,cpl:0,adminCanDelete:false});
+  // ═══════════════════════════════════════════════════════════════════════════════════
+  // ═══ adminConfigs — THE LIST OF ADMINS EACH MAIN MANAGES. ***PRIVATE PER-MAIN***.
+  // ═══ Storage layers (all scoped by the CURRENT main's identity — never shared):
+  // ═══   • localStorage: `ad3_acfg_<userId>` via LS() helper (line 1408) — scoped by UUID
+  // ═══   • Supabase live-sync: `acfg_<mainEmail>` via _useSyncedPush (line 4137 + 3664) — scoped by Main email
+  // ═══   • CloudSync bucket: `<userId>_sync_adminConfigs` (line 1312) — scoped by UUID
+  // ═══ DO NOT add any code path that writes adminConfigs to a shared key like
+  // ═══ `shared_globalcfg`, `shared_admin_list`, or similar. The ONLY intentionally
+  // ═══ shared key is `shared_admincfg_<adminEmail>` which contains each INDIVIDUAL
+  // ═══ admin's config (pay rates, session duration) so the admin can read their own
+  // ═══ config — NOT a list of admins. If two Mains happen to manage the same admin
+  // ═══ email, the last-writer wins on `shared_admincfg_<admin>`; this is an edge case
+  // ═══ only relevant if you explicitly share an admin across Mains.
+  // ═══════════════════════════════════════════════════════════════════════════════════
   const[adminConfigs,setAdminConfigs]=useState(load('acfg')||{});
   const[isOffline,setIsOffline]=useState(!navigator.onLine);
   useEffect(()=>{const on=()=>setIsOffline(false);const off=()=>{setIsOffline(true);toast('📴 Offline — changes saved locally','info')};
@@ -7231,7 +7405,7 @@ function App(){
           <h3 style={{margin:0,fontSize:18,fontWeight:800,color:'#f1f5f9'}}>👥 User Management</h3>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
             {pendingUsers.length>0&&<span className="pill" style={{background:'var(--rdim)',color:'var(--red)',fontSize:10}}>{pendingUsers.length} pending</span>}
-            <button onClick={()=>{if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data);toast('Refreshed')}})}} style={{padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↻</button>
+            <button onClick={()=>{if(_SB)_SB.from('profiles').select('*').then(r=>{if(r.data){setPendingUsers(r.data.filter(u=>!u.approved&&!isCreator(u.email)));setUsersList(r.data);toast('↻ '+r.data.length+' profiles loaded','info')}else if(r.error){toast('DB error: '+r.error.message,'err')}})}} title="Refresh from profiles table" style={{padding:'4px 10px',borderRadius:6,background:'var(--bg3)',color:'var(--text3)',fontSize:10}}>↻</button>
           </div>
         </div>
 
@@ -7254,7 +7428,17 @@ function App(){
         </>}
 
         {/* All accounts section */}
-        <p style={{margin:'0 0 8px',fontSize:11,fontWeight:700,color:'var(--text2)'}}>ALL ACCOUNTS</p>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'0 0 8px'}}>
+          <p style={{margin:0,fontSize:11,fontWeight:700,color:'var(--text2)'}}>ALL ACCOUNTS <span style={{color:'var(--text3)',fontWeight:600}}>({usersList.filter(u=>u.approved&&!isCreator(u.email)).length} approved)</span></p>
+          <button onClick={()=>{
+            const sql=`INSERT INTO public.profiles (id, email, full_name, approved, role, autodial_role, requested_role)
+SELECT u.id, u.email, COALESCE(u.raw_user_meta_data->>'full_name', split_part(u.email,'@',1)), false, 'admin', 'admin', 'admin'
+FROM auth.users u
+LEFT JOIN public.profiles p ON p.id = u.id
+WHERE p.id IS NULL;`;
+            try{navigator.clipboard.writeText(sql);toast('📋 Backfill SQL copied — paste into Supabase SQL editor','info')}catch(e){prompt('Copy this SQL and paste into Supabase SQL editor:',sql)}
+          }} title="Copy SQL to backfill missing profiles for users added via Supabase dashboard" style={{padding:'3px 8px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:9,fontWeight:700,border:'1px solid rgba(99,102,241,.25)'}}>📋 Fix missing</button>
+        </div>
         {usersList.filter(u=>u.approved&&!isCreator(u.email)).length===0&&<p style={{color:'var(--text3)',fontSize:11,textAlign:'center',padding:12}}>No approved accounts yet</p>}
         {usersList.filter(u=>u.approved&&!isCreator(u.email)).map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:10,padding:'12px',borderRadius:14,background:'var(--bg3)',border:'1px solid var(--border)',marginBottom:6}}>
           <div style={{width:36,height:36,borderRadius:10,background:'var(--gdim)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:800,color:'var(--green)',flexShrink:0}}>{(u.full_name||u.email||'?').charAt(0).toUpperCase()}</div>
@@ -7270,6 +7454,15 @@ function App(){
             <Btn variant="danger" size="sm" weight={600} radius={6} style={{padding:'3px 10px'}} onClick={async()=>{if(!confirm('Revoke access for '+u.full_name+'?'))return;try{await _SB.from('profiles').update({approved:false}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:false}:x));setPendingUsers(p=>[...p,{...u,approved:false}]);toast(u.full_name+' revoked')}catch(e){toast('Error','err')}}}>Revoke</Btn>
           </div>
         </div>)}
+
+        {/* ═══ Helpful note: missing profiles workflow ═══ */}
+        <div style={{marginTop:8,padding:'10px 12px',borderRadius:10,background:'rgba(99,102,241,.05)',border:'1px solid rgba(99,102,241,.15)'}}>
+          <p style={{margin:0,fontSize:10,color:'var(--text2)',lineHeight:1.5}}>
+            <b style={{color:'var(--accent2)'}}>ℹ Missing users?</b> If Supabase auth shows more users than this list, they're missing profile rows. Two ways to fix:
+            <br/>• <b>Easy:</b> Ask each missing user to log in once — their profile auto-creates and lands in Pending.
+            <br/>• <b>Fast:</b> Tap <b>📋 Fix missing</b> above to copy SQL, paste into Supabase SQL editor, then tap ↻ to refresh.
+          </p>
+        </div>
 
         {/* Creator's own entry */}
         <div style={{display:'flex',alignItems:'center',gap:10,padding:'12px',borderRadius:14,background:'var(--bg)',border:'1px solid var(--border)',marginTop:8,opacity:.6}}>
