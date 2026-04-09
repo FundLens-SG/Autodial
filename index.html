@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="AutoDial">
 <meta name="theme-color" content="#07080d">
 <title>AutoDial</title>
-<script>window.onerror=function(m){if(!m||m==='Script error.'||m==='Script error')return true;console.error('[AutoDial Error]',m);return true};window.onunhandledrejection=function(e){console.warn('[AutoDial] Unhandled promise:',e.reason);e.preventDefault()};</script>
+<script>window.onerror=function(m){if(!m||m==='Script error.'||m==='Script error')return true;console.error('[AutoDial Error]',m);return true};window.onunhandledrejection=function(e){console.warn('[AutoDial] Unhandled promise:',e.reason);e.preventDefault()};/* ═══ Global DBG fallback — the JSX block (now wrapped in IIFE for pre-compile) defines its own local DBG, but auth code and other early scripts run BEFORE the IIFE boots and need a global fallback. Both definitions check window.AUTODIAL_DEBUG, so behavior is identical. ═══ */window.DBG=function(){if(window.AUTODIAL_DEBUG)console.log.apply(console,arguments)};</script>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='108' fill='url(%23g)'/%3E%3Cpath d='M352 311v48a16 16 0 01-17 16 158 158 0 01-69-25 156 156 0 01-48-48 158 158 0 01-25-69A16 16 0 01209 216h24a16 16 0 0116 14c1 8 3 15 6 22a16 16 0 01-4 17l-10 10a128 128 0 0048 48l10-10a16 16 0 0117-4c7 3 15 5 22 6A16 16 0 01352 336z' fill='none' stroke='white' stroke-width='18' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22AutoDial%22%2C%22short_name%22%3A%22AutoDial%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22orientation%22%3A%22portrait%22%2C%22background_color%22%3A%22%2307080d%22%2C%22theme_color%22%3A%22%236366f1%22%7D">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -266,7 +266,7 @@ window.CREATOR=CREATOR;
 // ═══ APP VERSION — bumped on every build. Clients compare local vs cloud version
 // ═══ (shared_app_version row in Supabase) and prompt for refresh when stale.
 // ═══ Format: YYYY.MM.DD.HHMM — lexicographic compare works because zero-padded.
-window.APP_VERSION='2026.04.10.2100';
+window.APP_VERSION='2026.04.10.2200';
 // ═══ INVITE LINK: parse ?invite=TOKEN from URL, remember the inviting Main ═══
 (function parseInvite(){try{
   var qs=new URLSearchParams(window.location.search);var tok=qs.get('invite');
