@@ -2771,6 +2771,40 @@ function App(){
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
 
+  // ═══ ADMIN PHANTOM totalSets RECONCILER ═══
+  // Runs once on admin mount after initial pullAppts settles (3s delay). If the monotonic
+  // `totalSets` counter exceeds the actual filtered appointments count for this admin, it
+  // was inflated by historical sets that were later deleted — reconcile it DOWN to reality.
+  // This self-heals the "phantom Bronze with 1 star + 0 appointments" case without requiring
+  // Main to click 🗑 Appts. Only runs once per mount; subsequent set/delete actions update
+  // totalSets normally via the existing write-through paths.
+  useEffect(()=>{
+    if(role!=='admin'||!myEmail)return;
+    const _timer=setTimeout(()=>{
+      try{
+        const _delIds=_getDelIds();
+        const _me=myEmail.toLowerCase();
+        const _actual=(appointments||[]).filter(a=>
+          !isApptDeleted(a,_delIds)&&((a.admin||'').toLowerCase()===_me||!a.admin)
+        ).length;
+        if(totalSets>_actual){
+          console.info('[AutoDial] Reconciling phantom totalSets:',totalSets,'→',_actual,'(matching filtered appt count)');
+          setTotalSets(_actual);
+          try{save('ts',_actual)}catch(_e){}
+          // Push corrected value to cloud so other devices + next reloads see it
+          if(_SB){
+            _SB.from('autodial_admin_config').upsert({
+              admin_email:'ts_'+_me,
+              biz_name:JSON.stringify({ts:_actual,reconciledAt:Date.now()})
+            },{onConflict:'admin_email'}).then(()=>{},()=>{});
+          }
+        }
+      }catch(e){console.warn('[Reconcile]',e?.message||e)}
+    },3000);
+    return()=>clearTimeout(_timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[role,myEmail]);
+
   // ═══ ADMIN REVOCATION RUNTIME POLL ═══
   // authCheck already gates admins on LOGIN — but if Main removes them while they're already
   // logged in, we need to detect it at runtime. This effect polls revoked_<myEmail> every 30s
@@ -4752,11 +4786,19 @@ function App(){
       if(status==='np'){const nc=(l.npCount||0)+1;u.npCount=nc;u.status=nc>=n(myCfg.npMax,5)?'ni':'np';if(l.status==='cb'&&l.cbDate)u.cbHistory=[...(l.cbHistory||[]),{date:l.cbDate+' '+l.cbTime,result:'NP'}];syncSheet(u,nc>=5?'ni':'np')}
       else if(status==='cb'){u.status='cb';u.cbDate=extra.cbDate||'';u.cbTime=extra.cbTime||'';u.cbFlexible=!!extra.cbFlexible;syncSheet(u,'cb')}
       else if(status==='set'){u.status='set';syncSheet(u,'set');
-        // Auto-create appointment entry — but dedup: don't create if an open (pending) appt already exists for this lead
+        // Auto-create appointment entry — but dedup: don't create if an open (pending) appt already exists for this lead.
+        // ═══ CRITICAL FIX: the existing-check must ALSO skip blocklisted appts. If a previous
+        // ═══ ghost cleanup left a stale pending entry in local state for this lead, p.find()
+        // ═══ would return it as "existing" → we'd skip adding → the render filter would hide
+        // ═══ the stale one → user sees 0 total. This is the "Boink Lee set but no appointment"
+        // ═══ bug. Filtering isApptDeleted here ensures we only consider LIVE pending appts.
+        const _delSet=_getDelIds();
         setAppointments(p=>{
-          const existing=p.find(a=>(a.leadId===u.id||(a.phone===u.phone&&a.phone))&&(!a.followUp||a.followUp==='pending'));
-          if(existing)return p; // lead already has an open appointment — don't duplicate
-          return[...p,{id:Date.now()+Math.random(),leadId:u.id,name:u.name,phone:u.phone,gender:u.gender||detectGender(u)||'',age:u.age||'',
+          // First, scrub any blocklisted entries from state so they stop haunting find() and the dedup layer
+          const _scrubbed=p.filter(a=>!isApptDeleted(a,_delSet));
+          const existing=_scrubbed.find(a=>(a.leadId===u.id||(a.phone===u.phone&&a.phone))&&(!a.followUp||a.followUp==='pending'));
+          if(existing)return _scrubbed; // lead already has a LIVE open appointment — don't duplicate
+          return[..._scrubbed,{id:Date.now()+Math.random(),leadId:u.id,name:u.name,phone:u.phone,gender:u.gender||detectGender(u)||'',age:u.age||'',
             apptDate:'',apptTime:'',location:'',industry:'',remarks:'',
             followUp:'pending',tip:0,tipPaid:false,createdAt:new Date().toISOString(),admin:myEmail}];
         })}
@@ -5055,11 +5097,18 @@ function App(){
 
     {/* Row 2: Rank chip + Mode toggle */}
     <div className="hdr-row2">
-      {isCallMode&&_showRank?<div className="rank-chip" style={{background:(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'18',color:(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color,border:'1px solid '+(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).color+'30'}}>
-        <span style={{fontSize:15}}>{(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).emoji}</span>
-        <span>{(role==='admin'?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank).label}</span>
-        <span style={{opacity:.6,fontSize:10,fontWeight:600}}>{monthlyAppts} this month</span>
-      </div>
+      {isCallMode&&_showRank?(()=>{
+        // Compute actual filtered appts once (same logic as Rank tab) for consistent admin rank
+        const _hdrDelIds=_getDelIds();
+        const _hdrMe=(myEmail||'').toLowerCase();
+        const _hdrAdminAppts=role==='admin'?(appointments||[]).filter(a=>!isApptDeleted(a,_hdrDelIds)&&((a.admin||'').toLowerCase()===_hdrMe||!a.admin)).length:0;
+        const _hdrRank=role==='admin'?getTierRank(_hdrAdminAppts,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):rank;
+        return<div className="rank-chip" style={{background:_hdrRank.color+'18',color:_hdrRank.color,border:'1px solid '+_hdrRank.color+'30'}}>
+          <span style={{fontSize:15}}>{_hdrRank.emoji}</span>
+          <span>{_hdrRank.label}</span>
+          <span style={{opacity:.6,fontSize:10,fontWeight:600}}>{role==='admin'?_hdrAdminAppts+' all-time':monthlyAppts+' this month'}</span>
+        </div>;
+      })()
       :<div className="rank-chip" style={{background:'var(--rdim)',color:'var(--red)',border:'1px solid rgba(248,81,73,.2)'}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         <span>Management</span>
@@ -5527,14 +5576,24 @@ function App(){
     {tab==='rank'&&isCallMode&&(()=>{
       // Admin uses pay tier ranks, Main uses ML ranks
       const isAdminRank=role==='admin';
-      const tierRank=isAdminRank?getTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
-      const nextTier=isAdminRank?getNextTierRank(totalSets,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
+      // ═══ Admin rank reads from ACTUAL filtered appointments count, not the monotonic `totalSets`
+      // ═══ counter. Previously, totalSets would stay stuck at old values (e.g. 1) after appts were
+      // ═══ deleted, giving a phantom "1 star, 0 appointments" display. Now the rank auto-reconciles:
+      // ═══ the displayed star count always matches what's visible in the Appts tab for this admin.
+      const _delIds=_getDelIds();
+      const _me=(myEmail||'').toLowerCase();
+      const _actualAdminAppts=isAdminRank?(appointments||[]).filter(a=>
+        !isApptDeleted(a,_delIds)&&((a.admin||'').toLowerCase()===_me||(!a.admin))
+      ).length:0;
+      const _rankBase=isAdminRank?_actualAdminAppts:0;
+      const tierRank=isAdminRank?getTierRank(_rankBase,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
+      const nextTier=isAdminRank?getNextTierRank(_rankBase,myCfg.tierMins||[0,30,60,100,150,200],myCfg.enabledTiers):null;
       const displayRank=isAdminRank?tierRank:rank;
       const displayNext=isAdminRank?nextTier:nextRank;
-      const starsInTier=isAdminRank?(nextTier?totalSets-(tierRank.threshold||0):totalSets):rank.stars;
+      const starsInTier=isAdminRank?(nextTier?_rankBase-(tierRank.threshold||0):_rankBase):rank.stars;
       const starsNeeded=isAdminRank?(nextTier?(nextTier.threshold-tierRank.threshold):10):rank.starsNeeded;
       const progressPct=displayNext?Math.min(100,(starsInTier/Math.max(1,starsNeeded))*100):100;
-      const starsToNext=isAdminRank?(nextTier?nextTier.threshold-totalSets:0):(nextRank?(nextRank.cumStars-monthlyAppts):0);
+      const starsToNext=isAdminRank?(nextTier?nextTier.threshold-_rankBase:0):(nextRank?(nextRank.cumStars-monthlyAppts):0);
       // Monthly stats
       const now=new Date(),y=now.getFullYear(),m=now.getMonth();
       const monthSessions=sessionLog.filter(s=>{const d=new Date(s.startTime);return d.getFullYear()===y&&d.getMonth()===m&&(!isManageMode||(s.email||'')!==myEmail)});
@@ -5548,14 +5607,14 @@ function App(){
         <p style={{fontSize:64,margin:'0 0 4px',filter:'drop-shadow(0 4px 12px rgba(0,0,0,.3))',position:'relative'}}>{displayRank.emoji}</p>
         <h2 style={{fontSize:26,fontWeight:900,color:'#fff',margin:'0 0 6px',textShadow:'0 2px 10px rgba(0,0,0,.3)',position:'relative',letterSpacing:'-.02em'}}>{displayRank.label}</h2>
         <StarRow filled={starsInTier} total={starsNeeded} color={displayRank.color} isMax={!displayNext}/>
-        <p style={{margin:'8px 0 0',fontSize:11,color:'rgba(255,255,255,.7)',position:'relative'}}>{isAdminRank?(totalSets+' all-time appointments'):(monthName+' · '+monthlyAppts+' appointments')}</p>
+        <p style={{margin:'8px 0 0',fontSize:11,color:'rgba(255,255,255,.7)',position:'relative'}}>{isAdminRank?(_rankBase+' all-time appointment'+(_rankBase===1?'':'s')):(monthName+' · '+monthlyAppts+' appointments')}</p>
       </div>
 
       {/* Progress to next rank */}
       {displayNext&&<div className="card" style={{marginBottom:14,borderColor:displayNext.color+'30'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <span style={{fontSize:12,fontWeight:700,color:'var(--text2)'}}>Next: {displayNext.emoji} {displayNext.label}</span>
-          <span className="mono" style={{fontSize:12,fontWeight:700,color:displayNext.color}}>{isAdminRank?totalSets:monthlyAppts}/{isAdminRank?displayNext.threshold:nextRank.cumStars}</span>
+          <span className="mono" style={{fontSize:12,fontWeight:700,color:displayNext.color}}>{isAdminRank?_rankBase:monthlyAppts}/{isAdminRank?displayNext.threshold:nextRank.cumStars}</span>
         </div>
         <div style={{height:10,borderRadius:5,background:'var(--bg)',overflow:'hidden',marginBottom:6}}>
           <div style={{height:'100%',borderRadius:5,width:progressPct+'%',background:'linear-gradient(90deg,'+displayRank.color+','+displayNext.color+')',transition:'width .5s',boxShadow:'0 0 12px '+displayNext.color+'40'}}/>
@@ -5576,7 +5635,7 @@ function App(){
               <p style={{margin:0,fontSize:18,fontWeight:800,color:c}}>{v}</p>
               <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>{l}</p></div>)}
         </div>
-        <p style={{margin:'10px 0 0',fontSize:10,color:'var(--text3)',textAlign:'center'}}>{monthSessions.length} sessions this month · {totalSets} all-time appts</p>
+        <p style={{margin:'10px 0 0',fontSize:10,color:'var(--text3)',textAlign:'center'}}>{monthSessions.length} sessions this month · {isAdminRank?_rankBase:totalSets} all-time appts</p>
       </div>
 
       {/* Rank Roadmap */}
@@ -8434,6 +8493,28 @@ WHERE p.id IS NULL;`;
           <button onClick={()=>{setShowAppt(false);setApptLocation('');setApptObs('')}} style={{padding:'14px 20px',background:'var(--bg3)',color:'var(--text3)',fontSize:14,borderRadius:12,fontWeight:700}}>Skip</button>
           <button disabled={!apptDate||!apptTime} onClick={async()=>{if(!apptDate||!apptTime)return toast('Pick a slot above or set date & time','err');
             const dur=apptDuration||60;const lead=apptLead;
+            // ═══ BLOCKLIST UNSTICK ═══
+            // Before creating the new appointment, purge any _deletedApptIds entries that mention
+            // this lead's phone. The blocklist stores entries as `phone_apptDate`, `phone_createdAt`,
+            // or bare `phone`. If Main previously deleted a ghost appt for this lead, those entries
+            // remain in the blocklist forever and filter out any NEW appt for the same lead — causing
+            // the "Set in list but missing from Appts" bug. Purging here makes re-setting a lead work.
+            try{
+              const _d=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+              const _phone=lead?.phone||'';
+              if(_phone&&Array.isArray(_d)&&_d.length){
+                const _cleaned=_d.filter(x=>{
+                  if(typeof x!=='string')return true;
+                  if(x===_phone)return false;
+                  if(x.startsWith(_phone+'_'))return false;
+                  return true;
+                });
+                if(_cleaned.length!==_d.length){
+                  localStorage.setItem('_deletedApptIds',JSON.stringify(_cleaned));
+                  console.info('[AutoDial] Purged '+(_d.length-_cleaned.length)+' stale blocklist entries for phone '+_phone);
+                }
+              }
+            }catch(_e){}
             const desc=['Client: '+(lead?.name||''),'Phone: '+(lead?.phone||''),lead?.age?'Age: '+lead.age:'',lead?.email?'Email: '+lead.email:'',lead?.race?'Background: '+lead.race:'',apptObs?'\nFC Notes:\n'+apptObs:'',lead?.notes?'\nSheet Remarks: '+lead.notes:''].filter(Boolean).join('\n');
             try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
               const invites=apptInvite?apptInvite.split(',').map(s=>s.trim()).filter(Boolean):[];
