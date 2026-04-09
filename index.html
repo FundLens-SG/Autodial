@@ -162,7 +162,9 @@ button:active{transform:scale(.97)}
 .sp-edit i{font-style:italic;color:var(--accent3)}
 .sp-edit u{text-decoration:underline;text-underline-offset:3px}
 @media(max-width:959px){.script-panel{display:none!important}.script-toggle{display:none!important}}
-.hdr-row1{display:flex;align-items:center;gap:10;padding:14px 14px 0}
+.hdr-row1{display:flex;align-items:center;gap:8px;padding:14px 14px 0;flex-wrap:wrap}
+.hdr-row1>button{flex-shrink:0}
+.hdr-row1>.pill{flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hdr-row2{display:flex;align-items:center;justify-content:space-between;padding:8px 14px 8px;gap:10}
 .app-tabs{display:flex;padding:6px 10px 8px;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-bottom:1px solid var(--border)}
 .app-tabs::-webkit-scrollbar{display:none}
@@ -236,6 +238,12 @@ button:active{transform:scale(.97)}
     <p style="color:var(--text3);font-size:12px;margin-top:4px">Awaiting Creator approval</p>
     <button class="bs" id="btn-pendout" style="margin-top:16px">Sign Out</button>
   </div>
+  <div id="auth-revoked" style="display:none;text-align:center;padding:24px">
+    <div style="font-size:48px;margin-bottom:14px">🔒</div>
+    <p style="color:var(--red);font-weight:700;font-size:16px">Account Locked</p>
+    <p style="color:var(--text3);font-size:12px;margin-top:4px;line-height:1.5">Account yet to be set up by Main.<br/>Contact your team lead to restore access.</p>
+    <button class="bs" id="btn-revokedout" style="margin-top:16px;background:var(--rdim);color:var(--red);border:1px solid rgba(248,81,73,.3)">Sign Out</button>
+  </div>
 </div></div>
 <div id="root"></div>
 <div id="toast-area" class="tw"></div>
@@ -294,7 +302,7 @@ function _initSupabaseClient(){
 
 function authMsg(t,type){var e=document.getElementById('auth-message');e.style.display='block';e.style.background=type==='i'?'var(--gdim)':'var(--rdim)';e.style.color=type==='i'?'var(--green)':'var(--red)';e.style.border='1px solid '+(type==='i'?'rgba(63,185,80,.2)':'rgba(248,81,73,.2)');e.textContent=t}
 function authClear(){document.getElementById('auth-message').style.display='none'}
-function authShow(v){authClear();['login','signup','pending'].forEach(function(s){var el=document.getElementById('auth-'+s);if(el)el.style.display=s===v?'':'none'})}
+function authShow(v){authClear();['login','signup','pending','revoked'].forEach(function(s){var el=document.getElementById('auth-'+s);if(el)el.style.display=s===v?'':'none'})}
 function toast(m,t){var e=document.createElement('div');e.className='toast t-'+(t||'ok');e.textContent=m;document.getElementById('toast-area').appendChild(e);setTimeout(function(){e.style.opacity='0';e.style.transition='opacity .3s';setTimeout(function(){e.remove()},300)},3000)}
 window.toast=toast;
 
@@ -352,8 +360,24 @@ async function authLogin(){authClear();var e=document.getElementById('auth-email
     // ═══ Use the session from signInWithPassword's response directly — no second getSession() round-trip
     _user=r.data?.user||{email:e};
     _prof={email:e,role:'admin'};
-    // Creator override — instant grant, no DB check needed
-    if(isCreator(e)){window._role='main';authMsg('Loading app…','i');authGrant();return}
+    // Creator override — instant grant, no DB check needed.
+    // ═══ ALSO self-heal: ensure the creator's profiles row is always approved=true so
+    // ═══ they never appear as "PENDING" in the user list (the creator can always log in
+    // ═══ via this short-circuit, but other users viewing the user list shouldn't see the
+    // ═══ owner as pending). Fire-and-forget upsert.
+    if(isCreator(e)){
+      window._role='main';
+      try{_SB.from('profiles').upsert({
+        id:_user.id,
+        email:e,
+        full_name:_user.user_metadata?.full_name||e.split('@')[0],
+        approved:true,
+        role:'main',
+        autodial_role:'main',
+        requested_role:'main'
+      }).then(()=>{},()=>{})}catch(_e){}
+      authMsg('Loading app…','i');authGrant();return
+    }
     // ═══ SECURITY: profile fetch with explicit DENY default. Approval is required.
     authMsg('Verifying account…','i');
     var pr;
@@ -535,6 +559,25 @@ async function authCheck(){try{
     authShow('pending');return;
   }
   window._role=dbRole==='main'?'main':'admin';
+  // ═══ ADMIN REVOCATION CHECK — if their managing Main removed them, lock them out
+  if(window._role==='admin'){
+    try{
+      var rev=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','revoked_'+(_user.email||'').toLowerCase()).maybeSingle();
+      if(rev&&rev.data&&rev.data.biz_name){
+        var rd=JSON.parse(rev.data.biz_name);
+        var lastSeen=parseInt(localStorage.getItem('_lastRevokedSeen')||'0');
+        if(rd.revokedAt&&rd.revokedAt>lastSeen){
+          console.warn('[Auth] Admin revoked at',new Date(rd.revokedAt).toISOString(),'by',rd.revokedBy);
+          // Wipe local app data immediately so even if they bypass the lock screen, nothing is left
+          try{
+            var keys=Object.keys(localStorage).filter(function(k){return k.startsWith('ad3_')||k==='ad_gt'||k==='ad_gt_ts'||k==='ad_g_ever'});
+            keys.forEach(function(k){try{localStorage.removeItem(k)}catch(_e){}});
+          }catch(_e){}
+          authShow('revoked');return;
+        }
+      }
+    }catch(re){console.warn('[Auth] revoke check failed:',re?.message)}
+  }
   authGrant();
 }catch(e){console.error('[Auth]',e);document.getElementById('auth-gate').style.display='flex'}}
 
@@ -586,6 +629,14 @@ document.addEventListener('DOMContentLoaded',function(){
     });
   });
   document.getElementById('btn-pendout')?.addEventListener('click',function(){authLogout()});
+  document.getElementById('btn-revokedout')?.addEventListener('click',function(){
+    // Wipe ALL local autodial data so re-login starts from zero
+    try{
+      const keys=Object.keys(localStorage).filter(k=>k.startsWith('ad3_')||k.startsWith('ad_')||k.startsWith('autodial_'));
+      keys.forEach(k=>{try{localStorage.removeItem(k)}catch(_e){}});
+    }catch(_e){}
+    authLogout();
+  });
   document.getElementById('auth-pass')?.addEventListener('keydown',function(e){if(e.key==='Enter')authLogin()});
 });
 
@@ -2461,12 +2512,32 @@ function App(){
     // Step 3: WIPE all cloud rows for these emails in parallel
     const _emptyLive=()=>JSON.stringify({appts:[],hash:'0',count:0,ts:Date.now(),devId:window._devId});
     const _emptyShared=()=>JSON.stringify({data:[],ts:Date.now(),devId:window._devId});
+    const _resetTs=Date.now();
     await Promise.all(_emailsLow.flatMap(em=>[
       _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+em,biz_name:_emptyLive()},{onConflict:'admin_email'}),
       _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+em,biz_name:_emptyShared()},{onConflict:'admin_email'}),
       _SB.from('autodial_admin_config').upsert({admin_email:'appts_'+em,biz_name:'[]'},{onConflict:'admin_email'}),
       _SB.from('autodial_admin_config').upsert({admin_email:'shared_appts_'+em,biz_name:'[]'},{onConflict:'admin_email'}),
+      // ═══ Also reset rank/stats so the admin's Rank tab doesn't show phantom stars from lifetime totalSets
+      _SB.from('autodial_admin_config').upsert({admin_email:'ts_'+em,biz_name:JSON.stringify({ts:0,resetTs:_resetTs})},{onConflict:'admin_email'}),
+      _SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+em,biz_name:JSON.stringify({date:getTodaySGT(),count:0,ts:Date.now(),devId:window._devId,reset:true,resetTs:_resetTs})},{onConflict:'admin_email'}),
+      _SB.from('autodial_admin_config').upsert({admin_email:'slog_'+em,biz_name:JSON.stringify([])},{onConflict:'admin_email'}),
+      _SB.from('autodial_admin_config').upsert({admin_email:'asess_'+em,biz_name:JSON.stringify({})},{onConflict:'admin_email'}),
     ].map(p=>p.then?p.then(()=>{},()=>{}):p)));
+    // ═══ Also reset Main's local view of this admin's sessions/stats so the dashboard updates immediately
+    if(_user&&!_emailsLow.every(e=>e===(_user.email||'').toLowerCase())){
+      // Wipe per-admin entries from local adminSessions state for any admin in scope
+      setAdminSessions(prev=>{
+        const next={...prev};
+        _emailsLow.forEach(em=>{if(em!==(_user.email||'').toLowerCase())delete next[em]});
+        return next;
+      });
+    }
+    // ═══ If Main is also clearing themselves, reset their own totalSets locally too
+    if(_emailsLow.includes((_user?.email||'').toLowerCase())){
+      try{setTotalSets(0)}catch(_e){}
+      try{_resetDailySets()}catch(_e){}
+    }
     // Step 4: strip local state of any appt belonging to one of the wiped scopes
     setAppointments(prev=>{
       const _meLow=(_user?.email||'').toLowerCase();
@@ -3205,11 +3276,22 @@ function App(){
               if(sr.data&&sr.data.biz_name){const sl=JSON.parse(sr.data.biz_name);
                 if(sl.length&&!sessionLog.length){setSessionLog(sl);DBG('[AutoDial] Loaded '+sl.length+' sessions from Supabase')}}
             }catch(e){}})(),
-            // 6. ts_<email> — totalSets counter
+            // 6. ts_<email> — totalSets counter (also checks resetTs signal from Main's clearApptsForAdmins)
             (async()=>{try{
               const tr=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','ts_'+myEmail).maybeSingle();
               if(tr.data&&tr.data.biz_name){const td=JSON.parse(tr.data.biz_name);
-                if(td.ts>totalSets){setTotalSets(td.ts);DBG('[AutoDial] Loaded totalSets='+td.ts+' from Supabase')}}
+                // ═══ Reset signal: if Main wiped this admin's stats via clearApptsForAdmins,
+                // ═══ the cloud row has resetTs > our last-seen reset timestamp. Force-reset locally.
+                const _lastSeenReset=parseInt(localStorage.getItem('_lastTsResetSeen')||'0');
+                if(td.resetTs&&td.resetTs>_lastSeenReset){
+                  setTotalSets(0);
+                  try{save('ts',0);save('rankStarsAwarded',[]);_resetDailySets()}catch(_e){}
+                  localStorage.setItem('_lastTsResetSeen',String(td.resetTs));
+                  DBG('[AutoDial] Stats reset by manager — totalSets=0, dailySets=0');
+                }else if(td.ts>totalSets){
+                  setTotalSets(td.ts);DBG('[AutoDial] Loaded totalSets='+td.ts+' from Supabase')
+                }
+              }
             }catch(e){}})(),
           ]);
         }
@@ -4016,8 +4098,16 @@ function App(){
     // Expose pull functions so other code paths (e.g. button clicks) can trigger a manual pull
     window._liveSyncPull=()=>{pullLive();pullLeads();pullAppts();pullAllSynced()};
 
-    // Initial pull on mount — wait a moment for cloud to bootstrap
+    // ═══ Initial pull — fire LIVE immediately so cross-device session shows up the instant
+    // ═══ the second device opens. The 800ms delay used to gate this entire batch caused phones
+    // ═══ to show "READY TO DIAL" idle state for nearly a second after open, masking an active
+    // ═══ desktop session and only refreshing when the user tapped a button (which triggered
+    // ═══ the focus listener). pullLive is cheap (single small row), so we run it immediately.
+    pullLive();
+    // Heavier pulls (leads/appts/synced bundle) wait the full debounce so cloud bootstrap finishes
     const _initialDelay=setTimeout(()=>{pullLive();pullLeads();pullAppts();pullAllSynced()},800);
+    // Belt-and-braces: a second live pull at 250ms in case the first one ran before _user.id propagated
+    const _initialLive2=setTimeout(()=>{pullLive()},250);
 
     // ═══ Postgres realtime subscription — instant push when any row updates
     let _pgChannel=null;
@@ -4121,6 +4211,7 @@ function App(){
     return()=>{
       _cancelled=true;
       clearTimeout(_initialDelay);
+      clearTimeout(_initialLive2);
       clearInterval(pollId);
       document.removeEventListener('visibilitychange',onVis);
       window.removeEventListener('focus',onFocus);
@@ -6850,22 +6941,12 @@ function App(){
         {[
           ['prefs','📞','Calling'],
           ['integr','🔗','Integrations'],
-          ...(isManageMode?[['team','👥','Team']]:[]),
+          ...(isManageMode?[['team','👥','Admin']]:[]),
           ...(isCreatorUser?[['owner','👑','Owner']]:[])
         ].map(([_k,_ic,_lbl])=><button key={_k} onClick={()=>setSettingsSubtab(_k)} style={{flex:'1 1 auto',minWidth:60,padding:'9px 6px',borderRadius:8,background:settingsSubtab===_k?'var(--adim)':'transparent',color:settingsSubtab===_k?'var(--accent2)':'var(--text3)',fontSize:11,fontWeight:700,border:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}><span style={{fontSize:13}}>{_ic}</span>{_lbl}</button>)}
       </div>
       {settingsSubtab==='team'&&isManageMode&&<>
-      {isCreatorUser&&isManageMode&&<div className="card" style={{marginBottom:12}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-          <h3 style={{fontSize:14,fontWeight:700,color:'var(--accent2)'}}>👥 Users</h3>
-          <button onClick={async()=>{try{toast('Loading users...','info');const r=await _SB.from('profiles').select('*');if(r.error){toast('DB error: '+r.error.message,'err');return}setUsersList(r.data||[]);setPendingUsers((r.data||[]).filter(u=>!u.approved&&!isCreator(u.email)));toast((r.data||[]).length+' users loaded')}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'5px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Load</button>
-        </div>
-        {usersList.map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
-          <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{u.full_name||u.email}</p>
-            <span style={{fontSize:10,color:'var(--text3)'}}>{u.email}</span> <span className="pill" style={{background:u.approved?'var(--gdim)':'var(--rdim)',color:u.approved?'var(--green)':'var(--red)',fontSize:10}}>{u.approved?'OK':'PENDING'}</span></div>
-          {!isCreator(u.email)&&<button onClick={async()=>{try{await _SB.from('profiles').update({approved:!u.approved}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:!x.approved}:x));setPendingUsers(p=>u.approved?[...p,{...u,approved:false}]:p.filter(x=>x.id!==u.id));toast(u.approved?'Revoked':'Approved')}catch(e){toast('Error: '+e.message,'err')}}} style={{padding:'4px 10px',borderRadius:6,background:u.approved?'var(--rdim)':'var(--gdim)',color:u.approved?'var(--red)':'var(--green)',fontSize:10,fontWeight:600}}>{u.approved?'Revoke':'Approve'}</button>}
-        </div>)}
-      </div>}
+      {/* Users section moved to Owner Settings subtab — only owner manages users */}
 
       
 
@@ -6881,8 +6962,14 @@ function App(){
               )}
             </datalist>
           </div>
-          <button onClick={()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
+          <button onClick={async()=>{const em=newAdminEmail.trim().toLowerCase();if(!em.includes('@'))return toast('Invalid email','err');
             setAdminConfigs(p=>({...p,[em]:{payRates:[...(cfg.payRates||DEF_PAY_RATES)],sessionDur:cfg.sessionDur||5,mThresh:cfg.mThresh||2,nThresh:cfg.nThresh||4,bonusMult:cfg.bonusMult||1.5,tierMins:[...(cfg.tierMins||DEF_TIER_MINS)],metIncentive:cfg.metIncentive||10,rankEnabled:true,bizName:'',payNow:'',timesheetId:''}}));
+            // Clear the revocation flag if this admin was previously removed — re-adding restores access
+            if(_SB){
+              try{
+                await _SB.from('autodial_admin_config').delete().eq('admin_email','revoked_'+em);
+              }catch(e){}
+            }
             setNewAdminEmail('');toast('Added '+em)}} style={{padding:'0 16px',borderRadius:12,background:'var(--adim)',color:'var(--accent2)',fontSize:12,fontWeight:600}}>Add</button>
         </div>
         {Object.entries(adminConfigs).map(([em,ac])=><div key={em} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:14,padding:12,marginBottom:8}}>
@@ -6898,7 +6985,22 @@ function App(){
                   toast('✅ '+(ac.bizName||em)+' cleared ('+wiped+' appts wiped)');
                 }catch(e){toast('Clear failed: '+(e?.message||e),'err')}
               }} style={{padding:'4px 8px',borderRadius:8,background:'var(--rdim)',color:'var(--red)',fontSize:10,fontWeight:700,border:'1px solid rgba(248,81,73,.25)',cursor:'pointer'}}>🗑 Appts</button>
-              <Btn variant="danger" size="sm" weight={600} onClick={()=>{const c={...adminConfigs};delete c[em];setAdminConfigs(c)}}>×</Btn>
+              <Btn variant="danger" size="sm" weight={600} onClick={async()=>{
+                if(!confirm('Remove '+(ac.bizName||em)+' from your admin list?\n\nTheir account will be locked out on next login until you re-add them. Their existing appointments stay in the cloud (use 🗑 Appts first if you want to wipe those).'))return;
+                // Write revocation flag — admin's bootstrap reads this and shows lock screen
+                if(_SB){
+                  try{
+                    const _now=Date.now();
+                    await Promise.all([
+                      _SB.from('autodial_admin_config').upsert({admin_email:'revoked_'+em.toLowerCase(),biz_name:JSON.stringify({revokedBy:myEmail,revokedAt:_now})},{onConflict:'admin_email'}),
+                      // Wipe the admin's synced config so they can't read inherited rates/script either
+                      _SB.from('autodial_admin_config').upsert({admin_email:'shared_admincfg_'+em.toLowerCase(),biz_name:JSON.stringify({_revoked:true,_revokedAt:_now})},{onConflict:'admin_email'}),
+                    ]);
+                  }catch(e){console.warn('[Revoke]',e?.message||e)}
+                }
+                const c={...adminConfigs};delete c[em];setAdminConfigs(c);
+                toast('🔒 '+(ac.bizName||em)+' removed and locked out');
+              }}>×</Btn>
             </div>
           </div>
           <div style={{display:'flex',gap:6,fontSize:10,color:'var(--text3)',flexWrap:'wrap'}}>
@@ -6935,14 +7037,10 @@ function App(){
                 <input type="number" value={ac.metIncentive??''} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],metIncentive:e.target.value===''?'':parseFloat(e.target.value)}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(240,180,41,.3)'}}/></div>
             </div>
             {/* ═══ Per-admin NP→NI override (admin sees greyed/locked, Main edits) ═══ */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
-              <div><label style={{fontSize:10,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:2}}>NP → NI threshold</label>
-                <input type="number" min="1" max="20" value={ac.npMax??''} placeholder={(cfg.npMax||5)+' (default)'} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],npMax:e.target.value===''?'':Math.max(1,Math.min(20,+e.target.value))}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(99,102,241,.3)'}}/>
-                <p style={{margin:'2px 0 0',fontSize:8,color:'var(--text3)'}}>Auto-NI after N No Picks. Blank = use default ({cfg.npMax||5})</p>
-              </div>
-              <div><label style={{fontSize:10,color:'var(--text3)',fontWeight:700,display:'block',marginBottom:2}}>(Reserved)</label>
-                <input disabled value="" placeholder="—" style={{fontSize:12,textAlign:'center',padding:'8px',opacity:.4}}/>
-              </div>
+            <div style={{marginBottom:8}}>
+              <label style={{fontSize:10,color:'var(--accent2)',fontWeight:700,display:'block',marginBottom:2}}>NP → NI threshold</label>
+              <input type="number" min="1" max="20" value={ac.npMax??''} placeholder={(cfg.npMax||5)+' (default)'} onChange={e=>setAdminConfigs(p=>({...p,[em]:{...p[em],npMax:e.target.value===''?'':Math.max(1,Math.min(20,+e.target.value))}}))} style={{fontSize:12,textAlign:'center',padding:'8px',borderColor:'rgba(99,102,241,.3)',width:'100%'}}/>
+              <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)'}}>Auto-NI after N No Picks. Blank = use default ({cfg.npMax||5})</p>
             </div>
 
             <div style={{marginBottom:8}}>
@@ -7211,73 +7309,69 @@ function App(){
           <p style={{margin:0,fontSize:11,color:'var(--text2)'}}>⛔ DNC: Calls allowed <b>{(()=>{const h=cfg.dncEnd||9;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> to <b>{(()=>{const h=cfg.dncStart||21;return h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'})()}</b> <span style={{fontSize:10,color:'var(--text3)'}}>(set by manager)</span></p>
         </div>}
         {/* Queue Priority moved to Calling subtab — it's now per-user (Mains and Admins each have their own) */}
-        {isManageMode&&isCreatorUser&&<div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-            <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System {isCreatorUser&&'(Owner Edit)'}</p>
-            <div style={{display:'flex',gap:6,alignItems:'center'}}>
-              <span style={{fontSize:10,color:'var(--text3)'}}>🏦 Star Bank:</span>
-              <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{Math.round(starBank+totalStars)} ⭐</span>
-            </div>
-          </div>
-          {isCreatorUser?<>
-            <p style={{margin:'0 0 6px',fontSize:10,fontWeight:600,color:'var(--text3)'}}>Min Appts/Month per Rank + Milestone Stars Awarded:</p>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:10}}>
-              {ML_RANKS.map((r,i)=><div key={i} style={{textAlign:'center',padding:'6px 4px',borderRadius:8,background:'var(--bg2)',border:'1px solid var(--border)'}}>
-                <span style={{fontSize:14}}>{r.emoji}</span>
-                <p style={{margin:'2px 0',fontSize:10,color:r.color,fontWeight:700}}>{r.label}</p>
-                <label style={{fontSize:7,color:'var(--text3)'}}>Min Appts</label>
-                <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??0} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px'}} disabled={i===0}/>
-                <label style={{fontSize:7,color:'var(--gold)'}}>⭐ Stars</label>
-                <input type="number" min="0" value={(cfg.milestoneStars||[0,10,25,50,100,200,500])[i]??0} onChange={e=>{const t=[...(cfg.milestoneStars||[0,10,25,50,100,200,500])];t[i]=+e.target.value||0;setCfg(s=>({...s,milestoneStars:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px',borderColor:'rgba(240,180,41,.3)'}}/>
-              </div>)}
-            </div>
-            <div style={{display:'flex',gap:6}}>
-              
-            </div>
-          </>:<div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-            {ML_RANKS.map((r,i)=>{const threshold=(cfg.starThresholds||[0,5,10,15,25,35,50])[i]||0;
-              const mStars=(cfg.milestoneStars||[0,10,25,50,100,200,500])[i]||0;
-              const isActive=monthlyAppts>=threshold;const isAwarded=rankStarsAwarded.includes(i);
-              return<div key={i} style={{display:'flex',alignItems:'center',gap:4,padding:'5px 10px',borderRadius:10,
-                background:isActive?r.color+'18':'var(--bg3)',border:'1px solid '+(isActive?r.color+'40':'var(--border)'),opacity:isActive?1:0.45,position:'relative'}}>
-                <span style={{fontSize:16}}>{r.emoji}</span>
-                <div><p style={{margin:0,fontSize:10,fontWeight:700,color:isActive?r.color:'var(--text3)'}}>{r.label}</p>
-                <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>≥{threshold} appts</p>
-                {mStars>0&&<p style={{margin:0,fontSize:7,color:isAwarded?'var(--green)':'var(--gold)'}}>{isAwarded?'✓ ':''}+{mStars}⭐</p>}</div>
-              </div>})}
-          </div>}
-        </div>}
-        {isManageMode&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-          <div>
-            <p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>NP → NI threshold</p>
-            <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>Default for admins (override per-admin in Team tab)</p>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <button onClick={()=>setCfg(s=>({...s,npMax:Math.max(1,(s.npMax||5)-1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>−</button>
-            <span className="mono" style={{fontSize:16,fontWeight:700,color:'var(--accent2)',minWidth:24,textAlign:'center'}}>{cfg.npMax||5}</span>
-            <button onClick={()=>setCfg(s=>({...s,npMax:Math.min(20,(s.npMax||5)+1)}))} style={{width:28,height:28,borderRadius:8,background:'var(--bg3)',color:'var(--text2)',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>+</button>
+        {/* Rank System moved to Owner Settings (creator-only — affects all users globally) */}
+        {/* Cost per lead — moved from Owner Settings (per user request: Main-level setting) */}
+        {isManageMode&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,paddingTop:4}}>
+          <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>💰 Cost per lead</p>
+          <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI tracking in Analytics</p></div>
+          <div style={{display:'flex',alignItems:'center',gap:4}}>
+            <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
+            <input type="number" min="0" step="0.01" value={cfg.cpl??''} onChange={e=>setCfg(s=>({...s,cpl:e.target.value===''?'':parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
           </div>
         </div>}
       </div>}
 
       {/* ═══ OWNER SETTINGS — Creator/owner only. Truly company-wide settings that affect everyone. ═══ */}
-      {settingsSubtab==='owner'&&isCreatorUser&&<div className="card" style={{marginBottom:12}}>
+      {settingsSubtab==='owner'&&isCreatorUser&&<>
+      <div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:4,color:'var(--gold)'}}>👑 Owner Settings</h3>
         <p style={{margin:'0 0 12px',fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>Settings here affect ALL Mains and Admins across the entire account</p>
 
-        {/* Cost Per Lead — moved here from Admin Rules */}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
-          <div><p style={{margin:0,fontSize:13,fontWeight:600,color:'#f1f5f9'}}>💰 Cost per lead</p>
-          <p style={{margin:0,fontSize:10,color:'var(--text3)'}}>For ROI tracking in Analytics tab</p></div>
-          <div style={{display:'flex',alignItems:'center',gap:4}}>
-            <span style={{fontSize:12,color:'var(--text3)'}}>$</span>
-            <input type="number" min="0" step="0.01" value={cfg.cpl??''} onChange={e=>setCfg(s=>({...s,cpl:e.target.value===''?'':parseFloat(e.target.value)||0}))} style={{width:70,textAlign:'center',fontSize:13,padding:'6px'}}/>
+        {/* Rank System (moved from Admin Rules) — owner-edit only, applies globally */}
+        <div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System</p>
+            <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              <span style={{fontSize:10,color:'var(--text3)'}}>🏦 Star Bank:</span>
+              <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{Math.round(starBank+totalStars)} ⭐</span>
+            </div>
+          </div>
+          <p style={{margin:'0 0 6px',fontSize:10,fontWeight:600,color:'var(--text3)'}}>Min Appts/Month per Rank + Milestone Stars Awarded:</p>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:6}}>
+            {ML_RANKS.map((r,i)=><div key={i} style={{textAlign:'center',padding:'6px 4px',borderRadius:8,background:'var(--bg2)',border:'1px solid var(--border)'}}>
+              <span style={{fontSize:14}}>{r.emoji}</span>
+              <p style={{margin:'2px 0',fontSize:10,color:r.color,fontWeight:700}}>{r.label}</p>
+              <label style={{fontSize:7,color:'var(--text3)'}}>Min Appts</label>
+              <input type="number" min="0" value={(cfg.starThresholds||[0,5,10,15,25,35,50])[i]??0} onChange={e=>{const t=[...(cfg.starThresholds||[0,5,10,15,25,35,50])];t[i]=+e.target.value||0;setCfg(s=>({...s,starThresholds:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px'}} disabled={i===0}/>
+              <label style={{fontSize:7,color:'var(--gold)'}}>⭐ Stars</label>
+              <input type="number" min="0" value={(cfg.milestoneStars||[0,10,25,50,100,200,500])[i]??0} onChange={e=>{const t=[...(cfg.milestoneStars||[0,10,25,50,100,200,500])];t[i]=+e.target.value||0;setCfg(s=>({...s,milestoneStars:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px',borderColor:'rgba(240,180,41,.3)'}}/>
+            </div>)}
+          </div>
+          <p style={{margin:'4px 0 0',fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>Note: Mains' rank counts ONLY their own self-call appointments — admin appointments don't count toward the Main's rank.</p>
+        </div>
+      </div>
+
+      {/* Users management (moved from Team subtab) */}
+      <div className="card" style={{marginBottom:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <h3 style={{fontSize:14,fontWeight:700,color:'var(--accent2)',margin:0}}>👥 Users</h3>
+          <button onClick={async()=>{try{toast('Loading users...','info');const r=await _SB.from('profiles').select('*');if(r.error){toast('DB error: '+r.error.message,'err');return}setUsersList(r.data||[]);setPendingUsers((r.data||[]).filter(u=>!u.approved&&!isCreator(u.email)));toast((r.data||[]).length+' users loaded')}catch(e){toast('Failed: '+e.message,'err')}}} style={{padding:'5px 12px',borderRadius:8,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Load</button>
+        </div>
+        {/* Filter out the creator from the list — they have a separate "(You · Owner)" row below */}
+        {usersList.filter(u=>!isCreator(u.email)).map(u=><div key={u.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+          <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{u.full_name||u.email}</p>
+            <span style={{fontSize:10,color:'var(--text3)'}}>{u.email}</span> <span className="pill" style={{background:u.approved?'var(--gdim)':'var(--rdim)',color:u.approved?'var(--green)':'var(--red)',fontSize:10}}>{u.approved?'OK':'PENDING'}</span></div>
+          <button onClick={async()=>{try{await _SB.from('profiles').update({approved:!u.approved}).eq('id',u.id);setUsersList(p=>p.map(x=>x.id===u.id?{...x,approved:!x.approved}:x));setPendingUsers(p=>u.approved?[...p,{...u,approved:false}]:p.filter(x=>x.id!==u.id));toast(u.approved?'Revoked':'Approved')}catch(e){toast('Error: '+e.message,'err')}}} style={{padding:'4px 10px',borderRadius:6,background:u.approved?'var(--rdim)':'var(--gdim)',color:u.approved?'var(--red)':'var(--green)',fontSize:10,fontWeight:600}}>{u.approved?'Revoke':'Approve'}</button>
+        </div>)}
+        {/* Owner's own row — always shown as Owner, never PENDING */}
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 8px',marginTop:6,borderRadius:10,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)'}}>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:12,fontWeight:700,color:'var(--gold)'}}>{userName} <span style={{fontWeight:600,color:'var(--text3)'}}>(You)</span></p>
+            <span style={{fontSize:10,color:'var(--text3)'}}>{myEmail}</span> <span className="pill" style={{background:'rgba(240,180,41,.15)',color:'var(--gold)',fontSize:10}}>👑 OWNER</span>
           </div>
         </div>
-
-        <p style={{margin:'0 0 6px',fontSize:11,fontWeight:700,color:'var(--text2)'}}>FUTURE OWNER-ONLY SETTINGS</p>
-        <p style={{margin:0,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>This section will house company-wide settings like brand defaults, global API keys, and cross-Main policies. More controls will be added here over time as we identify settings that should NOT be per-Main.</p>
-      </div>}
+      </div>
+      </>}
       {settingsSubtab==='owner'&&!isCreatorUser&&<div className="card" style={{marginBottom:12,textAlign:'center',padding:24}}>
         <p style={{fontSize:32,marginBottom:8}}>🔒</p>
         <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--text2)'}}>Owner Only</p>
