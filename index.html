@@ -4215,13 +4215,38 @@ function App(){
       // Admin-side: pull own sharedappt_ to receive Main's write-backs (Met/Postponed/Closed on admin-owned appts)
       {key:'sharedappt', enabled:_adminOnly, apply:(p)=>{
         if(!Array.isArray(p?.data))return;
+        // ═══ Guard: don't stomp on fresh local appts during the 6s grace window after a Set/Undo.
+        // ═══ sharedappt_ only contains appts Main has TOUCHED (status write-backs) — it is NOT a
+        // ═══ complete snapshot of the admin's appointments. Merging it as a replace would drop
+        // ═══ any admin-created appt that Main hasn't written back yet.
+        if(_liveSyncRef.current?.localApptsGuardUntil>Date.now()){DBG('[LiveSync] sharedappt apply skipped — local guard active');return}
         const delIds=_getDelIds();
         const myLow=(_user.email||'').toLowerCase();
         const fresh=p.data.filter(a=>!isApptDeleted(a,delIds)).map(a=>({...a,admin:a.admin||myLow}));
+        // ═══ CRITICAL FIX: merge by id/phone instead of wholesale replace.
+        // ═══ Previously this did `prev.filter(a=>a.admin.toLowerCase()!==myLow)` and concatenated
+        // ═══ fresh — which dropped every admin-owned appt NOT in Main's write-back list.
+        // ═══ Now we UPDATE existing rows in place (picking up Main's status changes) and ADD
+        // ═══ any truly new rows, but we never DELETE admin-owned rows just because they're absent
+        // ═══ from sharedappt_. Those get cleaned up via explicit deletion flows only.
         setAppointments(prev=>{
-          // Replace this user's own slice with the cloud version (last-writer-wins)
-          const _other=prev.filter(a=>a.admin&&a.admin.toLowerCase()!==myLow);
-          return _dedupAppts([..._other,...fresh]);
+          const next=prev.slice();
+          fresh.forEach(fa=>{
+            const idx=next.findIndex(la=>
+              (fa.id&&la.id===fa.id)||
+              (fa.calEventId&&la.calEventId===fa.calEventId)||
+              (fa.phone&&la.phone===fa.phone&&fa.apptDate&&la.apptDate===fa.apptDate)
+            );
+            if(idx>=0){
+              // Merge Main's write-back into the existing row — let Main's followUp/followUpDate/tipPaid
+              // fields win since those are the whole point of sharedappt_
+              next[idx]={...next[idx],...fa};
+            }else{
+              // Truly new row from sharedappt_ that isn't in local state — add it
+              next.push(fa);
+            }
+          });
+          return _dedupAppts(next);
         });
       }},
       // Admin-side only: payevt_ is an event log with local dedup, no hash check
