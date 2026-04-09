@@ -2523,6 +2523,17 @@ function App(){
       _SB.from('autodial_admin_config').upsert({admin_email:'dsets_'+em,biz_name:JSON.stringify({date:getTodaySGT(),count:0,ts:Date.now(),devId:window._devId,reset:true,resetTs:_resetTs})},{onConflict:'admin_email'}),
       _SB.from('autodial_admin_config').upsert({admin_email:'slog_'+em,biz_name:JSON.stringify([])},{onConflict:'admin_email'}),
       _SB.from('autodial_admin_config').upsert({admin_email:'asess_'+em,biz_name:JSON.stringify({})},{onConflict:'admin_email'}),
+      // ═══ CRITICAL: also wipe live_<email>. This is the SECOND source of truth for totalSets/dailySets
+      // ═══ that gets applied via applyRemoteLive on every pullLive. Without this, the admin's reload
+      // ═══ would: (1) read ts_<email> → setTotalSets(0), then (2) pullLive → read live_<email> with
+      // ═══ stale totalSets:3 → setTotalSets(3) OVERWRITING the reset. Push a fresh live_ with all
+      // ═══ counters zeroed and a high timestamp so it wins against any local push race.
+      _SB.from('autodial_admin_config').upsert({admin_email:'live_'+em,biz_name:JSON.stringify({
+        session:null,curIdx:-1,phase:'idle',running:false,leadsCount:0,
+        dailySets:0,dailySetsDate:getTodaySGT(),totalSets:0,
+        resetTs:_resetTs,
+        ts:_resetTs+1,devId:'__reset__',email:em
+      })},{onConflict:'admin_email'}),
     ].map(p=>p.then?p.then(()=>{},()=>{}):p)));
     // ═══ Also reset Main's local view of this admin's sessions/stats so the dashboard updates immediately
     if(_user&&!_emailsLow.every(e=>e===(_user.email||'').toLowerCase())){
@@ -2725,6 +2736,48 @@ function App(){
   const[claudeKeyVal,setClaudeKeyVal]=useState(localStorage.getItem('autodial_claude_key')||(role==='admin'&&cfg.sharedClaudeKey?cfg.sharedClaudeKey:''));
   // Share Claude key with admins via config
   useEffect(()=>{if(role==='admin'&&cfg.sharedClaudeKey&&!localStorage.getItem('autodial_claude_key')){window._sharedClaudeKey=cfg.sharedClaudeKey}},[cfg.sharedClaudeKey,role]);
+
+  // ═══ ADMIN REVOCATION RUNTIME POLL ═══
+  // authCheck already gates admins on LOGIN — but if Main removes them while they're already
+  // logged in, we need to detect it at runtime. This effect polls revoked_<myEmail> every 30s
+  // and on visibility change. When triggered, it wipes ALL local app data (Google tokens, leads,
+  // sessions, configs) and signs the admin out — they land on the lock screen on next load.
+  useEffect(()=>{
+    if(role!=='admin'||!_SB||!_user||!myEmail)return;
+    let _stopped=false;
+    const _checkRevoked=async()=>{
+      if(_stopped)return;
+      try{
+        const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','revoked_'+myEmail.toLowerCase()).maybeSingle();
+        if(r&&r.data&&r.data.biz_name){
+          let rd;try{rd=JSON.parse(r.data.biz_name)}catch(_e){return}
+          if(rd&&rd.revokedAt){
+            const lastSeen=parseInt(localStorage.getItem('_lastRevokedSeen')||'0');
+            if(rd.revokedAt>lastSeen){
+              console.warn('[AdminRevoke] runtime revocation detected — locking out');
+              _stopped=true;
+              // Wipe ALL local autodial state — Google tokens, leads cache, sessions, configs
+              try{
+                const keys=Object.keys(localStorage).filter(k=>k.startsWith('ad3_')||k==='ad_gt'||k==='ad_gt_ts'||k==='ad_g_ever'||k.startsWith('ad_'));
+                keys.forEach(k=>{try{localStorage.removeItem(k)}catch(_e){}});
+              }catch(_e){}
+              // Force sign-out, which redirects to auth-gate where authCheck will hit the lock screen
+              toast('🔒 Your account has been removed by your manager','err');
+              setTimeout(()=>{try{authLogout()}catch(_e){}},1500);
+            }
+          }
+        }
+      }catch(e){console.warn('[AdminRevoke] poll failed:',e?.message||e)}
+    };
+    // Check immediately on mount
+    _checkRevoked();
+    // Re-check every 10 seconds while tab is open (was 30s — tightened for faster lockout)
+    const _pollId=setInterval(()=>{if(document.visibilityState==='visible')_checkRevoked()},10000);
+    // Re-check when tab becomes visible (user comes back from another tab/app)
+    const _onVis=()=>{if(document.visibilityState==='visible')_checkRevoked()};
+    document.addEventListener('visibilitychange',_onVis);
+    return()=>{_stopped=true;clearInterval(_pollId);document.removeEventListener('visibilitychange',_onVis)};
+  },[role,myEmail]);
   useEffect(()=>{if(geminiKeyVal){cloudSave('learned',{...learnedPatterns,_geminiKey:geminiKeyVal});
     if(_SB&&_user&&window._cloudReady)_SB.from('autodial_admin_config').upsert({admin_email:'gemini_'+_user.email.toLowerCase(),biz_name:JSON.stringify({key:geminiKeyVal,ts:Date.now()})},{onConflict:'admin_email'}).catch(function(){})
     if(role==='main'&&mainMode==='manage'&&_SB&&window._cloudReady){
@@ -3898,6 +3951,19 @@ function App(){
       // ═══ Apply totalSets
       if(typeof remote.totalSets==='number'){
         setTotalSets(remote.totalSets);
+      }
+      // ═══ Reset signal: if Main wiped this admin via clearApptsForAdmins, the live_ row carries
+      // ═══ a resetTs marker. Force-wipe local rank state and persist the seen-marker so we don't loop.
+      if(remote.resetTs){
+        try{
+          const _seen=parseInt(localStorage.getItem('_lastTsResetSeen')||'0');
+          if(remote.resetTs>_seen){
+            setTotalSets(0);
+            try{save('ts',0);save('rankStarsAwarded',[]);_resetDailySets()}catch(_e){}
+            localStorage.setItem('_lastTsResetSeen',String(remote.resetTs));
+            DBG('[LiveSync] reset signal applied — totalSets=0, dailySets=0');
+          }
+        }catch(_e){}
       }
       // ═══ Merge cross-device deletion IDs so clears on other devices propagate fast (2s)
       if(Array.isArray(remote.delIds)&&remote.delIds.length){
@@ -6974,7 +7040,10 @@ function App(){
         </div>
         {Object.entries(adminConfigs).map(([em,ac])=><div key={em} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:14,padding:12,marginBottom:8}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-            <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{ac.bizName||em}</p>
+            <div style={{flex:1,minWidth:0}}>
+              <p style={{margin:0,fontSize:13,fontWeight:700,color:'#f1f5f9'}}>{ac.bizName||em}</p>
+              <p style={{margin:'2px 0 0',fontSize:9,color:'var(--text3)'}}>📨 {waTemplates.length} WA template{waTemplates.length===1?'':'s'} shared <span style={{opacity:.6}}>· read-only on their side</span></p>
+            </div>
             <div style={{display:'flex',gap:4}}>
               <Btn variant="primary" size="sm" weight={600} onClick={()=>setEditingAdmin(editingAdmin===em?null:em)}>{editingAdmin===em?'Close':'Edit'}</Btn>
               <button title={"Wipe all of "+(ac.bizName||em)+"'s appointments from cloud"} onClick={async()=>{
@@ -7329,12 +7398,16 @@ function App(){
 
         {/* Rank System (moved from Admin Rules) — owner-edit only, applies globally */}
         <div style={{padding:'12px',borderRadius:12,background:'var(--bg)',border:'1px solid rgba(240,180,41,.25)',marginBottom:10}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-            <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Rank System</p>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+            <p style={{margin:0,fontSize:13,fontWeight:700,color:'var(--gold)'}}>⭐ Mains' Self-Call Rank System</p>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={{fontSize:10,color:'var(--text3)'}}>🏦 Star Bank:</span>
               <span className="mono" style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{Math.round(starBank+totalStars)} ⭐</span>
             </div>
+          </div>
+          <div style={{padding:'8px 10px',borderRadius:8,background:'rgba(240,180,41,.08)',border:'1px solid rgba(240,180,41,.2)',marginBottom:10}}>
+            <p style={{margin:0,fontSize:10,color:'var(--gold)',fontWeight:700}}>⚠️ APPLIES TO MAINS' SELF-CALL ONLY</p>
+            <p style={{margin:'2px 0 0',fontSize:10,color:'var(--text2)',lineHeight:1.4}}>This rank ladder counts ONLY appointments a Main personally sets in their own calling sessions. Admin-produced appointments do NOT count toward a Main's rank. Each admin's tier rank (Bronze→Platinum Elite) is configured separately by their managing Main in <b>Admin → Admin Pay (Per-Person)</b>.</p>
           </div>
           <p style={{margin:'0 0 6px',fontSize:10,fontWeight:600,color:'var(--text3)'}}>Min Appts/Month per Rank + Milestone Stars Awarded:</p>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:6}}>
@@ -7347,7 +7420,6 @@ function App(){
               <input type="number" min="0" value={(cfg.milestoneStars||[0,10,25,50,100,200,500])[i]??0} onChange={e=>{const t=[...(cfg.milestoneStars||[0,10,25,50,100,200,500])];t[i]=+e.target.value||0;setCfg(s=>({...s,milestoneStars:t}))}} style={{width:'100%',fontSize:10,textAlign:'center',padding:'3px',borderColor:'rgba(240,180,41,.3)'}}/>
             </div>)}
           </div>
-          <p style={{margin:'4px 0 0',fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>Note: Mains' rank counts ONLY their own self-call appointments — admin appointments don't count toward the Main's rank.</p>
         </div>
       </div>
 
@@ -7499,11 +7571,14 @@ function App(){
           <input type="number" min="15" step="15" value={apptDuration} onChange={e=>setApptDuration(e.target.value===''?'':+e.target.value)} style={{textAlign:'center',width:120}}/></div>
       </div>}
 
-      {/* WhatsApp Templates (Main) */}
-      {isManageMode&&<div className="card" style={{marginBottom:12}}>
+      {/* end of Integrations subtab content — WA Templates moved out to Calling subtab below */}
+      </>}
+
+      {/* WhatsApp Templates — moved from Integrations to Calling subtab so admins can VIEW (read-only) and Mains can EDIT */}
+      {settingsSubtab==='prefs'&&<div className="card" style={{marginBottom:12}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-          <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates</h3>
-          {waTemplates.length>0&&<Btn variant="danger" size="sm" weight={600} radius={6} onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;
+          <h3 style={{margin:0,fontSize:14,fontWeight:700,color:'#25d366'}}>💬 WhatsApp Templates {role==='admin'&&<span style={{fontSize:9,color:'var(--text3)',fontWeight:600}}>(read-only)</span>}</h3>
+          {role!=='admin'&&waTemplates.length>0&&<Btn variant="danger" size="sm" weight={600} radius={6} onClick={()=>{if(!confirm('Delete ALL '+waTemplates.length+' templates?'))return;
             // Delete from the WA templates table (best-effort; may silently fail for is_default seeds)
             waTemplates.forEach(t=>{if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{})});
             // Explicitly wipe the config-key copies so a subsequent pull/reload doesn't resurrect them
@@ -7522,6 +7597,7 @@ function App(){
           <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:12,fontWeight:600,color:'#f1f5f9'}}>{t.name}</p>
             <p style={{margin:0,fontSize:10,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.template}</p></div>
           <div style={{display:'flex',gap:4,flexShrink:0}}>
+            {role!=='admin'&&<>
             <button onClick={()=>{
               setNewWA({name:t.name,template:t.template,category:t.category||'appointment'});
               setWaTemplates(p=>{
@@ -7544,9 +7620,11 @@ function App(){
               if(t.id&&_SB)_SB.from('autodial_wa_templates').delete().eq('id',t.id).then(()=>{});
               toast('Deleted')
             }}>×</Btn>
+            </>}
           </div>
         </div>)}
-        <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+        {role==='admin'&&waTemplates.length===0&&<p style={{margin:'6px 0',fontSize:11,color:'var(--text3)',textAlign:'center',fontStyle:'italic'}}>No templates yet. Your manager will share templates here.</p>}
+        {role!=='admin'&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
           <input value={newWA.name} onChange={e=>setNewWA(p=>({...p,name:e.target.value}))} placeholder="Template name" style={{marginBottom:6,fontSize:12}}/>
           <textarea value={newWA.template} onChange={e=>setNewWA(p=>({...p,template:e.target.value}))} placeholder="Hi {{name}}, confirming our meeting on {{date}}…" rows={3} style={{width:'100%',marginBottom:6,background:'var(--bg2)',color:'var(--text)',border:'1px solid var(--border2)',borderRadius:12,padding:12,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
           <select value={newWA.category} onChange={e=>setNewWA(p=>({...p,category:e.target.value}))} style={{marginBottom:8,fontSize:12}}>
@@ -7564,11 +7642,11 @@ function App(){
               if(role!=='admin'&&_SB){try{_SB.from('autodial_admin_config').upsert({admin_email:'shared_wa_templates',biz_name:JSON.stringify(updated)},{onConflict:'admin_email'})}catch(e){}}
               return updated});setNewWA({name:'',template:'',category:'appointment'});toast('Template saved')
           }} style={{width:'100%',padding:'10px',borderRadius:10,background:'rgba(37,211,102,.15)',color:'#25d366',fontSize:12,fontWeight:700,border:'1px solid rgba(37,211,102,.2)'}}>+ Add Template</button>
-        </div>
+        </div>}
       </div>}
 
-      {/* Admin: Shared Calendars (read-only view) */}
-      {role==='admin'&&calShares.length>0&&<div className="card" style={{marginBottom:12}}>
+      {/* Admin: Shared Calendars (read-only view) — still in Integrations subtab */}
+      {settingsSubtab==='integr'&&role==='admin'&&calShares.length>0&&<div className="card" style={{marginBottom:12}}>
         <h3 style={{fontSize:14,fontWeight:700,marginBottom:8,color:'#4285f4'}}>📅 Shared Calendars</h3>
         {calShares.map((s,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
           <span style={{color:'var(--accent2)'}}>📅</span>
@@ -7576,7 +7654,6 @@ function App(){
           <button onClick={()=>window.open('https://calendar.google.com/calendar/r?cid='+encodeURIComponent(s.calendar_id),'_blank')} style={{marginLeft:'auto',padding:'4px 10px',borderRadius:6,background:'var(--adim)',color:'var(--accent2)',fontSize:10,fontWeight:600}}>Open</button>
         </div>)}
       </div>}
-      </>}
 
       {settingsSubtab==='prefs'&&role==='admin'&&<button onClick={()=>authLogout()} style={{width:'100%',padding:'14px',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',fontSize:13,fontWeight:600}}>Sign Out</button>}
     </div>}
