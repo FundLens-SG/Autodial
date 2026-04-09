@@ -105,6 +105,9 @@ button:active{transform:scale(.97)}
 @keyframes glow{0%,100%{box-shadow:var(--glow)}50%{box-shadow:0 0 60px rgba(99,102,241,.25)}}
 @keyframes glowEmerald{0%,100%{box-shadow:0 0 28px rgba(16,185,129,.5),0 6px 20px rgba(6,182,212,.35),inset 0 1px 0 rgba(255,255,255,.2)}50%{box-shadow:0 0 44px rgba(16,185,129,.75),0 8px 28px rgba(6,182,212,.5),inset 0 1px 0 rgba(255,255,255,.3)}}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes postponedShimmer{0%,100%{box-shadow:0 0 0 1px rgba(255,255,255,.25),0 0 14px rgba(255,255,255,.12),inset 0 1px 0 rgba(255,255,255,.1)}50%{box-shadow:0 0 0 1px rgba(255,255,255,.5),0 0 28px rgba(255,255,255,.22),inset 0 1px 0 rgba(255,255,255,.18)}}
+.postponed-needs-date{animation:postponedShimmer 2.4s ease-in-out infinite;background:linear-gradient(135deg,rgba(255,255,255,.06),rgba(255,255,255,.02))!important;border:1px solid rgba(255,255,255,.4)!important;cursor:pointer;position:relative;overflow:hidden}
+.postponed-needs-date::after{content:'';position:absolute;top:0;left:-100%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.10),transparent);animation:shimmer 3s infinite;pointer-events:none}
 @keyframes confetti{0%{transform:translateY(0) rotate(0);opacity:1}100%{transform:translateY(-200px) rotate(720deg);opacity:0}}
 @keyframes celebrate{0%{transform:scale(.8);opacity:0}50%{transform:scale(1.05)}100%{transform:scale(1);opacity:1}}
 @keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:200px}}
@@ -2414,6 +2417,13 @@ function App(){
   const[calViewMode,setCalViewMode]=useState(()=>load('calvm')||'list'); // 'list' | 'grid' for Cal tab
   // ═══ Cal tab click-to-edit state
   const[calEditEvent,setCalEditEvent]=useState(null); // raw Google Calendar event
+  // ═══ Unified delete/action modal for appointments.
+  // Instead of a plain confirm("Delete?"), pressing × or trash opens this modal with 3 options:
+  //   • 🗑 Delete           — removes the appointment AND decrements totalSets (admin set it wrongly)
+  //   • 🪁 Fly Kite         — client no-show: removes GCal event but KEEPS the row (counts as a set)
+  //   • ⏸ Postpone          — reschedule: removes GCal event, clears date, shows at top for rescheduling
+  // `source` is 'appts' or 'cal' so the handler knows which local state to also update.
+  const[apptActionModal,setApptActionModal]=useState(null); // {appt, source:'appts'|'cal'}
   const[calEditForm,setCalEditForm]=useState({summary:'',date:'',time:'',duration:60,location:''});
   const[calEditSaving,setCalEditSaving]=useState(false);
   // ═══ Dateless-appointment fix-up modal (Appts tab → "Set date & time" button)
@@ -2621,8 +2631,21 @@ function App(){
   // Shaky status derives solely from the Supabase `shaky` column on the appointment row.
   // Writes go through DB.updateApptShaky + optimistic setAppointments updates.
   const isApptShaky=(a)=>!!(a&&a.shaky);
+  // ═══ POSTPONED title prefix helpers
+  // ═══ "[POSTPONED: NO DATE]" — appointment postponed, no new date confirmed yet (shaky=true)
+  // ═══ "[POSTPONED]"          — appointment was postponed and rescheduled to a new date (shaky=false)
+  // ═══ Both prefixes are historical markers on the Google Calendar event title.
+  const _stripPostponedPrefix=(title)=>(title||'').replace(/^\[POSTPONED(?::\s*NO\s*DATE)?\]\s*/i,'');
+  const _withPostponedPrefix=(title,hasDate)=>{
+    const stripped=_stripPostponedPrefix(title);
+    return(hasDate?'[POSTPONED] ':'[POSTPONED: NO DATE] ')+stripped;
+  };
   // 60s cache for picker events to avoid refetching on every modal open
   const pickerEventsCacheRef=useRef({key:'',ts:0,data:null});
+  // ═══ Tracks which appointment IDs currently have an async gCal.create in-flight.
+  // ═══ Used by the auto-create useEffect to prevent double-creation when state updates
+  // ═══ while a create is still resolving.
+  const _autoCreateGCalRef=useRef(new Set());
   const[detailId,setDetailId]=useState(null);
   const[showAdd,setShowAdd]=useState(false);const[newF,setNewF]=useState({name:'',phone:''});
   const[showFilters,setShowFilters]=useState(false);
@@ -4014,6 +4037,48 @@ function App(){
   };
   // ═══ Imperative push for payevt_<admin> — Main calls this when marking an admin paid.
   // Event log with dedup (admin keeps a consumed-IDs Set in localStorage). Capped at last 100.
+  // ═══ Main → admin cloud write-back helper. When Main edits an admin-owned appointment
+  // ═══ (status change, reschedule, shaky toggle), this helper imperatively updates the
+  // ═══ admin's sharedappt_ + apptlive_ cloud rows so the admin's device sees the change
+  // ═══ on its next pull. Without this, Main's edits stay on Main only and get wiped by
+  // ═══ the next aggregation cycle (which treats the admin's stale cloud as authoritative).
+  // ═══ Main-only: no-op when called by an admin role.
+  const _mainWritebackAdminAppt=useCallback(async(updatedAppt)=>{
+    if(!_SB||!updatedAppt||!updatedAppt.admin)return;
+    if(role==='admin')return;
+    const adminLow=updatedAppt.admin.toLowerCase();
+    if(!adminLow||adminLow.indexOf('@')<0)return;
+    const _matchKey=(row,target)=>{
+      if(target.id&&row.id===target.id)return true;
+      if(target.calEventId&&row.calEventId===target.calEventId)return true;
+      if(target.phone&&row.phone===target.phone&&target.apptDate&&row.apptDate===target.apptDate)return true;
+      return false;
+    };
+    try{
+      // 1. sharedappt_<admin> — shape {data:[...], ts, devId}
+      const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+adminLow).maybeSingle();
+      let sharedList=[];
+      if(r?.data?.biz_name){
+        try{const parsed=JSON.parse(r.data.biz_name);sharedList=Array.isArray(parsed?.data)?parsed.data:(Array.isArray(parsed)?parsed:[])}catch(_e){}
+      }
+      const sharedIdx=sharedList.findIndex(x=>_matchKey(x,updatedAppt));
+      if(sharedIdx>=0)sharedList[sharedIdx]={...sharedList[sharedIdx],...updatedAppt};
+      else sharedList.push(updatedAppt);
+      await _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+adminLow,biz_name:JSON.stringify({data:sharedList.slice(-500),ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+      // 2. apptlive_<admin> — shape {appts:[...], hash, count, ts, devId}
+      const r2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptlive_'+adminLow).maybeSingle();
+      let liveList=[];
+      if(r2?.data?.biz_name){
+        try{const parsed2=JSON.parse(r2.data.biz_name);liveList=Array.isArray(parsed2?.appts)?parsed2.appts:[]}catch(_e){}
+      }
+      const liveIdx=liveList.findIndex(x=>_matchKey(x,updatedAppt));
+      if(liveIdx>=0)liveList[liveIdx]={...liveList[liveIdx],...updatedAppt};
+      else liveList.push(updatedAppt);
+      await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+adminLow,biz_name:JSON.stringify({appts:liveList.slice(-1000),count:liveList.length,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+      DBG('[LiveSync] write-back to '+adminLow+' complete');
+    }catch(e){console.warn('[LiveSync write-back]',e?.message||e)}
+  },[role]);
+
   const _pushPayEvt=useCallback(async(adminEmail,evt)=>{
     if(!_SB||!_user||!adminEmail)return;
     try{
@@ -4520,6 +4585,123 @@ function App(){
   },[appointments,pullGate]);
 
   // ══════════════════════════════════════════════════════════════════════════════════
+  // ═══ AUTO-CREATE GCAL EVENT FOR DEFERRED RESCHEDULES
+  // ═══
+  // ═══ When Main reschedules an admin-owned appointment, Main's device can't create
+  // ═══ the Google Calendar event on the admin's calendar (wrong token/identity). Instead
+  // ═══ Main writes the new date/time locally with an empty calEventId and syncs that to
+  // ═══ the admin's cloud rows. THIS useEffect runs on every device and, for any row it
+  // ═══ OWNS that has a date but no calEventId, creates the event on its own calendar
+  // ═══ and writes the new calEventId back to state (which triggers write-through sync).
+  // ═══
+  // ═══ Same pattern also handles the edge case where gCal was offline when the row was
+  // ═══ first created: on next app open with Google connected, the event gets created.
+  // ══════════════════════════════════════════════════════════════════════════════════
+  useEffect(()=>{
+    if(!window._cloudReady)return;
+    if(!localStorage.getItem('ad_gt'))return; // no Google token → can't create
+    if(!window.gCal)return;
+    const myLow=myEmail.toLowerCase();
+    const _needsCreate=(appointments||[]).filter(a=>{
+      if(!a.apptDate||!a.apptTime)return false;
+      if(a.calEventId)return false; // already has an event
+      if(a.followUp&&a.followUp!=='pending')return false; // don't auto-create for met/closed/flykite/postponed
+      const ownerLow=(a.admin||myLow).toLowerCase();
+      if(ownerLow!==myLow)return false; // not mine → defer to owner's device
+      if(_autoCreateGCalRef.current.has(a.id))return false; // already in-flight
+      return true;
+    });
+    if(!_needsCreate.length)return;
+    _needsCreate.forEach(async a=>{
+      _autoCreateGCalRef.current.add(a.id);
+      try{
+        const[y,mo,da]=a.apptDate.split('-').map(Number);
+        const[h,mi]=a.apptTime.split(':').map(Number);
+        const s=new Date(y,mo-1,da,h,mi,0);
+        const dur=a.duration||60;
+        const end=new Date(s.getTime()+dur*60000);
+        const desc=['Client: '+(a.name||''),a.phone?'Phone: '+a.phone:'',a.remarks?'Notes: '+a.remarks:'','(Rescheduled)'].filter(Boolean).join('\n');
+        const title='Appt: '+(a.name||'')+(a.location?' @ '+a.location:'');
+        const calId=myCfg.targetCalendarId||'primary';
+        const evt=await gCal.create(title,desc,s.toISOString(),end.toISOString(),null,calId);
+        if(evt?.id){
+          try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+          setAppointments(p=>p.map(x=>x.id===a.id?{...x,calEventId:evt.id}:x));
+          setWeekEvents(prev=>[...prev.filter(e=>e.id!==evt.id),{id:evt.id,summary:title,start:{dateTime:s.toISOString()},end:{dateTime:end.toISOString()},_calId:calId}]);
+          toast('📅 Calendar event created for '+(a.name||'rescheduled appt'),'info');
+          DBG('[AutoCreate] gCal event '+evt.id+' created for '+a.name);
+        }
+      }catch(e){
+        console.warn('[AutoCreate]',e?.message||e);
+      }finally{
+        _autoCreateGCalRef.current.delete(a.id);
+      }
+    });
+  },[appointments,myCfg.targetCalendarId]);
+
+  // ══════════════════════════════════════════════════════════════════════════════════
+  // ═══ EXTERNAL GOOGLE CALENDAR → AUTODIAL RECONCILIATION
+  // ═══
+  // ═══ When Main moves an event directly in Google Calendar (not via AutoDial), the
+  // ═══ event's start/end time changes but the appointment row in AutoDial still has the
+  // ═══ old date/time. This effect runs whenever weekEvents reloads (Cal tab open, refresh,
+  // ═══ visibility change) and reconciles any matching appointment row's apptDate/apptTime
+  // ═══ to the gCal event's actual time. The row stays attributed to the original admin —
+  // ═══ only the date/time changes. Cross-device sync is handled by the same write-through
+  // ═══ that runs on any setAppointments update.
+  // ══════════════════════════════════════════════════════════════════════════════════
+  useEffect(()=>{
+    if(!Array.isArray(weekEvents)||!weekEvents.length)return;
+    if(!appointments||!appointments.length)return;
+    // Build a map of calEventId → {apptDate, apptTime, duration} from current weekEvents
+    const _evMap=new Map();
+    weekEvents.forEach(ev=>{
+      if(!ev?.id||!ev.start)return;
+      const _start=ev.start.dateTime||ev.start.date;
+      if(!_start)return;
+      const _end=ev.end?.dateTime||ev.end?.date;
+      try{
+        const _s=new Date(_start);
+        const _dateKey=localDateKey(_s);
+        const _hh=String(_s.getHours()).padStart(2,'0');
+        const _mm=String(_s.getMinutes()).padStart(2,'0');
+        const _timeStr=_hh+':'+_mm;
+        let _dur=null;
+        if(_end){const _e=new Date(_end);_dur=Math.max(15,Math.round((_e-_s)/60000))}
+        _evMap.set(ev.id,{apptDate:_dateKey,apptTime:_timeStr,duration:_dur});
+      }catch(_e){}
+    });
+    if(!_evMap.size)return;
+    // Find any appointment rows whose date/time/duration drifted from the gCal event
+    const _drifts=[];
+    appointments.forEach(a=>{
+      if(!a.calEventId)return;
+      const _ev=_evMap.get(a.calEventId);
+      if(!_ev)return;
+      const _dateChanged=a.apptDate!==_ev.apptDate;
+      const _timeChanged=a.apptTime!==_ev.apptTime;
+      const _durChanged=_ev.duration&&a.duration&&Math.abs(a.duration-_ev.duration)>1;
+      if(_dateChanged||_timeChanged||_durChanged){
+        _drifts.push({appt:a,patch:{apptDate:_ev.apptDate,apptTime:_ev.apptTime,duration:_ev.duration||a.duration}});
+      }
+    });
+    if(!_drifts.length)return;
+    DBG('[GCal Recon] '+_drifts.length+' appointment(s) drifted from calendar — updating');
+    try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+    setAppointments(prev=>prev.map(a=>{
+      const _drift=_drifts.find(d=>d.appt.id===a.id);
+      if(!_drift)return a;
+      return{...a,...(_drift.patch)};
+    }));
+    // Cross-device write-back for admin-owned drifted rows
+    _drifts.forEach(({appt,patch})=>{
+      if(appt.admin&&appt.admin.toLowerCase()!==myEmail.toLowerCase()){
+        _mainWritebackAdminAppt({...appt,...patch});
+      }
+    });
+  },[weekEvents]);
+
+  // ══════════════════════════════════════════════════════════════════════════════════
   // ═══ MULTI-KEY LIVE SYNC — 8 additional state keys piggybacking on the unified
   // ═══ sync layer. Each call below installs ONE useEffect via _useSyncedPush.
   // ═══ Hook order is stable (unconditional, same order every render). Pulls and
@@ -4601,17 +4783,56 @@ function App(){
     const applyRemoteAdmin=(adminEmail,p)=>{
       if(_cancelled||!p||!Array.isArray(p.data))return;
       if(_liveSyncRef.current.clearGuardUntil>Date.now()){DBG('[LiveSync] aggregation skipped — clear in progress');return}
+      // ═══ Guard: if Main just edited an admin-owned appt locally (e.g., rescheduling an
+      // ═══ admin's postponed appt, or marking Met), don't let the next sharedappt_<admin> pull
+      // ═══ wholesale-replace Main's slice with the stale admin version. The guard expires after
+      // ═══ 6s, after which Main's own write-through has had time to propagate through live_.
+      if(_liveSyncRef.current.localApptsGuardUntil>Date.now()){DBG('[LiveSync] aggregation skipped — local guard active');return}
       const delIds=_getDelIds();
       const emLow=adminEmail.toLowerCase();
       const fresh=p.data.filter(a=>!isApptDeleted(a,delIds)).map(a=>({...a,admin:a.admin||adminEmail}));
+      // ═══ MERGE-BY-ID instead of wholesale replace. The old code did:
+      // ═══   prev.filter(a => a.admin.toLowerCase() !== emLow)  → drops ALL of admin's rows
+      // ═══   concat fresh                                       → re-adds whatever's in cloud
+      // ═══ This wiped any Main-initiated edits on admin appts (status changes, reschedules)
+      // ═══ that hadn't been echoed back by the admin's device yet. Now we update rows by id/
+      // ═══ calEventId/phone+date and only DELETE admin-owned rows that are explicitly missing
+      // ═══ from cloud AND appear in the blocklist (i.e., explicitly deleted, not just pending sync).
       setAppointments(prev=>{
-        // Keep Main's own appts + other admins' slices untouched; replace only this admin's slice
-        const _rest=prev.filter(a=>!a.admin||a.admin.toLowerCase()!==emLow);
-        return _dedupAppts([..._rest,...fresh]);
+        const next=prev.slice();
+        const freshIds=new Set();
+        fresh.forEach(fa=>{
+          const idx=next.findIndex(la=>
+            (fa.id&&la.id===fa.id)||
+            (fa.calEventId&&la.calEventId===fa.calEventId)||
+            (fa.phone&&la.phone===fa.phone&&fa.apptDate&&la.apptDate===fa.apptDate)
+          );
+          if(fa.id)freshIds.add(String(fa.id));
+          if(idx>=0){
+            // Existing row — merge fresh fields over local (cloud is authoritative for admin-owned
+            // fields like apptDate/apptTime/calEventId/followUp when the cloud version is newer).
+            // But preserve Main's local-only tipPaid / efyc / edits.
+            next[idx]={...next[idx],...fa};
+          }else{
+            // New row from cloud — add it
+            next.push(fa);
+          }
+        });
+        // Explicit deletion: since we've passed the localApptsGuardUntil check above, the admin's
+        // cloud sharedappt_ is considered authoritative for that admin's slice. Any admin-owned row
+        // present locally but missing from fresh has been explicitly deleted on the admin's device
+        // (or by Main earlier via the scrub path). Drop it.
+        // Rows from OTHER admins or Main's own slice are left untouched.
+        const _final=next.filter(a=>{
+          if(!a.admin||a.admin.toLowerCase()!==emLow)return true; // not this admin's slice
+          if(a.id&&freshIds.has(String(a.id)))return true; // still in fresh → keep
+          // Admin-owned row not in fresh — trust the admin's cloud as authoritative → drop
+          return false;
+        });
+        return _dedupAppts(_final);
       });
       // NOTE: do NOT set suppressNextPush here. The aggregation ADDS to local state — letting the
       // write-through push the combined state is desirable (other Main devices stay in sync).
-      // Suppressing here was silently dropping Main's own legitimate edits queued at the same moment.
       DBG('[LiveSync] main-aggregated',fresh.length,'appts from',adminEmail);
     };
     // Initial batch pull
@@ -6138,18 +6359,30 @@ function App(){
           if(['pending','met','postponed','flykite','closed'].includes(apptSearch))return a.followUp===apptSearch;
           return(a.name||'').toLowerCase().includes(apptSearch.toLowerCase())||(a.phone||'').includes(apptSearch)||(a.admin||'').toLowerCase().includes(apptSearch.toLowerCase())
         });
+        // ═══ SORT: postponed-with-no-date bubbles to the top (urgent: needs rescheduling)
+        // ═══ These rows are visually distinguished by the white shimmer animation and
+        // ═══ are tappable to open the date picker.
+        const _sortApptRows=(arr)=>{
+          const _noDate=[],_rest=[];
+          arr.forEach(x=>{
+            if(x.followUp==='postponed'&&!x.apptDate)_noDate.push(x);
+            else _rest.push(x);
+          });
+          return[..._noDate,..._rest];
+        };
+        const _filteredSorted=_sortApptRows(filtered);
         // Manage Mode for Main: group by admin with headers
-        let displayList=filtered;
-        if(role!=='admin'&&isManageMode&&filtered.length){
+        let displayList=_filteredSorted;
+        if(role!=='admin'&&isManageMode&&_filteredSorted.length){
           const groups={};
-          filtered.forEach(a=>{const k=(a.admin||myEmail).toLowerCase();if(!groups[k])groups[k]=[];groups[k].push(a)});
+          _filteredSorted.forEach(a=>{const k=(a.admin||myEmail).toLowerCase();if(!groups[k])groups[k]=[];groups[k].push(a)});
           const sortedKeys=Object.keys(groups).sort((x,y)=>x===myEmail.toLowerCase()?-1:y===myEmail.toLowerCase()?1:x.localeCompare(y));
           displayList=[];
           if(sortedKeys.length>1){sortedKeys.forEach(k=>{
             const isSelf=k===myEmail.toLowerCase();
             displayList.push({_isHeader:true,_key:k,_label:isSelf?'My Appointments':'👤 '+(groups[k][0]?.admin||k),_count:groups[k].length,_isSelf:isSelf});
-            groups[k].forEach(a=>displayList.push(a))})}
-          else{displayList=filtered}
+            _sortApptRows(groups[k]).forEach(a=>displayList.push(a))})}
+          else{displayList=_filteredSorted}
         }
         return displayList})().map((a,i)=>{
         if(a._isHeader)return<div key={'hdr-'+a._key} style={{display:'flex',alignItems:'center',gap:8,margin:'12px 0 8px',padding:'8px 12px',borderRadius:10,background:a._isSelf?'var(--adim)':'var(--bg3)',border:'1px solid '+(a._isSelf?'rgba(99,102,241,.2)':'var(--border)')}}>
@@ -6158,7 +6391,12 @@ function App(){
         const isMain=role==='main';const statusColors={pending:'var(--accent)',met:'var(--green)',postponed:'var(--amber)',flykite:'var(--red)',closed:'var(--gold)'};
         const statusLabels={pending:'Pending',met:'Met ✅',postponed:'Postponed',flykite:'Fly Kite 🪁',closed:'Closed 💰'};
         const _isSelected=selectedAppts.has(a.id);
-        return<div key={a.id} className="card" style={{marginBottom:12,borderColor:_isSelected?'rgba(99,102,241,.6)':((statusColors[a.followUp]||'var(--border)')+'30'),background:_isSelected?'linear-gradient(135deg,rgba(99,102,241,.08),var(--bg2))':undefined,boxShadow:_isSelected?'0 0 0 1px rgba(99,102,241,.3)':undefined}}>
+        // ═══ Postponed-no-date rows: white shimmer + tap to open the date picker
+        const _needsReschedule=a.followUp==='postponed'&&!a.apptDate;
+        return<div key={a.id} className={"card"+(_needsReschedule?" postponed-needs-date":"")} onClick={_needsReschedule?()=>{
+          setFixDateForm({date:localDateKey(new Date()),time:'10:00',duration:n(apptDuration,60)||60});
+          setFixDateAppt(a);
+        }:undefined} style={{marginBottom:12,borderColor:_isSelected?'rgba(99,102,241,.6)':((statusColors[a.followUp]||'var(--border)')+'30'),background:_isSelected?'linear-gradient(135deg,rgba(99,102,241,.08),var(--bg2))':undefined,boxShadow:_isSelected?'0 0 0 1px rgba(99,102,241,.3)':undefined}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6,gap:8}}>
             {isManageMode&&a.followUp==='pending'&&<button onClick={(e)=>{e.stopPropagation();setSelectedAppts(prev=>{const n=new Set(prev);if(n.has(a.id))n.delete(a.id);else n.add(a.id);return n})}} style={{width:22,height:22,borderRadius:6,background:_isSelected?'var(--accent)':'var(--bg3)',border:'1px solid '+(_isSelected?'var(--accent)':'var(--border)'),color:'#fff',fontSize:13,fontWeight:800,padding:0,flexShrink:0,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>{_isSelected?'✓':''}</button>}
             <div style={{flex:1}}>
@@ -6170,66 +6408,21 @@ function App(){
             </div>
             <div style={{display:'flex',alignItems:'center',gap:4}}>
               <span className="pill" style={{background:(statusColors[a.followUp]||'var(--accent)')+'18',color:statusColors[a.followUp]||'var(--accent)'}}>{statusLabels[a.followUp]||'Pending'}</span>
-              <button onClick={e=>{e.stopPropagation();if(confirm('Delete appointment for '+a.name+'?\n\nThis will block all copies of this phone number from re-appearing.')){
-                // ═══ Delete the Google Calendar event first so it stops blocking calendar slots ═══
-                if(a.calEventId&&window.gCal){gCal.del(a.calEventId).then(ok=>{DBG('[Appt delete] gCal event '+(ok?'deleted':'skipped'))}).catch(()=>{})}
-                // Remove from local weekEvents cache so Cal tab updates without refresh
-                if(a.calEventId)setWeekEvents(prev=>prev.filter(ev=>ev.id!==a.calEventId));
-                // Track deleted by PHONE (most reliable) + id + phone-alone (nuke all variants)
-                const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
-                const delKey=a.phone+'_'+(a.apptDate||a.createdAt||'');
-                if(!delIds.includes(delKey))delIds.push(delKey);
-                if(a.id&&!delIds.includes(String(a.id)))delIds.push(String(a.id));
-                // ═══ Add calEventId if present — uniquely identifies THIS specific appointment
-                // ═══ without blocking future appointments for the same lead.
-                if(a.calEventId&&!delIds.includes(String(a.calEventId)))delIds.push(String(a.calEventId));
-                // ═══ REMOVED: bare phone number push. It was intended to "permanently block re-sync from cloud"
-                // ═══ but the side effect was blocking ALL future appointments for this lead forever — the new
-                // ═══ Bee Choo Tan would vanish from state the next time pullLatest merged the cloud dappt_ row.
-                // ═══ The delKey + id + calEventId combination is precise enough to kill the specific deleted row.
-                localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
-                // Sync deleted IDs to Supabase so other devices respect deletions
-                if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(delIds.slice(-500))},{onConflict:'admin_email'}).catch(function(){});
-                // Also scrub this phone from the admin's sharedappt_ + apptlive_ records so their device stops re-publishing it
-                if(_SB&&a.admin&&a.phone){
-                  (async()=>{try{
-                    const adminLow=a.admin.toLowerCase();
-                    // sharedappt_<admin> — new key, shape {data:[...], ts, devId}
-                    const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+adminLow).maybeSingle();
-                    if(r.data&&r.data.biz_name){
-                      const parsed=JSON.parse(r.data.biz_name)||{};
-                      const list=Array.isArray(parsed.data)?parsed.data:(Array.isArray(parsed)?parsed:[]);
-                      const cleaned=list.filter(x=>x.phone!==a.phone&&String(x.id||'')!==String(a.id||''));
-                      if(cleaned.length!==list.length){
-                        await _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+adminLow,biz_name:JSON.stringify({data:cleaned,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
-                        DBG('[AutoDial] Scrubbed '+(list.length-cleaned.length)+' copies of '+a.phone+' from sharedappt_'+adminLow);
-                      }
-                    }
-                    // apptlive_<admin> — unified live sync key, shape {appts:[...], hash, count, ts, devId}
-                    const r2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptlive_'+adminLow).maybeSingle();
-                    if(r2.data&&r2.data.biz_name){
-                      const parsed2=JSON.parse(r2.data.biz_name)||{};
-                      const list2=Array.isArray(parsed2.appts)?parsed2.appts:[];
-                      const cleaned2=list2.filter(x=>x.phone!==a.phone&&String(x.id||'')!==String(a.id||''));
-                      if(cleaned2.length!==list2.length){
-                        await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+adminLow,biz_name:JSON.stringify({appts:cleaned2,count:cleaned2.length,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
-                        DBG('[AutoDial] Scrubbed '+(list2.length-cleaned2.length)+' copies of '+a.phone+' from apptlive_'+adminLow);
-                      }
-                    }
-                  }catch(e){console.warn('[AutoDial] sharedappt scrub failed',e?.message||e)}})();
-                }
-                // Remove ALL copies of this phone from local state, not just the matched id
-                setAppointments(p=>p.filter(x=>x.phone!==a.phone))}}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
+              <button onClick={e=>{e.stopPropagation();setApptActionModal({appt:a,source:'appts'})}} style={{width:22,height:22,borderRadius:6,background:'var(--rdim)',color:'var(--red)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}}>×</button>
             </div>
           </div>
           
           {a.apptDate&&<p style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>📅 {a.apptDate} {a.apptTime} {a.location?'· 📍'+a.location:''}</p>}
-          {/* ═══ Dateless appointment → prompt to set date & time right here */}
+          {/* ═══ Dateless appointment → prompt to set date & time right here.
+               For postponed rows this is the "reschedule" CTA — labeled differently to
+               make the intent obvious after Postpone clears the date. */}
           {!a.apptDate&&a.followUp!=='met'&&a.followUp!=='closed'&&<button onClick={e=>{e.stopPropagation();
             setFixDateForm({date:localDateKey(new Date()),time:'10:00',duration:n(apptDuration,60)||60});
             setFixDateAppt(a);
-          }} style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'8px 12px',marginBottom:6,borderRadius:10,background:'linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.06))',border:'1px dashed rgba(99,102,241,.4)',color:'var(--accent2)',fontSize:11,fontWeight:700}}>
-            <span style={{fontSize:13}}>📅</span><span>Set date &amp; time</span><span style={{marginLeft:'auto',fontSize:9,color:'var(--text3)',fontWeight:600}}>⚠ no date set</span>
+          }} style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'8px 12px',marginBottom:6,borderRadius:10,background:a.followUp==='postponed'?'linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,.04))':'linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.06))',border:'1px dashed '+(a.followUp==='postponed'?'rgba(255,255,255,.5)':'rgba(99,102,241,.4)'),color:a.followUp==='postponed'?'#fff':'var(--accent2)',fontSize:11,fontWeight:700}}>
+            <span style={{fontSize:13}}>{a.followUp==='postponed'?'⏸':'📅'}</span>
+            <span>{a.followUp==='postponed'?'Tap to reschedule':'Set date & time'}</span>
+            <span style={{marginLeft:'auto',fontSize:9,color:'var(--text3)',fontWeight:600}}>{a.followUp==='postponed'?'postponed · awaiting date':'⚠ no date set'}</span>
           </button>}
           {/* Shaky tickbox — tap to toggle whether this slot reappears as an "available (shaky)" slot in future pickers */}
           {a.apptDate&&(()=>{
@@ -6248,9 +6441,41 @@ function App(){
           {/* Follow-up actions */}
           {a.followUp==='pending'&&<div style={{display:'flex',gap:5}}>
             {[['met','Met ✅','var(--green)','var(--gdim)'],['postponed','Postponed','var(--amber)','var(--amdim)'],['flykite','Fly Kite 🪁','var(--red)','var(--rdim)'],['closed','Closed 💰','var(--gold)','var(--golddim)']].map(([k,l,c,bg])=>
-              <button key={k} onClick={()=>{
+              <button key={k} onClick={async()=>{
                 const now=new Date().toISOString();
-                setAppointments(p=>p.map(x=>x.id===a.id?{...x,followUp:k,followUpDate:now}:x));
+                try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+                // ═══ Fly Kite: client no-show → DELETE the gCal event (slot truly freed)
+                // ═══ Postpone: needs reschedule → UPDATE the gCal event to tentative + [POSTPONED: NO DATE]
+                // ═══   prefix and mark shaky=true so AutoDial's free-slot picker offers the slot.
+                if(k==='flykite'&&a.calEventId&&window.gCal){
+                  try{const ok=await gCal.del(a.calEventId,myCfg.targetCalendarId||'primary');
+                    if(!ok)toast('⚠ Could not delete calendar event — check Google Calendar manually','err');
+                  }catch(_ge){}
+                  setWeekEvents(prev=>prev.filter(ev=>ev.id!==a.calEventId));
+                }
+                if(k==='postponed'&&a.calEventId&&window.gCal){
+                  try{
+                    const _newTitle=_withPostponedPrefix('Appt: '+(a.name||'')+(a.location?' @ '+a.location:''),false);
+                    const _ok=await gCal.update(a.calEventId,{summary:_newTitle,status:'tentative'},myCfg.targetCalendarId||'primary');
+                    if(!_ok)toast('⚠ Could not update calendar event','err');
+                    setWeekEvents(prev=>prev.map(ev=>ev.id===a.calEventId?{...ev,summary:_newTitle,status:'tentative'}:ev));
+                  }catch(_ge){console.warn('[Postpone gCal.update]',_ge)}
+                }
+                setAppointments(p=>p.map(x=>{
+                  if(x.id!==a.id)return x;
+                  if(k==='postponed')return{...x,followUp:'postponed',followUpDate:now,apptDate:'',apptTime:'',shaky:true};
+                  if(k==='flykite')return{...x,followUp:'flykite',followUpDate:now,calEventId:''};
+                  return{...x,followUp:k,followUpDate:now};
+                }));
+                // ═══ Main → admin write-back: if this is an admin-owned row, push the update to
+                // ═══ the admin's cloud rows so the admin's device sees the status change.
+                // ═══ No-op for self-owned rows or when role is admin (helper checks internally).
+                if(a.admin&&a.admin.toLowerCase()!==myEmail.toLowerCase()){
+                  const _updated={...a,followUp:k,followUpDate:now};
+                  if(k==='postponed'){_updated.apptDate='';_updated.apptTime='';_updated.shaky=true}
+                  if(k==='flykite')_updated.calEventId='';
+                  _mainWritebackAdminAppt(_updated);
+                }
                 // Write status update to Google Sheet "Appointments Set" tab
                 const tsId=myCfg.timesheetId||cfg.sheetId;
                 if(tsId&&localStorage.getItem('ad_gt')){
@@ -6271,7 +6496,8 @@ function App(){
                     apptOriginalDate:a.createdAt, // when appt was originally set
                     paid:false}]);
                   toast(`+$${n(myCfg.metIncentive,10)} incentive for meeting ${a.name} (added to current billing cycle)`)}
-                if(k==='flykite')toast(a.name+' — fly kite 🪁');
+                if(k==='flykite')toast(a.name+' — fly kite 🪁 (slot freed, count kept)');
+                if(k==='postponed')toast(a.name+' — postponed ⏸ (tap to set new date)');
                 // Closed → open tip modal (replaces old prompt-based flow)
                 if(k==='closed'){setTipModal({appt:a,fromMet:false});setTipAmountInput('')}
               }} style={{flex:1,padding:'8px 2px',borderRadius:8,background:bg,color:c,fontSize:10,fontWeight:700}}>{l}</button>
@@ -8981,26 +9207,63 @@ WHERE p.id IS NULL;`;
         <button disabled={fixDateSaving} onClick={async()=>{
           if(!fixDateForm.date||!fixDateForm.time){toast('Date and time required','err');return}
           setFixDateSaving(true);
+          // ═══ Guard: the reschedule flow writes locally + creates a GCal event. Without this,
+          // ═══ the next aggregation/pull cycle could wipe the new date within 2 seconds.
+          try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
           try{
             const [y,mo,da]=fixDateForm.date.split('-').map(Number);
             const [h,mi]=fixDateForm.time.split(':').map(Number);
             const startD=new Date(y,mo-1,da,h,mi,0);
             const endD=new Date(startD.getTime()+fixDateForm.duration*60000);
-            // Create (or reuse) a Google Calendar event
+            // ═══ CALENDAR IDENTITY: if the row is owned by someone ELSE (e.g., Main rescheduling
+            // ═══ an admin's postponed appointment) AND there's no existing event, defer to the
+            // ═══ owner's device. If an event already exists (from a Postpone keeping the event),
+            // ═══ we can update it directly because both Main and admin write to the SAME shared
+            // ═══ calendar (Main owns the calendar, admin has shared write access).
+            const _isOwnedByMe=!fixDateAppt.admin||fixDateAppt.admin.toLowerCase()===myEmail.toLowerCase();
+            const _wasPostponed=fixDateAppt.followUp==='postponed';
+            // Strip any existing prefix and add the [POSTPONED] historical marker
+            const _baseTitle='Appt: '+(fixDateAppt.name||'')+(fixDateAppt.location?' @ '+fixDateAppt.location:'');
+            const _newTitle=_wasPostponed?_withPostponedPrefix(_baseTitle,true):_baseTitle;
             let evt=null;
-            if(gOk&&window.gCal){
-              try{evt=await gCal.create(fixDateAppt.name+' (appt)','Follow-up appointment for '+fixDateAppt.name+(fixDateAppt.phone?' · '+fixDateAppt.phone:''),startD.toISOString(),endD.toISOString(),fixDateAppt.inviteEmails?String(fixDateAppt.inviteEmails).split(/[,;\s]/).filter(Boolean):null,myCfg.targetCalendarId||'primary')}catch(_e){console.warn('[fixDate] gCal.create failed',_e)}
+            let calEventId=fixDateAppt.calEventId||'';
+            if(window.gCal&&gOk){
+              if(calEventId){
+                // ═══ UPDATE existing event (the common case after Postpone)
+                try{
+                  const _patch={
+                    summary:_newTitle,
+                    status:'confirmed',
+                    start:{dateTime:startD.toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},
+                    end:{dateTime:endD.toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  };
+                  const _res=await gCal.update(calEventId,_patch,myCfg.targetCalendarId||'primary');
+                  if(_res)evt={id:calEventId};
+                }catch(_e){console.warn('[fixDate] gCal.update failed',_e)}
+              }else if(_isOwnedByMe){
+                // ═══ CREATE new event (legacy postpone that deleted the event, OR a fresh dateless pending row)
+                try{evt=await gCal.create(_newTitle,'Follow-up appointment for '+fixDateAppt.name+(fixDateAppt.phone?' · '+fixDateAppt.phone:''),startD.toISOString(),endD.toISOString(),fixDateAppt.inviteEmails?String(fixDateAppt.inviteEmails).split(/[,;\s]/).filter(Boolean):null,myCfg.targetCalendarId||'primary')}catch(_e){console.warn('[fixDate] gCal.create failed',_e)}
+              }
+              // else: not owned by me + no event → defer to owner's auto-create useEffect
             }
-            const calEventId=evt?.id||fixDateAppt.calEventId||'';
+            calEventId=evt?.id||calEventId||'';
             const dateKey=fixDateForm.date;
             const timeStr=fixDateForm.time;
-            // Update local state
-            setAppointments(prev=>prev.map(x=>x.id===fixDateAppt.id?{...x,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId}:x));
+            // Update local state — if this row was postponed awaiting reschedule, flip it back
+            // to 'pending' now that a new date is assigned. shaky=false because the slot is now
+            // genuinely reserved (no longer "may or may not be a real booking").
+            setAppointments(prev=>prev.map(x=>x.id===fixDateAppt.id?{...x,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,followUp:x.followUp==='postponed'?'pending':x.followUp,followUpDate:x.followUp==='postponed'?new Date().toISOString():x.followUpDate,shaky:false}:x));
+            // ═══ Main → admin write-back: if Main is rescheduling an admin-owned row, push the
+            // ═══ new date + calEventId to the admin's cloud rows so the admin's device sees it.
+            if(fixDateAppt.admin&&fixDateAppt.admin.toLowerCase()!==myEmail.toLowerCase()){
+              const _updated={...fixDateAppt,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,followUp:fixDateAppt.followUp==='postponed'?'pending':fixDateAppt.followUp,followUpDate:fixDateAppt.followUp==='postponed'?new Date().toISOString():fixDateAppt.followUpDate,shaky:false};
+              _mainWritebackAdminAppt(_updated);
+            }
             // Push the new event into weekEvents so Cal tab reflects it immediately
-            if(evt?.id)setWeekEvents(prev=>[...prev.filter(e=>e.id!==evt.id),{id:evt.id,summary:fixDateAppt.name+' (appt)',start:{dateTime:startD.toISOString()},end:{dateTime:endD.toISOString()},_calId:'primary'}]);
+            if(evt?.id)setWeekEvents(prev=>[...prev.filter(e=>e.id!==evt.id),{id:evt.id,summary:_newTitle,start:{dateTime:startD.toISOString()},end:{dateTime:endD.toISOString()},_calId:myCfg.targetCalendarId||'primary'}]);
             // Cloud sync via DB.saveAppt so Main/Admin both see it
             try{DB.saveAppt({...fixDateAppt,apptDate:dateKey,apptTime:timeStr,duration:fixDateForm.duration,calEventId,admin:fixDateAppt.admin||myEmail},_user?.id)}catch(_e){}
-            toast('✓ Date set for '+fixDateAppt.name);
+            toast(_isOwnedByMe?'✓ Date set for '+fixDateAppt.name:'✓ Rescheduled — calendar event will be created on '+fixDateAppt.admin+'\'s device','info');
             setFixDateAppt(null);
           }catch(e){toast('Failed: '+(e.message||e),'err')}
           setFixDateSaving(false);
@@ -9069,11 +9332,26 @@ WHERE p.id IS NULL;`;
               const patch={summary:calEditForm.summary.trim(),location:calEditForm.location||'',start:{dateTime:startD.toISOString(),timeZone:tz},end:{dateTime:endD.toISOString(),timeZone:tz}};
               const res=await gCal.update(calEditEvent.id,patch,calEditEvent._calId||'primary');
               if(!res){toast('Update failed','err');setCalEditSaving(false);return}
+              try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
               // ═══ Update local weekEvents cache so the Cal tab reflects changes without a page refresh
               setWeekEvents(prev=>prev.map(ev=>ev.id===calEditEvent.id?{...ev,summary:patch.summary,location:patch.location,start:{...(ev.start||{}),dateTime:startD.toISOString()},end:{...(ev.end||{}),dateTime:endD.toISOString()}}:ev));
-              // Update matching local appointment rows so the Appts tab reflects changes
-              setAppointments(prev=>prev.map(a=>a.calEventId===calEditEvent.id?{...a,name:patch.summary,apptDate:startD.toISOString(),location:patch.location,duration:calEditForm.duration}:a));
-              toast('✓ Event updated');
+              // ═══ Update matching local appointment row.
+              // ═══ Only update date/time/duration/location — preserve admin attribution, lead name,
+              // ═══ followUp status, etc. The user (typically Main) is editing WHEN the meeting
+              // ═══ happens, not WHO it's with. The row stays attributed to the original admin.
+              const _newApptDate=localDateKey(startD);
+              const _hh=String(startD.getHours()).padStart(2,'0');
+              const _mm=String(startD.getMinutes()).padStart(2,'0');
+              const _newApptTime=_hh+':'+_mm;
+              setAppointments(prev=>prev.map(a=>a.calEventId===calEditEvent.id?{...a,apptDate:_newApptDate,apptTime:_newApptTime,duration:calEditForm.duration,location:patch.location}:a));
+              // ═══ If the row belongs to another admin (e.g., Main editing Shermaine's appt),
+              // ═══ write the date/time change back to the admin's cloud rows so the admin's
+              // ═══ device picks it up and updates their AutoDial state.
+              const _editedRow=(appointments||[]).find(a=>a.calEventId===calEditEvent.id);
+              if(_editedRow&&_editedRow.admin&&_editedRow.admin.toLowerCase()!==myEmail.toLowerCase()){
+                _mainWritebackAdminAppt({..._editedRow,apptDate:_newApptDate,apptTime:_newApptTime,duration:calEditForm.duration,location:patch.location});
+              }
+              toast('✓ Event updated · synced to '+(_editedRow?.admin||'AutoDial'));
               setCalEditEvent(null);
             }catch(e){toast('Update failed: '+(e.message||e),'err')}
             setCalEditSaving(false);
@@ -9085,30 +9363,165 @@ WHERE p.id IS NULL;`;
               const _sh=!!(_r&&isApptShaky(_r));
               if(!_own&&!_sh){toast('You can only delete events you created or shaky appointments','err');return}
             }
-            if(!confirm('Delete this event from Google Calendar? This cannot be undone.'))return;
-            setCalEditSaving(true);
-            try{
-              const ok=await gCal.del(calEditEvent.id,calEditEvent._calId||'primary');
-              if(!ok){toast('Delete failed','err');setCalEditSaving(false);return}
-              // ═══ Remove from local weekEvents cache so it disappears immediately (no refresh)
-              setWeekEvents(prev=>prev.filter(ev=>ev.id!==calEditEvent.id));
-              // Remove matching local appointment and blocklist the specific instance
-              const a=(appointments||[]).find(x=>x.calEventId===calEditEvent.id);
-              if(a){const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
-                // ═══ Precise keys only — NO bare phone (would block future appts for same lead forever)
-                if(a.id)delIds.push(String(a.id));
-                if(a.calEventId)delIds.push(String(a.calEventId));
-                if(a.phone&&(a.apptDate||a.createdAt))delIds.push(a.phone+'_'+(a.apptDate||a.createdAt));
-                localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(delIds)].slice(-500)));
-                setAppointments(p=>p.filter(x=>x.calEventId!==calEditEvent.id))}
-              toast('Event deleted');
-              setCalEditEvent(null);
-            }catch(e){toast('Delete failed: '+(e.message||e),'err')}
-            setCalEditSaving(false);
+            // ═══ Open the 3-option modal (Delete / Fly Kite / Postpone) instead of plain confirm
+            const _a=(appointments||[]).find(x=>x.calEventId===calEditEvent.id);
+            if(!_a){
+              // Fallback: external GCal event with no matching appointment row → delete directly
+              if(!confirm('Delete this event from Google Calendar? This cannot be undone.'))return;
+              setCalEditSaving(true);
+              try{
+                const ok=await gCal.del(calEditEvent.id,calEditEvent._calId||'primary');
+                if(!ok){toast('Delete failed','err');setCalEditSaving(false);return}
+                setWeekEvents(prev=>prev.filter(ev=>ev.id!==calEditEvent.id));
+                toast('Event deleted');setCalEditEvent(null);
+              }catch(e){toast('Delete failed: '+(e.message||e),'err')}
+              setCalEditSaving(false);
+              return;
+            }
+            setCalEditEvent(null); // close edit modal
+            setApptActionModal({appt:_a,source:'cal',calendarId:calEditEvent._calId||'primary'}); // open action picker
           }} style={{padding:'11px 14px',borderRadius:10,background:'var(--rdim)',color:'var(--red)',fontSize:12,fontWeight:700,border:'1px solid rgba(248,81,73,.3)'}}>🗑</button>
         </div>
       </div>
     </Modal>}
+
+    {/* ═══ APPT ACTION MODAL — 3 options: Delete / Fly Kite / Postpone ═══ */}
+    {apptActionModal&&(()=>{
+      const _a=apptActionModal.appt;
+      const _src=apptActionModal.source;
+      const _calId=apptActionModal.calendarId||myCfg.targetCalendarId||'primary';
+      const _close=()=>setApptActionModal(null);
+      // Shared: delete the Google Calendar event (if any) + scrub weekEvents cache
+      const _wipeCalEvent=async()=>{
+        if(_a.calEventId&&window.gCal){
+          try{const ok=await gCal.del(_a.calEventId,_calId);
+            if(!ok)toast('⚠ Could not delete calendar event — check Google Calendar manually','err');
+          }catch(e){toast('⚠ Calendar delete failed','err')}
+        }
+        if(_a.calEventId)setWeekEvents(prev=>prev.filter(ev=>ev.id!==_a.calEventId));
+      };
+      // ═══ DELETE action — full removal + -1 from appointment count
+      const _doDelete=async()=>{
+        try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+        await _wipeCalEvent();
+        // Precise blocklist keys (NO bare phone)
+        const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
+        if(_a.id)delIds.push(String(_a.id));
+        if(_a.calEventId)delIds.push(String(_a.calEventId));
+        if(_a.phone&&(_a.apptDate||_a.createdAt))delIds.push(_a.phone+'_'+(_a.apptDate||_a.createdAt));
+        localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(delIds)].slice(-500)));
+        if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify([...new Set(delIds)].slice(-500))},{onConflict:'admin_email'}).catch(()=>{});
+        // Remove from local state by id (not phone — phone would wipe all copies)
+        setAppointments(p=>p.filter(x=>x.id!==_a.id));
+        // Decrement totalSets — the user is saying this was a wrong set, so revert the counter.
+        // Only decrement if the appt was actually counted (followUp===pending or undefined).
+        // Fly Kite / Postponed rows that the user later chooses to fully delete keep their count as-is
+        // since those were already excluded from the "mistake" flow.
+        if(!_a.followUp||_a.followUp==='pending'){
+          setTotalSets(p=>Math.max(0,p-1));
+          try{
+            const _ds=JSON.parse(localStorage.getItem('autodial_daily_sets')||'{}');
+            if(_ds.date===getTodaySGT()&&_ds.count>0){_ds.count--;localStorage.setItem('autodial_daily_sets',JSON.stringify(_ds));setDailySetsStateR(_ds.count)}
+          }catch(_e){}
+        }
+        // Main scrubs admin's cloud rows so their device stops re-publishing
+        if(_SB&&_a.admin&&_a.phone&&role==='main'){
+          (async()=>{try{
+            const adminLow=_a.admin.toLowerCase();
+            const r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','sharedappt_'+adminLow).maybeSingle();
+            if(r.data?.biz_name){
+              const parsed=JSON.parse(r.data.biz_name)||{};
+              const list=Array.isArray(parsed.data)?parsed.data:(Array.isArray(parsed)?parsed:[]);
+              const cleaned=list.filter(x=>String(x.id||'')!==String(_a.id||'')&&String(x.calEventId||'')!==String(_a.calEventId||''));
+              if(cleaned.length!==list.length){
+                await _SB.from('autodial_admin_config').upsert({admin_email:'sharedappt_'+adminLow,biz_name:JSON.stringify({data:cleaned,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+              }
+            }
+            const r2=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','apptlive_'+adminLow).maybeSingle();
+            if(r2.data?.biz_name){
+              const parsed2=JSON.parse(r2.data.biz_name)||{};
+              const list2=Array.isArray(parsed2.appts)?parsed2.appts:[];
+              const cleaned2=list2.filter(x=>String(x.id||'')!==String(_a.id||'')&&String(x.calEventId||'')!==String(_a.calEventId||''));
+              if(cleaned2.length!==list2.length){
+                await _SB.from('autodial_admin_config').upsert({admin_email:'apptlive_'+adminLow,biz_name:JSON.stringify({appts:cleaned2,count:cleaned2.length,ts:Date.now(),devId:window._devId})},{onConflict:'admin_email'});
+              }
+            }
+          }catch(e){}})();
+        }
+        toast('🗑 Appointment deleted — count reversed');
+        _close();
+      };
+      // ═══ FLY KITE — client no-show. Keep the row (still counts as a set) but remove from calendar.
+      const _doFlyKite=async()=>{
+        try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+        await _wipeCalEvent();
+        const _now=new Date().toISOString();
+        setAppointments(p=>p.map(x=>x.id===_a.id?{...x,followUp:'flykite',followUpDate:_now,calEventId:''}:x));
+        // Main → admin write-back if this is an admin-owned row
+        if(_a.admin&&_a.admin.toLowerCase()!==myEmail.toLowerCase()){
+          _mainWritebackAdminAppt({..._a,followUp:'flykite',followUpDate:_now,calEventId:''});
+        }
+        toast(_a.name+' — fly kite 🪁 (kept in list, slot freed)');
+        _close();
+      };
+      // ═══ POSTPONE — keep the gCal event but mark TENTATIVE with [POSTPONED: NO DATE] prefix.
+      // ═══ Sets shaky=true so AutoDial's free slot picker will offer this slot to new bookings,
+      // ═══ but the event stays visible on Google Calendar as a tentative placeholder. apptDate
+      // ═══ is cleared in local state so the AutoDial row floats to the top with white shimmer.
+      const _doPostpone=async()=>{
+        try{_liveSyncRef.current.localApptsGuardUntil=Date.now()+6000}catch(_e){}
+        // Update gCal event title + set tentative status (don't delete)
+        if(_a.calEventId&&window.gCal){
+          try{
+            const _newTitle=_withPostponedPrefix('Appt: '+(_a.name||'')+(_a.location?' @ '+_a.location:''),false);
+            const _ok=await gCal.update(_a.calEventId,{summary:_newTitle,status:'tentative'},_calId);
+            if(!_ok)toast('⚠ Could not update calendar event','err');
+            // Reflect in local weekEvents cache so Cal tab updates immediately
+            setWeekEvents(prev=>prev.map(ev=>ev.id===_a.calEventId?{...ev,summary:_newTitle,status:'tentative'}:ev));
+          }catch(_ge){console.warn('[Postpone gCal.update]',_ge)}
+        }
+        const _now=new Date().toISOString();
+        // Local state: clear date, mark shaky, keep calEventId so we can update it later on reschedule
+        setAppointments(p=>p.map(x=>x.id===_a.id?{...x,followUp:'postponed',followUpDate:_now,apptDate:'',apptTime:'',shaky:true}:x));
+        // Main → admin write-back if this is an admin-owned row
+        if(_a.admin&&_a.admin.toLowerCase()!==myEmail.toLowerCase()){
+          _mainWritebackAdminAppt({..._a,followUp:'postponed',followUpDate:_now,apptDate:'',apptTime:'',shaky:true});
+        }
+        toast(_a.name+' — postponed ⏸ (slot freed via shaky · tap row to set new date)');
+        _close();
+      };
+      return<Modal show={true} onClose={_close}>
+        <div style={{padding:4}}>
+          <h3 style={{margin:'0 0 6px',fontSize:16,fontWeight:800,color:'var(--text)'}}>What happened with {_a.name}?</h3>
+          <p style={{margin:'0 0 14px',fontSize:11,color:'var(--text3)',lineHeight:1.5}}>Choose an outcome. Each option has different effects on your appointment count and calendar slot.</p>
+          {/* Fly Kite — keeps count */}
+          <button onClick={_doFlyKite} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'linear-gradient(135deg,rgba(248,81,73,.10),rgba(248,81,73,.04))',border:'1px solid rgba(248,81,73,.35)',textAlign:'left',cursor:'pointer'}}>
+            <span style={{fontSize:24,lineHeight:1}}>🪁</span>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--red)'}}>Fly Kite — client didn't show up</p>
+              <p style={{margin:'3px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Removes the Google Calendar slot but KEEPS the appointment in your list. <strong>Count stays the same</strong> — you still earned the set.</p>
+            </div>
+          </button>
+          {/* Postpone — keeps count + allows reschedule */}
+          <button onClick={_doPostpone} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'linear-gradient(135deg,rgba(240,180,41,.10),rgba(240,180,41,.04))',border:'1px solid rgba(240,180,41,.35)',textAlign:'left',cursor:'pointer'}}>
+            <span style={{fontSize:24,lineHeight:1}}>⏸</span>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--amber)'}}>Postpone — reschedule later</p>
+              <p style={{margin:'3px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Removes the Google Calendar slot and clears the date. The appointment moves to the top of your list (marked "date not set") so you can tap it later to pick a new date. <strong>Count stays the same</strong>.</p>
+            </div>
+          </button>
+          {/* Delete — decrements count */}
+          <button onClick={_doDelete} style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',padding:'14px',marginBottom:10,borderRadius:12,background:'var(--bg3)',border:'1px solid var(--border)',textAlign:'left',cursor:'pointer'}}>
+            <span style={{fontSize:24,lineHeight:1}}>🗑</span>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontSize:13,fontWeight:800,color:'var(--text2)'}}>Delete — I set this by mistake</p>
+              <p style={{margin:'3px 0 0',fontSize:10,color:'var(--text3)',lineHeight:1.4}}>Removes the Google Calendar slot AND the appointment entirely. <strong>Appointment count is reversed by 1</strong>. Use this only if the set itself was wrong.</p>
+            </div>
+          </button>
+          <button onClick={_close} style={{width:'100%',padding:'11px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',fontSize:12,fontWeight:700,border:'1px solid var(--border)'}}>Cancel</button>
+        </div>
+      </Modal>;
+    })()}
 
     {/* ═══ LIVE PAYNOW QR MODAL ═══ */}
     {payQRModal&&(()=>{const m=payQRModal;const isBatch=!!(m.queue&&m.queue.length>=0&&m.queueTotal);
