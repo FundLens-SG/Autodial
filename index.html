@@ -3899,6 +3899,12 @@ function App(){
         // (apptlive_<email>). Keeping the old monotonic-union merge here was resurrecting deleted rows.
         // Instead, we pull dappt_<email> so cross-device deletions propagate within the 60s safety net.
         const dap=p('dappt_');if(dap&&Array.isArray(dap)){
+          // ═══ Skip this merge if a local appt mutation happened recently. The cloud dappt_ row
+          // ═══ may still contain stale bare-phone entries from the pre-fix delete handler, and
+          // ═══ merging them back would strip the freshly-created appointment the user just made.
+          if(_liveSyncRef.current?.localApptsGuardUntil>Date.now()){
+            DBG('[LiveSync] dappt_ merge skipped — local appts guard active');
+          }else{
           try{
             const localDel=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
             let added=0;dap.forEach(id=>{if(!localDel.has(id)){localDel.add(id);added++}});
@@ -3911,6 +3917,7 @@ function App(){
               DBG('[LiveSync] merged',added,'deleted appt IDs from cloud');
             }
           }catch(e){}
+          }
         }
         const ts=p('ts_');if(ts?.ts)setTotalSets(prev=>ts.ts>prev?ts.ts:prev);
 
@@ -4066,7 +4073,7 @@ function App(){
         }catch(_e){}
       }
       // ═══ Merge cross-device deletion IDs so clears on other devices propagate fast (2s)
-      if(Array.isArray(remote.delIds)&&remote.delIds.length){
+      if(Array.isArray(remote.delIds)&&remote.delIds.length&&!(_liveSyncRef.current?.localApptsGuardUntil>Date.now())){
         try{
           const local=new Set(JSON.parse(localStorage.getItem('_deletedApptIds')||'[]'));
           let added=0;remote.delIds.forEach(id=>{if(!local.has(id)){local.add(id);added++}});
@@ -6138,8 +6145,13 @@ function App(){
                 const delKey=a.phone+'_'+(a.apptDate||a.createdAt||'');
                 if(!delIds.includes(delKey))delIds.push(delKey);
                 if(a.id&&!delIds.includes(String(a.id)))delIds.push(String(a.id));
-                // CRITICAL: add phone alone to permanently block re-sync from cloud
-                if(a.phone&&!delIds.includes(a.phone))delIds.push(a.phone);
+                // ═══ Add calEventId if present — uniquely identifies THIS specific appointment
+                // ═══ without blocking future appointments for the same lead.
+                if(a.calEventId&&!delIds.includes(String(a.calEventId)))delIds.push(String(a.calEventId));
+                // ═══ REMOVED: bare phone number push. It was intended to "permanently block re-sync from cloud"
+                // ═══ but the side effect was blocking ALL future appointments for this lead forever — the new
+                // ═══ Bee Choo Tan would vanish from state the next time pullLatest merged the cloud dappt_ row.
+                // ═══ The delKey + id + calEventId combination is precise enough to kill the specific deleted row.
                 localStorage.setItem('_deletedApptIds',JSON.stringify(delIds.slice(-500)));
                 // Sync deleted IDs to Supabase so other devices respect deletions
                 if(_SB&&_user)_SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+_user.email.toLowerCase(),biz_name:JSON.stringify(delIds.slice(-500))},{onConflict:'admin_email'}).catch(function(){});
@@ -8545,6 +8557,31 @@ WHERE p.id IS NULL;`;
                   console.info('[AutoDial] Purged '+(_d.length-_cleaned.length)+' stale blocklist entries for phone '+_phone);
                 }
               }
+              // ═══ CLOUD PURGE ═══
+              // Also purge the cloud `dappt_<myEmail>` row. Without this, the next `pullLatest`
+              // polling cycle would re-introduce the stale bare-phone entries (from pre-fix delete
+              // handlers) back into the local blocklist and strip the freshly-created appointment.
+              // This is a one-shot cleanup at creation time so the bug self-heals over normal usage.
+              if(_SB&&_user&&_phone){
+                (async()=>{try{
+                  const _r=await _SB.from('autodial_admin_config').select('biz_name').eq('admin_email','dappt_'+(_user.email||'').toLowerCase()).maybeSingle();
+                  if(_r?.data?.biz_name){
+                    const _cloud=JSON.parse(_r.data.biz_name);
+                    if(Array.isArray(_cloud)){
+                      const _cloudCleaned=_cloud.filter(x=>{
+                        if(typeof x!=='string')return true;
+                        if(x===_phone)return false;
+                        if(x.startsWith(_phone+'_'))return false;
+                        return true;
+                      });
+                      if(_cloudCleaned.length!==_cloud.length){
+                        await _SB.from('autodial_admin_config').upsert({admin_email:'dappt_'+(_user.email||'').toLowerCase(),biz_name:JSON.stringify(_cloudCleaned)},{onConflict:'admin_email'});
+                        console.info('[AutoDial] Purged '+(_cloud.length-_cloudCleaned.length)+' stale cloud dappt_ entries for phone '+_phone);
+                      }
+                    }
+                  }
+                }catch(_ce){}})();
+              }
             }catch(_e){}
             const desc=['Client: '+(lead?.name||''),'Phone: '+(lead?.phone||''),lead?.age?'Age: '+lead.age:'',lead?.email?'Email: '+lead.email:'',lead?.race?'Background: '+lead.race:'',apptObs?'\nFC Notes:\n'+apptObs:'',lead?.notes?'\nSheet Remarks: '+lead.notes:''].filter(Boolean).join('\n');
             try{const s=new Date(apptDate+'T'+apptTime);const end=new Date(s.getTime()+dur*60000);
@@ -9020,10 +9057,13 @@ WHERE p.id IS NULL;`;
               if(!ok){toast('Delete failed','err');setCalEditSaving(false);return}
               // ═══ Remove from local weekEvents cache so it disappears immediately (no refresh)
               setWeekEvents(prev=>prev.filter(ev=>ev.id!==calEditEvent.id));
-              // Remove matching local appointment and add phone to suppress
+              // Remove matching local appointment and blocklist the specific instance
               const a=(appointments||[]).find(x=>x.calEventId===calEditEvent.id);
               if(a){const delIds=JSON.parse(localStorage.getItem('_deletedApptIds')||'[]');
-                if(a.phone)delIds.push(a.phone);if(a.id)delIds.push(String(a.id));
+                // ═══ Precise keys only — NO bare phone (would block future appts for same lead forever)
+                if(a.id)delIds.push(String(a.id));
+                if(a.calEventId)delIds.push(String(a.calEventId));
+                if(a.phone&&(a.apptDate||a.createdAt))delIds.push(a.phone+'_'+(a.apptDate||a.createdAt));
                 localStorage.setItem('_deletedApptIds',JSON.stringify([...new Set(delIds)].slice(-500)));
                 setAppointments(p=>p.filter(x=>x.calEventId!==calEditEvent.id))}
               toast('Event deleted');
